@@ -1,0 +1,49 @@
+[package]
+name = "tunelock"
+version = "0.1.0"
+description = "TuneLock — fast, accurate musical key + BPM analysis for producers and DJs"
+edition = "2021"
+rust-version = "1.70"
+default-run = "tunelock"
+
+[lib]
+name = "tunelock_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.0.0", features = [] }
+
+[dependencies]
+tauri = { version = "2.0.0", features = ["protocol-asset"] }
+tauri-plugin-dialog = "2.0.0"
+tauri-plugin-fs = "2.0.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Audio processing
+symphonia = { version = "0.5", features = ["mp3", "flac", "wav", "ogg", "pcm"] }
+rustfft = "6.1"
+ndarray = { version = "0.15", features = ["rayon"] }
+
+# Database
+rusqlite = { version = "0.31", features = ["bundled", "chrono"] }
+
+# Parallel processing
+rayon = "1.7"
+tokio = { version = "1.35", features = ["rt-multi-thread", "macros", "sync", "time"] }
+
+# Audio metadata
+lofty = "0.19"
+
+# Utilities
+anyhow = "1.0"
+thiserror = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+walkdir = "2"
+
+[features]
+default = []
+
+[[bin]]
+name = "tunelock-bench"
+path = "src/bin/bench.rs"

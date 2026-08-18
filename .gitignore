@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+
+# Rust build output (potentially multiple GB)
+src-tauri/target/
+
+# Frontend build output
+dist/
+
+# Tool installers and junk
+rustup-init.exe
+
+# Logs and stray artifacts
+*.log
+tauri-dev.log
+src-tauri/c*.txt
+src-tauri/test*.txt
+
+# Ableton analysis sidecars
+*.asd
+
+# ML / benchmark data (large, downloaded)
+ml/data/
+ground-truth/giantsteps/audio/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+node_modules
