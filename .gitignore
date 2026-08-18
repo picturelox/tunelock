@@ -30,6 +30,11 @@ ground-truth/giantsteps-mtg-key/audio/
 ground-truth/MIKCompleteLibrary.csv
 ground-truth/MIK*.csv
 
+# Benchmark report JSON files — contain personal file paths.
+ground-truth/*-500.json
+ground-truth/smoke-report.json
+ground-truth/*report*.json
+
 # OS
 Thumbs.db
 .DS_Store
