@@ -24,16 +24,16 @@ Updated after each tuning phase.
 
 ## Results comparison
 
-| Metric | Baseline | Tuned | Change |
-|---|---|---|---|
-| **Key exact match** | **61.4%** | **67.8%** | **+6.4%** |
-| Tonic correct (mode-agnostic) | 64.2% | 70.4% | +6.2% |
-| MIREX weighted score | 0.708 | 0.754 | +0.046 |
-| **Camelot compatible** | **83.7%** | **86.3%** | **+2.6%** |
-| BPM ±1 BPM (raw) | 19.7% | 19.7% | — |
-| BPM ±1 BPM (octave-corrected) | 34.2% | 34.2% | — |
-| BPM ratio median | 0.987 | 0.987 | — |
-| Avg time per track | 4,012 ms | 4,044 ms | — |
+| Metric | Baseline | Key Tuned | Tempo Rewritten | Total Change |
+|---|---|---|---|---|
+| **Key exact match** | **61.4%** | **67.8%** | 67.8% | **+6.4%** |
+| Tonic correct (mode-agnostic) | 64.2% | 70.4% | 70.4% | +6.2% |
+| MIREX weighted score | 0.708 | 0.754 | 0.754 | +0.046 |
+| **Camelot compatible** | **83.7%** | **86.3%** | 86.3% | **+2.6%** |
+| **BPM ±1 BPM (raw)** | **19.7%** | 19.7% | **59.4%** | **+39.7%** |
+| **BPM ±1 BPM (octave-corrected)** | **34.2%** | 34.2% | **61.2%** | **+27.0%** |
+| BPM ratio median | 0.987 | 0.987 | 1.000 | +0.013 |
+| Avg time per track | 4,012 ms | 4,044 ms | 3,952 ms | -60 ms |
 
 ## Error taxonomy comparison
 
@@ -130,14 +130,64 @@ bins (72 vs 12), so the dynamic range is wider.
 
 ## Next steps
 
-- **Phase 3:** Tempo rewrite — octave resolution, confidence scoring, wider
-  BPM range. Currently 19.7% ±1 BPM is the weakest metric.
+- **Phase 3: Tempo rewrite** — ✅ Complete. See below.
 - **Phase 2:** Fix WAV decode issue and add `.m4a`/`.aiff` codec support to
   recover the 624 unsupported-format tracks.
 - **Phase 1.5:** Download GiantSteps audio and run cross-corpus validation.
 - **Future key tuning:** Consider harmonic summation in the chroma to
   reduce 3rd-harmonic interference (the 3rd harmonic of the tonic lands on
   the fifth, artificially boosting the fifth bin).
+
+## Phase 3: Tempo rewrite
+
+### Problem
+
+The original tempo detector had three critical issues:
+
+1. **60–180 BPM range restriction** — clipped at 180, missing tracks up to
+   190 BPM in the MIK corpus.
+2. **No octave resolution** — picked the single strongest autocorrelation
+   peak, which is often at half-time (64 BPM for a 128 BPM track) because
+   onsets are more consistent at every-other-beat.
+3. **Global maximum only** — didn't evaluate multiple peaks.
+
+Result: 19.7% ±1 BPM accuracy (raw), 34.2% octave-corrected. The BPM ratio
+median was 0.987, indicating a slight systematic half-tempo bias.
+
+### Solution
+
+Complete rewrite of `tempo_detector.rs`:
+
+1. **Wider search range**: 40–220 BPM (was 60–180).
+2. **Multiple peak evaluation**: Finds the top 10 local maxima in the
+   autocorrelation, deduplicated to avoid near-duplicate lags.
+3. **Octave correction**: For each autocorrelation peak at base BPM B,
+   evaluates candidates at ×0.5, ×1, and ×2. This covers the three common
+   octave errors (half-time, correct, double-time).
+4. **Tempo preference function**: Gaussian on a log-BPM scale centered at
+   ~120 BPM (σ ≈ 1 octave). Mildly favours the 80–170 BPM range where most
+   popular and electronic music lives. The preference is multiplicative on
+   the autocorrelation strength, so a very strong peak at 64 BPM can still
+   win if the 128 BPM peak is weak — the preference just breaks ties.
+5. **Parabolic interpolation**: Sub-frame precision for peak locations,
+   giving more precise BPM estimates.
+6. **Confidence scoring**: Based on the ratio of the top candidate's score
+   to the second candidate's score (available via `detect_tempo_diagnostic`).
+7. **Synthetic beat test**: Unit test generates a 128 BPM kick drum pattern
+   and verifies the detector returns ~128 BPM (within ±3 BPM).
+
+### Result
+
+| Metric | Before | After | Change |
+|---|---|---|---|
+| **BPM ±1 (raw)** | 19.7% | 59.4% | **+39.7%** (3× improvement) |
+| **BPM ±1 (octave-corrected)** | 34.2% | 61.2% | +27.0% |
+| BPM ratio median | 0.987 | 1.000 | No systematic bias |
+
+The raw accuracy improvement (19.7% → 59.4%) is larger than the
+octave-corrected improvement (34.2% → 61.2%) because the detector now
+picks the correct octave on its own — the bench's octave correction has
+less work to do.
 
 ## Reproducing
 
