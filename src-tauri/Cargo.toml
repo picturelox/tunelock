@@ -40,6 +40,7 @@ anyhow = "1.0"
 thiserror = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 walkdir = "2"
+csv = "1.3"
 
 [features]
 default = []

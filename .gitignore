@@ -21,7 +21,14 @@ src-tauri/test*.txt
 
 # ML / benchmark data (large, downloaded)
 ml/data/
-ground-truth/giantsteps/audio/
+ground-truth/giantsteps-key/audio/
+ground-truth/giantsteps-mtg-key/audio/
+
+# Personal MIK library export — kept local only.
+# Contains absolute file paths and personal collection metadata.
+# Schema documented in ground-truth/README.md.
+ground-truth/MIKCompleteLibrary.csv
+ground-truth/MIK*.csv
 
 # OS
 Thumbs.db
