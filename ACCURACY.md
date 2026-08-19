@@ -199,3 +199,82 @@ cargo build --release --bin tunelock-bench
 
 The stratified sample is deterministic for a given corpus + code revision, so
 results are reproducible. To score the full 18,909 ready tracks, omit `--limit`.
+
+## GiantSteps cross-corpus validation
+
+### Method
+
+- **Corpus:** GiantSteps key dataset (604 Beatport previews, ~2 min each).
+- **Audio:** 604/604 downloaded (831 MB). Beatport preview URLs are
+  partially deprecated; ~200 required the JKU backup mirror.
+- **Annotations:** Standard key names (e.g. "C minor", "Eb minor").
+- **BPM:** Not annotated in GiantSteps — BPM metrics are N/A.
+- **All tracks scored** (0 failures, 0 missing).
+
+### Results
+
+| Metric | GiantSteps (604) | MIK (500 stratified) |
+|---|---|---|
+| **Key exact** | **60.8%** | **67.8%** |
+| Tonic correct | 65.1% | 70.4% |
+| MIREX weighted | 0.694 | 0.754 |
+| Camelot compatible | 82.3% | 86.3% |
+| Avg time/track | 3,395 ms | 3,952 ms |
+
+### Error taxonomy
+
+| Error type | Count | % | MIK comparison |
+|---|---|---|---|
+| correct | 367 | 60.8% | 67.8% |
+| fifth | 78 | 12.9% | 11.7% |
+| other | 92 | 15.2% | 10.5% |
+| parallel | 26 | 4.3% | 2.6% |
+| relative | 26 | 4.3% | 4.2% |
+| semitone | 15 | 2.5% | 3.2% |
+
+### Per-genre highlights
+
+| Genre | n | Exact % | MIREX |
+|---|---|---|---|
+| glitch-hop | 6 | 83.3% | 0.867 |
+| indie-dance nu-disco | 14 | 78.6% | 0.836 |
+| deep-house | 77 | 72.7% | 0.805 |
+| electro-house | 51 | 70.6% | 0.796 |
+| house | 47 | 68.1% | 0.732 |
+| progressive-house | 88 | 50.0% | 0.628 |
+| tech-house | 81 | 50.6% | 0.588 |
+| trance | 58 | 53.4% | 0.667 |
+| drum-and-bass | 38 | 52.6% | 0.563 |
+| minimal | 11 | 45.5% | 0.455 |
+
+### Analysis
+
+1. **60.8% exact on GiantSteps** is consistent with published results for
+   template/profile methods (60-72% exact). The literature reports CNN
+   state-of-the-art at 70-75% on this dataset.
+
+2. **Lower than MIK (60.8% vs 67.8%)** — expected. GiantSteps is entirely
+   electronic (EDM), where the dominant is often emphasised harder than the
+   tonic in the mix, making fifth-substitution more likely. The MIK corpus
+   is more genre-diverse, with many rock/pop/soundtrack tracks where the
+   tonic is clearer.
+
+3. **"Other" errors are higher** (15.2% vs 10.5%) — electronic music has
+   more ambiguous tonal centres (loop-based, modal, atonal sections).
+
+4. **Progressive house and tech house are the weakest** (50.0% and 50.6%).
+   These genres often use sustained pad chords and arpeggios that create
+   ambiguous chroma distributions. This is a known limitation of template
+   methods on electronic music.
+
+5. **Deep house and electro-house are the strongest** electronic genres
+   (72.7% and 70.6%) — clearer harmonic content with distinct basslines.
+
+6. **BPM is N/A** — GiantSteps annotations don't include tempo labels.
+
+### Reproducing
+
+```powershell
+cd src-tauri
+.\target\release\tunelock-bench.exe --giantsteps ..\ground-truth\giantsteps-key --out ..\ground-truth\giantsteps-full.json
+```

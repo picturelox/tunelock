@@ -1,0 +1,314 @@
+{
+  "corpus_path": "..\\ground-truth\\giantsteps-key",
+  "scored": 5,
+  "failed": 0,
+  "status_counts": {
+    "missing_file": 520,
+    "ready": 84
+  },
+  "overall": {
+    "n": 5,
+    "exact_pct": 40.0,
+    "tonic_only_pct": 40.0,
+    "mirex_mean": 0.45999999999999996,
+    "compatible_pct": 60.0,
+    "bpm_exact_pct": 0.0,
+    "bpm_octave_pct": 0.0,
+    "bpm_scored": 0,
+    "confusion": {
+      "correct": 2,
+      "other": 2,
+      "relative": 1
+    }
+  },
+  "by_genre": {
+    "breaks": {
+      "n": 1,
+      "exact_pct": 0.0,
+      "tonic_only_pct": 0.0,
+      "mirex_mean": 0.0,
+      "compatible_pct": 0.0,
+      "bpm_exact_pct": 0.0,
+      "bpm_octave_pct": 0.0,
+      "bpm_scored": 0,
+      "confusion": {
+        "other": 1
+      }
+    },
+    "chill-out": {
+      "n": 1,
+      "exact_pct": 0.0,
+      "tonic_only_pct": 0.0,
+      "mirex_mean": 0.3,
+      "compatible_pct": 100.0,
+      "bpm_exact_pct": 0.0,
+      "bpm_octave_pct": 0.0,
+      "bpm_scored": 0,
+      "confusion": {
+        "relative": 1
+      }
+    },
+    "deep-house": {
+      "n": 1,
+      "exact_pct": 100.0,
+      "tonic_only_pct": 100.0,
+      "mirex_mean": 1.0,
+      "compatible_pct": 100.0,
+      "bpm_exact_pct": 0.0,
+      "bpm_octave_pct": 0.0,
+      "bpm_scored": 0,
+      "confusion": {
+        "correct": 1
+      }
+    },
+    "dj-tools": {
+      "n": 1,
+      "exact_pct": 100.0,
+      "tonic_only_pct": 100.0,
+      "mirex_mean": 1.0,
+      "compatible_pct": 100.0,
+      "bpm_exact_pct": 0.0,
+      "bpm_octave_pct": 0.0,
+      "bpm_scored": 0,
+      "confusion": {
+        "correct": 1
+      }
+    },
+    "drum-and-bass": {
+      "n": 1,
+      "exact_pct": 0.0,
+      "tonic_only_pct": 0.0,
+      "mirex_mean": 0.0,
+      "compatible_pct": 0.0,
+      "bpm_exact_pct": 0.0,
+      "bpm_octave_pct": 0.0,
+      "bpm_scored": 0,
+      "confusion": {
+        "other": 1
+      }
+    }
+  },
+  "by_extension": {
+    "mp3": {
+      "n": 5,
+      "exact_pct": 40.0,
+      "tonic_only_pct": 40.0,
+      "mirex_mean": 0.45999999999999996,
+      "compatible_pct": 60.0,
+      "bpm_exact_pct": 0.0,
+      "bpm_octave_pct": 0.0,
+      "bpm_scored": 0,
+      "confusion": {
+        "correct": 2,
+        "other": 2,
+        "relative": 1
+      }
+    }
+  },
+  "bpm_ratio_median": 1.0,
+  "avg_total_ms": 846.0,
+  "records": [
+    {
+      "path": "..\\ground-truth\\giantsteps-key\\audio\\10089.LOFI.mp3",
+      "title": "10089.LOFI",
+      "artist": "",
+      "genre": "breaks",
+      "extension": "mp3",
+      "truth_camelot": "10B",
+      "truth_bpm": null,
+      "truth_energy": null,
+      "pred_camelot": "9A",
+      "pred_standard": "E minor",
+      "pred_confidence": 0.5963949029762733,
+      "pred_agreement": 0.375,
+      "pred_bpm": 120.15621502562433,
+      "candidates": [
+        {
+          "camelot": "9A",
+          "standard": "E minor",
+          "confidence": 0.5963949029762733,
+          "agreement": 0.375,
+          "segment_count": 3
+        },
+        {
+          "camelot": "9B",
+          "standard": "G major",
+          "confidence": 0.5936978160262523,
+          "agreement": 0.375,
+          "segment_count": 3
+        },
+        {
+          "camelot": "10B",
+          "standard": "D major",
+          "confidence": 0.44290680109773334,
+          "agreement": 0.125,
+          "segment_count": 1
+        },
+        {
+          "camelot": "11B",
+          "standard": "A major",
+          "confidence": 0.4395568074741636,
+          "agreement": 0.125,
+          "segment_count": 1
+        }
+      ],
+      "mirex": 0.0,
+      "error_type": "other",
+      "tonic_correct": false,
+      "bpm_error": null,
+      "bpm_error_octave": null,
+      "total_ms": 977,
+      "decode_ms": 248,
+      "failure": null
+    },
+    {
+      "path": "..\\ground-truth\\giantsteps-key\\audio\\1442809.LOFI.mp3",
+      "title": "1442809.LOFI",
+      "artist": "",
+      "genre": "chill-out",
+      "extension": "mp3",
+      "truth_camelot": "12A",
+      "truth_bpm": null,
+      "truth_energy": null,
+      "pred_camelot": "12B",
+      "pred_standard": "E major",
+      "pred_confidence": 0.9374236214786184,
+      "pred_agreement": 1.0,
+      "pred_bpm": 167.69529877909767,
+      "candidates": [
+        {
+          "camelot": "12B",
+          "standard": "E major",
+          "confidence": 0.9374236214786184,
+          "agreement": 1.0,
+          "segment_count": 8
+        }
+      ],
+      "mirex": 0.3,
+      "error_type": "relative",
+      "tonic_correct": false,
+      "bpm_error": null,
+      "bpm_error_octave": null,
+      "total_ms": 391,
+      "decode_ms": 109,
+      "failure": null
+    },
+    {
+      "path": "..\\ground-truth\\giantsteps-key\\audio\\1406309.LOFI.mp3",
+      "title": "1406309.LOFI",
+      "artist": "",
+      "genre": "deep-house",
+      "extension": "mp3",
+      "truth_camelot": "10A",
+      "truth_bpm": null,
+      "truth_energy": null,
+      "pred_camelot": "10A",
+      "pred_standard": "B minor",
+      "pred_confidence": 0.8598341649045834,
+      "pred_agreement": 0.875,
+      "pred_bpm": 120.03227952944222,
+      "candidates": [
+        {
+          "camelot": "10A",
+          "standard": "B minor",
+          "confidence": 0.8598341649045834,
+          "agreement": 0.875,
+          "segment_count": 7
+        },
+        {
+          "camelot": "1A",
+          "standard": "G# minor",
+          "confidence": 0.4037246297009894,
+          "agreement": 0.125,
+          "segment_count": 1
+        }
+      ],
+      "mirex": 1.0,
+      "error_type": "correct",
+      "tonic_correct": true,
+      "bpm_error": null,
+      "bpm_error_octave": null,
+      "total_ms": 901,
+      "decode_ms": 243,
+      "failure": null
+    },
+    {
+      "path": "..\\ground-truth\\giantsteps-key\\audio\\1568217.LOFI.mp3",
+      "title": "1568217.LOFI",
+      "artist": "",
+      "genre": "dj-tools",
+      "extension": "mp3",
+      "truth_camelot": "7B",
+      "truth_bpm": null,
+      "truth_energy": null,
+      "pred_camelot": "7B",
+      "pred_standard": "F major",
+      "pred_confidence": 0.8436065283537627,
+      "pred_agreement": 0.875,
+      "pred_bpm": 85.306903666149,
+      "candidates": [
+        {
+          "camelot": "7B",
+          "standard": "F major",
+          "confidence": 0.8436065283537627,
+          "agreement": 0.875,
+          "segment_count": 7
+        },
+        {
+          "camelot": "8A",
+          "standard": "A minor",
+          "confidence": 0.38415373251856927,
+          "agreement": 0.125,
+          "segment_count": 1
+        }
+      ],
+      "mirex": 1.0,
+      "error_type": "correct",
+      "tonic_correct": true,
+      "bpm_error": null,
+      "bpm_error_octave": null,
+      "total_ms": 978,
+      "decode_ms": 252,
+      "failure": null
+    },
+    {
+      "path": "..\\ground-truth\\giantsteps-key\\audio\\1052744.LOFI.mp3",
+      "title": "1052744.LOFI",
+      "artist": "",
+      "genre": "drum-and-bass",
+      "extension": "mp3",
+      "truth_camelot": "6A",
+      "truth_bpm": null,
+      "truth_energy": null,
+      "pred_camelot": "9A",
+      "pred_standard": "E minor",
+      "pred_confidence": 0.8773686341375115,
+      "pred_agreement": 0.875,
+      "pred_bpm": 87.20771159065208,
+      "candidates": [
+        {
+          "camelot": "9A",
+          "standard": "E minor",
+          "confidence": 0.8773686341375115,
+          "agreement": 0.875,
+          "segment_count": 7
+        },
+        {
+          "camelot": "1A",
+          "standard": "G# minor",
+          "confidence": 0.4190328259080441,
+          "agreement": 0.125,
+          "segment_count": 1
+        }
+      ],
+      "mirex": 0.0,
+      "error_type": "other",
+      "tonic_correct": false,
+      "bpm_error": null,
+      "bpm_error_octave": null,
+      "total_ms": 983,
+      "decode_ms": 239,
+      "failure": null
+    }
+  ]
+}
