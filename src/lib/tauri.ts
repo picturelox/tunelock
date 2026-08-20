@@ -480,3 +480,18 @@ export async function audioEngineLoadDeck(deck: 'a' | 'b', filePath: string): Pr
 export async function audioEngineGetMeters(): Promise<AudioMeterReadout> {
   return invoke('audio_engine_get_meters');
 }
+
+// === Beat-Grid DSP Commands ===
+
+export interface BeatGridDetectionResult {
+  bpm: number;
+  firstBeatMs: number;
+  beatTimesMs: number[];
+  downbeatOffset: number;
+  meterNumerator: number;
+  confidence: number;
+}
+
+export async function detectBeatGrid(trackId: number): Promise<BeatGridDetectionResult> {
+  return invoke('detect_beat_grid', { trackId });
+}

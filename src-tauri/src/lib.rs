@@ -141,6 +141,8 @@ pub fn run() {
             commands::audio_engine_set_loop,
             commands::audio_engine_load_deck,
             commands::audio_engine_get_meters,
+            // Beat-grid DSP
+            commands::detect_beat_grid,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1904,3 +1904,61 @@ pub async fn audio_engine_get_meters(state: State<'_, AppState>) -> Result<Audio
         commands_dropped: m.commands_dropped,
     })
 }
+
+// ============================================================================
+// Beat-grid DSP commands
+// ============================================================================
+
+#[derive(serde::Serialize)]
+pub struct BeatGridDetectionResult {
+    pub bpm: f64,
+    pub first_beat_ms: i64,
+    pub beat_times_ms: Vec<i64>,
+    pub downbeat_offset: usize,
+    pub meter_numerator: i32,
+    pub confidence: f64,
+}
+
+#[command]
+pub async fn detect_beat_grid(state: State<'_, AppState>, track_id: i64) -> Result<BeatGridDetectionResult, String> {
+    // Get the file path from the database
+    let file_path = {
+        let db = state.db.lock().await;
+        db.get_track_by_id(track_id)
+            .map_err(|e| e.to_string())?
+            .ok_or("Track not found")?
+            .file_path
+    };
+
+    // Decode and detect on a background thread
+    let result = tokio::task::spawn_blocking(move || -> Result<BeatGridDetectionResult, String> {
+        let samples = crate::media::decode_media(&file_path).map_err(|e| e.to_string())?;
+        let grid = crate::analysis::beat_grid::detect_beat_grid(&samples).map_err(|e| e)?;
+        Ok(BeatGridDetectionResult {
+            bpm: grid.bpm,
+            first_beat_ms: (grid.first_beat_sec * 1000.0) as i64,
+            beat_times_ms: grid.beat_times.iter().map(|t| (t * 1000.0) as i64).collect(),
+            downbeat_offset: grid.downbeat_offset,
+            meter_numerator: grid.meter_numerator,
+            confidence: grid.confidence,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    // Save to database
+    let db = state.db.lock().await;
+    db.save_beat_grid(&crate::models::BeatGrid {
+        track_id,
+        source: "engine".to_string(),
+        bpm: result.bpm,
+        first_beat_ms: result.first_beat_ms,
+        meter_numerator: result.meter_numerator,
+        downbeat_offset_beats: result.downbeat_offset as i32,
+        confidence: Some(result.confidence),
+        is_override: false,
+    })
+    .map_err(|e| e.to_string())?;
+
+    Ok(result)
+}

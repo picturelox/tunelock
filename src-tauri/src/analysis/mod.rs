@@ -1,4 +1,5 @@
 pub mod art;
+pub mod beat_grid;
 pub mod chroma_transform;
 pub mod chromagram;
 pub mod decoder;
