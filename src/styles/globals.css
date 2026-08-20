@@ -4,147 +4,213 @@
 
 @layer base {
   :root {
-    /* Data plane (charcoal) */
-    --data-bg: #1a1a1e;
-    --data-surface: #222226;
-    --data-text: #e8e8ec;
-    --data-text-dim: #888892;
-    --data-border: #333338;
-    --data-grid: #2a2a2e;
+    /* API 2500 Console */
+    --plate-base: #4a5a6a;
+    --plate-dark: #3a4a5a;
+    --plate-light: #5a6b7a;
+    --plate-darker: #2a3a4a;
 
-    /* Walnut Console frame */
-    --walnut-base: #3d2b1f;
-    --walnut-dark: #2a1e15;
-    --walnut-light: #4a3829;
-    --bronze-face: #8b7355;
-    --bronze-dark: #5c4a35;
-    --brass-accent: #c9a96e;
-    --brass-bright: #e8c87a;
-    --cream-label: #f0e6d2;
+    --strip-bg: #3a4a5a;
+    --strip-dark: #2a3a4a;
+    --strip-light: #4a5a6a;
 
-    /* Semantic state */
-    --lamp-amber: #d4a04c;
-    --lamp-green: #5c9c5c;
-    --lamp-red: #c45c5c;
+    --knob-body: #1a1a1e;
+    --knob-rim: #3a3a3e;
+    --knob-indicator: #d4a04c;
+
+    --cap-amber: #d4a04c;
+    --cap-amber-bright: #e8b85c;
+    --cap-red: #c45c3c;
+    --cap-green: #5c8a5c;
+
+    --vu-bg: #1a2a1a;
+    --vu-needle: #d4a04c;
+    --vu-scale: #c0c0a0;
+
+    --label-cream: #e0d8c0;
+    --label-bright: #f0e6d2;
+    --label-dim: #8a8a7a;
+
+    --data-bg: #0f0f0f;
+    --data-surface: #1a1a1e;
   }
 
   body {
-    @apply bg-background text-text-primary;
+    background: var(--plate-darker);
+    color: var(--label-cream);
     font-family: 'Inter', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
   }
+
+  /* Scrollbar — subtle, console-style */
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: var(--plate-darker); }
+  ::-webkit-scrollbar-thumb { background: var(--plate-dark); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--plate-base); }
 }
 
 @layer components {
-  /* Walnut Console panel frame — surrounds modules with wood/bronze texture */
-  .walnut-frame {
-    background: linear-gradient(135deg, var(--walnut-base) 0%, var(--walnut-dark) 100%);
-    border: 1px solid var(--walnut-light);
-    border-radius: 8px;
-    box-shadow: inset 0 1px 2px rgba(0,0,0,0.5), 0 2px 4px rgba(0,0,0,0.3);
+  /* === Console faceplate === */
+  .faceplate {
+    background: linear-gradient(180deg, var(--plate-light) 0%, var(--plate-base) 30%, var(--plate-dark) 100%);
+    border: 1px solid var(--plate-darker);
+    box-shadow: inset 0 1px 2px rgba(255,255,255,0.08), 0 2px 6px rgba(0,0,0,0.4);
   }
 
-  /* Bronze faceplate — for control modules */
-  .bronze-plate {
-    background: linear-gradient(180deg, var(--bronze-face) 0%, var(--bronze-dark) 100%);
-    border: 1px solid var(--bronze-dark);
-    border-radius: 6px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.1);
+  .faceplate-flat {
+    background: var(--plate-base);
+    border: 1px solid var(--plate-dark);
   }
 
-  /* Engraved label — cream text on bronze/walnut */
-  .engraved-label {
-    color: var(--cream-label);
-    text-shadow: 0 1px 1px rgba(0,0,0,0.5);
-    font-size: 0.625rem;
+  /* === Channel strip === */
+  .channel-strip {
+    background: linear-gradient(180deg, var(--strip-light) 0%, var(--strip-bg) 20%, var(--strip-dark) 100%);
+    border-left: 1px solid var(--plate-darker);
+    border-right: 1px solid var(--plate-darker);
+    box-shadow: inset 1px 0 0 rgba(255,255,255,0.05);
+  }
+
+  /* === Engraved label === */
+  .engraved {
+    color: var(--label-cream);
+    text-shadow: 0 1px 1px rgba(0,0,0,0.6);
+    font-size: 0.5rem;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    font-weight: 700;
+    line-height: 1;
+  }
+
+  .engraved-sm {
+    color: var(--label-dim);
+    text-shadow: 0 1px 1px rgba(0,0,0,0.6);
+    font-size: 0.4rem;
     letter-spacing: 0.08em;
     text-transform: uppercase;
     font-weight: 600;
   }
 
-  /* Data plane surface — charcoal, crisp, no texture */
-  .data-plane {
-    background: var(--data-bg);
-    border: 1px solid var(--data-border);
-    border-radius: 4px;
+  /* === Knob === */
+  .knob {
+    background: radial-gradient(circle at 35% 30%, #2a2a2e 0%, var(--knob-body) 60%, #0a0a0a 100%);
+    border: 1px solid var(--knob-rim);
+    border-radius: 50%;
+    box-shadow: inset 0 2px 3px rgba(0,0,0,0.7), 0 1px 0 rgba(255,255,255,0.05);
+    position: relative;
   }
 
-  /* Illuminated launch pad button */
-  .launch-pad {
-    background: var(--walnut-dark);
-    border: 1px solid var(--bronze-dark);
-    border-radius: 6px;
-    box-shadow: inset 0 2px 4px rgba(0,0,0,0.6);
-    transition: all 0.1s ease;
+  .knob-indicator {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 2px;
+    height: 35%;
+    background: var(--knob-indicator);
+    transform-origin: bottom center;
+    border-radius: 1px;
+    box-shadow: 0 0 3px rgba(212,160,76,0.5);
   }
-  .launch-pad:active {
-    box-shadow: inset 0 1px 2px rgba(0,0,0,0.4);
+
+  /* === Button cap (API style) === */
+  .cap {
+    border-radius: 4px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.15);
+    transition: all 0.08s ease;
+    cursor: pointer;
+    user-select: none;
+  }
+  .cap:active {
+    box-shadow: inset 0 1px 3px rgba(0,0,0,0.6);
     transform: translateY(1px);
   }
-  .launch-pad.active {
-    background: var(--bronze-dark);
-    box-shadow: inset 0 2px 4px rgba(0,0,0,0.4), 0 0 8px rgba(201,169,110,0.3);
+
+  .cap-amber {
+    background: linear-gradient(180deg, var(--cap-amber-bright) 0%, var(--cap-amber) 100%);
+    color: var(--plate-darker);
+    border: 1px solid var(--cap-amber-dark, #a07830);
+  }
+  .cap-amber.lit {
+    background: linear-gradient(180deg, #f0c870 0%, var(--cap-amber-bright) 100%);
+    box-shadow: 0 0 8px rgba(212,160,76,0.4), inset 0 1px 0 rgba(255,255,255,0.2);
   }
 
-  /* Lamp button — positive-state indicator */
-  .lamp-btn {
-    border: 1px solid var(--bronze-dark);
-    border-radius: 4px;
-    background: var(--walnut-dark);
-    transition: all 0.15s ease;
+  .cap-red {
+    background: linear-gradient(180deg, #d47a5a 0%, var(--cap-red) 100%);
+    color: #fff;
+    border: 1px solid #8a3a2a;
   }
-  .lamp-btn.lamp-on-amber {
-    background: var(--lamp-amber);
-    box-shadow: 0 0 6px rgba(212,160,76,0.5);
-  }
-  .lamp-btn.lamp-on-green {
-    background: var(--lamp-green);
-    box-shadow: 0 0 6px rgba(92,156,92,0.5);
-  }
-  .lamp-btn.lamp-on-red {
-    background: var(--lamp-red);
-    box-shadow: 0 0 6px rgba(196,92,92,0.5);
+  .cap-red.lit {
+    box-shadow: 0 0 8px rgba(196,92,60,0.5), inset 0 1px 0 rgba(255,255,255,0.2);
   }
 
-  /* Brass-rimmed focus ring — for the Camelot wheel and selected slots */
-  .brass-focus {
-    border: 2px solid var(--brass-accent);
-    box-shadow: 0 0 12px rgba(201,169,110,0.4);
+  .cap-green {
+    background: linear-gradient(180deg, #7aaa7a 0%, var(--cap-green) 100%);
+    color: #fff;
+    border: 1px solid #3a6a3a;
+  }
+  .cap-green.lit {
+    box-shadow: 0 0 8px rgba(92,138,92,0.5), inset 0 1px 0 rgba(255,255,255,0.2);
   }
 
-  /* Slot card — compact Layer Lab slot */
-  .slot-card {
-    background: var(--data-surface);
-    border: 1px solid var(--data-border);
-    border-radius: 6px;
-    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  .cap-white {
+    background: linear-gradient(180deg, #f0f0f0 0%, #d0d0d0 100%);
+    color: var(--plate-darker);
+    border: 1px solid #8a8a8a;
   }
-  .slot-card:hover {
-    border-color: var(--bronze-face);
+
+  .cap-dark {
+    background: linear-gradient(180deg, #2a2a2e 0%, #1a1a1e 100%);
+    color: var(--label-cream);
+    border: 1px solid #0a0a0a;
   }
-  .slot-card.selected {
-    border-color: var(--brass-accent);
-    box-shadow: 0 0 12px rgba(201,169,110,0.3);
+
+  /* === Fader track === */
+  .fader-track {
+    background: linear-gradient(180deg, #0a0a0a 0%, #1a1a1e 100%);
+    border: 1px solid #000;
+    box-shadow: inset 0 2px 4px rgba(0,0,0,0.8);
+    border-radius: 2px;
   }
-  .slot-card.empty {
-    border-style: dashed;
-    border-color: var(--data-border);
+
+  .fader-cap {
+    background: linear-gradient(180deg, #f0f0f0 0%, #c0c0c0 100%);
+    border: 1px solid #8a8a8a;
+    border-radius: 2px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.3);
+    cursor: grab;
+  }
+  .fader-cap:active { cursor: grabbing; }
+
+  /* === VU meter === */
+  .vu-meter {
+    background: linear-gradient(180deg, #0a1a0a 0%, var(--vu-bg) 100%);
+    border: 1px solid #000;
+    border-radius: 2px;
+    box-shadow: inset 0 2px 4px rgba(0,0,0,0.6), 0 0 8px rgba(212,160,76,0.08);
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* === Data plane (waveforms, analysis) === */
+  .data-plane {
+    background: var(--data-bg);
+    border: 1px solid #2a2a2e;
+    border-radius: 2px;
+  }
+
+  /* === Slot (empty channel) === */
+  .slot-empty {
+    background: repeating-linear-gradient(
+      45deg,
+      var(--strip-dark),
+      var(--strip-dark) 4px,
+      var(--plate-darker) 4px,
+      var(--plate-darker) 8px
+    );
     opacity: 0.5;
   }
 }
 
 @layer utilities {
-  .scrollbar-thin {
-    scrollbar-width: thin;
-    scrollbar-color: #333333 transparent;
-  }
-  .scrollbar-thin::-webkit-scrollbar {
-    width: 6px;
-  }
-  .scrollbar-thin::-webkit-scrollbar-track {
-    background: transparent;
-  }
-  .scrollbar-thin::-webkit-scrollbar-thumb {
-    background-color: #333333;
-    border-radius: 3px;
-  }
+  .no-select { user-select: none; -webkit-user-select: none; }
 }

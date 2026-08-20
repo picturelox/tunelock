@@ -1,4 +1,4 @@
-import { Activity, Library, Layers, PackageOpen, Disc3, GraduationCap, Sparkles } from 'lucide-react';
+import { Sliders, Activity, Library, Layers, PackageOpen, Disc3, GraduationCap, Sparkles } from 'lucide-react';
 import type { View } from '../../App';
 
 interface SidebarProps {
@@ -7,6 +7,7 @@ interface SidebarProps {
 }
 
 const navItems: { view: View; label: string; icon: typeof Activity }[] = [
+  { view: 'console', label: 'Console', icon: Sliders },
   { view: 'analyze', label: 'Analyze', icon: Activity },
   { view: 'library', label: 'Library', icon: Library },
   { view: 'mix', label: 'Mix Canvas', icon: Layers },
@@ -17,21 +18,21 @@ const navItems: { view: View; label: string; icon: typeof Activity }[] = [
 
 export default function Sidebar({ currentView, onViewChange }: SidebarProps) {
   return (
-    <aside className="w-16 bg-surface flex flex-col items-center py-4 border-r border-white/5">
-      <div className="mb-6">
-        <Disc3 className="w-8 h-8 text-accent-primary" />
+    <aside className="w-14 faceplate-flat flex flex-col items-center py-3 border-r border-plate-darker">
+      <div className="mb-4">
+        <Disc3 className="w-7 h-7 text-cap-amber" />
       </div>
-      <nav className="flex-1 flex flex-col gap-2">
+      <nav className="flex-1 flex flex-col gap-1.5">
         {navItems.map(({ view, label, icon: Icon }) => (
           <button
             key={view}
             onClick={() => onViewChange(view)}
             className={`
-              w-10 h-10 rounded-lg flex items-center justify-center
-              transition-colors duration-200
+              w-10 h-10 rounded-md flex items-center justify-center
+              transition-all duration-100 no-select
               ${currentView === view
-                ? 'bg-accent-primary text-white'
-                : 'text-text-secondary hover:text-text-primary hover:bg-white/5'
+                ? 'cap cap-amber lit'
+                : 'text-label-dim hover:text-label-cream hover:bg-plate-light/30'
               }
             `}
             title={label}
