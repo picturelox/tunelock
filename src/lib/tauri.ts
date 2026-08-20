@@ -407,3 +407,76 @@ export async function saveTransitionPlan(plan: TransitionPlan): Promise<void> {
 export async function getStemManifest(trackId: number): Promise<StemManifest | null> {
   return invoke('get_stem_manifest', { trackId });
 }
+
+// === Audio Engine Commands (Transition Workbench — real-time playback) ===
+
+export interface AudioMeterReadout {
+  playing: boolean;
+  currentFrame: number;
+  deckAPositionSec: number;
+  deckBPositionSec: number;
+  deckARms: number;
+  deckBRms: number;
+  deckAPeak: number;
+  deckBPeak: number;
+  masterRms: number;
+  masterPeak: number;
+  masterTruePeak: number;
+  deckAClip: boolean;
+  deckBClip: boolean;
+  masterClip: boolean;
+  underruns: number;
+  commandsDropped: number;
+}
+
+export async function audioEngineInit(): Promise<number> {
+  return invoke('audio_engine_init');
+}
+
+export async function audioEnginePlay(): Promise<void> {
+  return invoke('audio_engine_play');
+}
+
+export async function audioEnginePause(): Promise<void> {
+  return invoke('audio_engine_pause');
+}
+
+export async function audioEngineStop(): Promise<void> {
+  return invoke('audio_engine_stop');
+}
+
+export async function audioEngineSeek(positionSec: number): Promise<void> {
+  return invoke('audio_engine_seek', { positionSec });
+}
+
+export async function audioEngineSetCrossfade(position: number): Promise<void> {
+  return invoke('audio_engine_set_crossfade', { position });
+}
+
+export async function audioEngineSetTempo(deck: 'a' | 'b', rate: number): Promise<void> {
+  return invoke('audio_engine_set_tempo', { deck, rate });
+}
+
+export async function audioEngineSetDeckGain(deck: 'a' | 'b', gain: number): Promise<void> {
+  return invoke('audio_engine_set_deck_gain', { deck, gain });
+}
+
+export async function audioEngineSetEq(deck: 'a' | 'b', band: 'low' | 'mid' | 'high', gainDb: number): Promise<void> {
+  return invoke('audio_engine_set_eq', { deck, band, gainDb });
+}
+
+export async function audioEngineSetEqKill(deck: 'a' | 'b', band: 'low' | 'mid' | 'high', killed: boolean): Promise<void> {
+  return invoke('audio_engine_set_eq_kill', { deck, band, killed });
+}
+
+export async function audioEngineSetLoop(startBeat: number | null, lengthBeats: number | null): Promise<void> {
+  return invoke('audio_engine_set_loop', { startBeat, lengthBeats });
+}
+
+export async function audioEngineLoadDeck(deck: 'a' | 'b', filePath: string): Promise<void> {
+  return invoke('audio_engine_load_deck', { deck, filePath });
+}
+
+export async function audioEngineGetMeters(): Promise<AudioMeterReadout> {
+  return invoke('audio_engine_get_meters');
+}

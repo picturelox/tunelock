@@ -1680,3 +1680,227 @@ pub async fn get_stem_manifest(
     let db = state.db.lock().await;
     db.get_stem_manifest(track_id).map_err(|e| e.to_string())
 }
+
+// ============================================================================
+// Audio engine commands (Transition Workbench — real-time playback)
+// ============================================================================
+
+#[command]
+pub async fn audio_engine_init(state: State<'_, AppState>) -> Result<u32, String> {
+    let mut engine_slot = state.audio_engine.lock().await;
+    if engine_slot.is_some() {
+        return Err("Audio engine already initialized".to_string());
+    }
+    let engine = crate::audio::AudioEngine::new().map_err(|e| e)?;
+    let sr = engine.sample_rate();
+    engine.start().map_err(|e| e)?;
+    *engine_slot = Some(engine);
+    Ok(sr)
+}
+
+#[command]
+pub async fn audio_engine_play(state: State<'_, AppState>) -> Result<(), String> {
+    let engine_slot = state.audio_engine.lock().await;
+    if let Some(engine) = engine_slot.as_ref() {
+        let frame = engine.current_frame();
+        engine.send_command(crate::audio::EngineCommand::Play { at_frame: frame });
+    }
+    Ok(())
+}
+
+#[command]
+pub async fn audio_engine_pause(state: State<'_, AppState>) -> Result<(), String> {
+    let engine_slot = state.audio_engine.lock().await;
+    if let Some(engine) = engine_slot.as_ref() {
+        let frame = engine.current_frame();
+        engine.send_command(crate::audio::EngineCommand::Pause { at_frame: frame });
+    }
+    Ok(())
+}
+
+#[command]
+pub async fn audio_engine_stop(state: State<'_, AppState>) -> Result<(), String> {
+    let engine_slot = state.audio_engine.lock().await;
+    if let Some(engine) = engine_slot.as_ref() {
+        let frame = engine.current_frame();
+        engine.send_command(crate::audio::EngineCommand::Stop { at_frame: frame });
+    }
+    Ok(())
+}
+
+#[command]
+pub async fn audio_engine_seek(state: State<'_, AppState>, position_sec: f64) -> Result<(), String> {
+    let engine_slot = state.audio_engine.lock().await;
+    if let Some(engine) = engine_slot.as_ref() {
+        let frame = engine.current_frame();
+        engine.send_command(crate::audio::EngineCommand::Seek { at_frame: frame, position_sec });
+    }
+    Ok(())
+}
+
+#[command]
+pub async fn audio_engine_set_crossfade(state: State<'_, AppState>, position: f32) -> Result<(), String> {
+    let engine_slot = state.audio_engine.lock().await;
+    if let Some(engine) = engine_slot.as_ref() {
+        let frame = engine.current_frame();
+        engine.send_command(crate::audio::EngineCommand::SetCrossfade { at_frame: frame, position });
+    }
+    Ok(())
+}
+
+#[command]
+pub async fn audio_engine_set_tempo(state: State<'_, AppState>, deck: String, rate: f32) -> Result<(), String> {
+    let engine_slot = state.audio_engine.lock().await;
+    if let Some(engine) = engine_slot.as_ref() {
+        let deck_id = match deck.as_str() {
+            "a" | "A" => crate::audio::DeckId::A,
+            _ => crate::audio::DeckId::B,
+        };
+        let frame = engine.current_frame();
+        let cmd = match deck_id {
+            crate::audio::DeckId::A => crate::audio::EngineCommand::SetTempoA { at_frame: frame, rate },
+            crate::audio::DeckId::B => crate::audio::EngineCommand::SetTempoB { at_frame: frame, rate },
+        };
+        engine.send_command(cmd);
+    }
+    Ok(())
+}
+
+#[command]
+pub async fn audio_engine_set_deck_gain(state: State<'_, AppState>, deck: String, gain: f32) -> Result<(), String> {
+    let engine_slot = state.audio_engine.lock().await;
+    if let Some(engine) = engine_slot.as_ref() {
+        let deck_id = match deck.as_str() {
+            "a" | "A" => crate::audio::DeckId::A,
+            _ => crate::audio::DeckId::B,
+        };
+        let frame = engine.current_frame();
+        engine.send_command(crate::audio::EngineCommand::SetDeckGain {
+            at_frame: frame, deck: deck_id, gain,
+        });
+    }
+    Ok(())
+}
+
+#[command]
+pub async fn audio_engine_set_eq(state: State<'_, AppState>, deck: String, band: String, gain_db: f32) -> Result<(), String> {
+    let engine_slot = state.audio_engine.lock().await;
+    if let Some(engine) = engine_slot.as_ref() {
+        let deck_id = match deck.as_str() {
+            "a" | "A" => crate::audio::DeckId::A,
+            _ => crate::audio::DeckId::B,
+        };
+        let band_id = match band.as_str() {
+            "low" => crate::audio::EqBand::Low,
+            "mid" => crate::audio::EqBand::Mid,
+            _ => crate::audio::EqBand::High,
+        };
+        let frame = engine.current_frame();
+        engine.send_command(crate::audio::EngineCommand::SetEqGain {
+            at_frame: frame, deck: deck_id, band: band_id, gain_db,
+        });
+    }
+    Ok(())
+}
+
+#[command]
+pub async fn audio_engine_set_eq_kill(state: State<'_, AppState>, deck: String, band: String, killed: bool) -> Result<(), String> {
+    let engine_slot = state.audio_engine.lock().await;
+    if let Some(engine) = engine_slot.as_ref() {
+        let deck_id = match deck.as_str() {
+            "a" | "A" => crate::audio::DeckId::A,
+            _ => crate::audio::DeckId::B,
+        };
+        let band_id = match band.as_str() {
+            "low" => crate::audio::EqBand::Low,
+            "mid" => crate::audio::EqBand::Mid,
+            _ => crate::audio::EqBand::High,
+        };
+        let frame = engine.current_frame();
+        engine.send_command(crate::audio::EngineCommand::SetEqKill {
+            at_frame: frame, deck: deck_id, band: band_id, killed,
+        });
+    }
+    Ok(())
+}
+
+#[command]
+pub async fn audio_engine_set_loop(state: State<'_, AppState>, start_beat: Option<f64>, length_beats: Option<f64>) -> Result<(), String> {
+    let engine_slot = state.audio_engine.lock().await;
+    if let Some(engine) = engine_slot.as_ref() {
+        let loop_region = match (start_beat, length_beats) {
+            (Some(start), Some(len)) => Some(crate::audio::LoopRegion { start_beat: start, length_beats: len }),
+            _ => None,
+        };
+        let frame = engine.current_frame();
+        engine.send_command(crate::audio::EngineCommand::SetLoop { at_frame: frame, loop_region });
+    }
+    Ok(())
+}
+
+#[command]
+pub async fn audio_engine_load_deck(state: State<'_, AppState>, deck: String, file_path: String) -> Result<(), String> {
+    let engine_slot = state.audio_engine.lock().await;
+    let engine = engine_slot.as_ref().ok_or("Audio engine not initialized")?;
+    let target_sr = engine.sample_rate();
+    let deck_id = match deck.as_str() {
+        "a" | "A" => crate::audio::DeckId::A,
+        _ => crate::audio::DeckId::B,
+    };
+    
+    // Decode on a background thread (not the audio callback)
+    let buffer = tokio::task::spawn_blocking(move || {
+        crate::audio::worker::decode_file(&file_path, target_sr)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    
+    engine.send_command(crate::audio::EngineCommand::LoadDeck { deck: deck_id, buffer });
+    Ok(())
+}
+
+#[derive(serde::Serialize)]
+pub struct AudioMeterReadout {
+    pub playing: bool,
+    pub current_frame: u64,
+    pub deck_a_position_sec: f64,
+    pub deck_b_position_sec: f64,
+    pub deck_a_rms: f64,
+    pub deck_b_rms: f64,
+    pub deck_a_peak: f64,
+    pub deck_b_peak: f64,
+    pub master_rms: f64,
+    pub master_peak: f64,
+    pub master_true_peak: f64,
+    pub deck_a_clip: bool,
+    pub deck_b_clip: bool,
+    pub master_clip: bool,
+    pub underruns: u64,
+    pub commands_dropped: u64,
+}
+
+#[command]
+pub async fn audio_engine_get_meters(state: State<'_, AppState>) -> Result<AudioMeterReadout, String> {
+    let engine_slot = state.audio_engine.lock().await;
+    let engine = engine_slot.as_ref().ok_or("Audio engine not initialized")?;
+    let m = engine.get_meters();
+    Ok(AudioMeterReadout {
+        playing: m.playing,
+        current_frame: m.current_frame,
+        deck_a_position_sec: m.deck_a_position_sec,
+        deck_b_position_sec: m.deck_b_position_sec,
+        deck_a_rms: m.deck_a_rms,
+        deck_b_rms: m.deck_b_rms,
+        deck_a_peak: m.deck_a_peak,
+        deck_b_peak: m.deck_b_peak,
+        master_rms: m.master_rms,
+        master_peak: m.master_peak,
+        master_true_peak: m.master_true_peak,
+        deck_a_clip: m.deck_a_clip,
+        deck_b_clip: m.deck_b_clip,
+        master_clip: m.master_clip,
+        underruns: m.underruns,
+        commands_dropped: m.commands_dropped,
+    })
+}

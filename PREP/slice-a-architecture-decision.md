@@ -1,153 +1,109 @@
-# Transition Workbench Slice A — Architecture Decision
+# Transition Workbench Slice A — Architecture Decision (Revised)
 
-**Status:** Prototypes built; analysis complete  
+**Status:** Revised after technical review  
 **Date:** 2026-08-20  
 **Owner:** TuneLock  
 **Related:** `PREP/transition-workbench-feature-spec.md` §8, §16 Slice A
 
-## Summary
+## Revision summary
 
-Two audio engine prototypes were built and evaluated against the Transition Workbench spec targets:
+The initial decision (Web Audio API as primary engine) was based on flawed analysis. A technical review identified critical errors in both prototypes. This document corrects the decision.
 
-1. **Web Audio API** — `prototypes/audio-web/index.html`
-2. **Rust-side (cpal)** — `prototypes/audio-rust/`
+**Revised decision: Native Rust engine on CPAL is the authoritative audio engine. Web Audio API is demoted to a UI interaction prototype/fallback only.**
 
-Both demonstrate the required architecture: one master clock, two synchronized decks, shared transport, crossfader, 3-band EQ, and meters.
+## Flaws identified in the Web Audio API prototype
 
-## Prototype 1: Web Audio API
+1. **Pitch preservation does not work.** Setting inverse `detune` alongside `playbackRate` does not preserve pitch while changing tempo. The Web Audio specification combines these into one computed playback rate — the inverse detune effectively cancels the speed change. True independent time stretching requires an AudioWorklet/WASM algorithm, not the built-in `detune` parameter.
 
-### Architecture
-- One `AudioContext` owns the master clock
-- Each deck: `AudioBufferSourceNode` → `GainNode` → 3× `BiquadFilterNode` (low shelf, mid peaking, high shelf) → `AnalyserNode` → crossfade `GainNode` → master `GainNode` → `destination`
-- Equal-power crossfade: `gainA = cos(θ)`, `gainB = sin(θ)`
-- Pitch-preserving tempo: `playbackRate` for tempo + `detune` for pitch compensation (`detune = -1200 * log2(playbackRate)`)
+2. **Start-error measurement is invalid.** The prototype compares the same JavaScript `now` value assigned to both decks, so it reports zero without measuring rendered audio. This is a measurement artifact, not a real result.
 
-### Measured characteristics
-- **Sample rate:** System-dependent (typically 44100Hz or 48000Hz)
-- **Base latency:** ~5-15ms (system-dependent, reported by `AudioContext.baseLatency`)
-- **Output latency:** ~10-30ms (system-dependent, reported by `AudioContext.outputLatency`)
-- **Start accuracy:** Both `AudioBufferSourceNode.start(0)` calls schedule on the same clock tick — theoretical start error is 0ms, practical error is <1 sample
-- **Drift:** Zero by construction — both sources share the same sample clock
-- **Pitch preservation:** `detune` compensation is exact for the playbackRate/detune model. The Web Audio API applies these as independent parameters, so pitch stays within 0 cents of target across ±8%
-- **Loop alignment:** `AudioBufferSourceNode.loop` with `loopStart`/`loopEnd` is sample-accurate
+3. **Memory consumption.** `decodeAudioData` buffers complete tracks. Two five-minute stereo tracks consume ~212 MB of float PCM. Eight stems across two decks approach ~850 MB before other buffers.
 
-### Strengths
-- Zero drift by construction (shared sample clock)
-- Sample-accurate scheduling via `AudioContext.currentTime`
-- Built-in EQ (`BiquadFilterNode`) and metering (`AnalyserNode`)
-- Built-in pitch-preserving tempo via `detune`
-- No IPC latency — all audio processing in the render thread
-- AudioWorklet available for custom DSP if needed later
-- Lower complexity — no Rust audio backend to maintain
+## Flaws identified in the Rust prototype
 
-### Weaknesses
-- `decodeAudioData` must decode the full file into memory before playback (not streaming)
-- Large files (e.g., 2-hour sets) may hit memory limits
-- EQ filter quality is limited to what `BiquadFilterNode` provides
-- No direct access to sample data for advanced DSP (would need AudioWorklet)
-- Browser audio backend quality varies (WASAPI vs. DirectSound on Windows)
+1. **Nearest-neighbor resampling changes pitch and aliases.** Not suitable for production playback.
+2. **Output sample rate is ignored.** Source buffers are not converted to the output device rate.
+3. **Mutexes in the audio callback.** Multiple `Mutex` locks are acquired inside the real-time callback path, which can cause priority inversion, unbounded latency, or deadlocks.
+4. **Per-block allocation.** The integer-output callback allocates a new `Vec` every block, which is a real-time violation.
+5. **Stereo assumption.** Output channel count is hard-coded to stereo.
+6. **EQ is approximate.** One-pole shelving filters do not provide flat reconstruction or convincing kills. A real DJ isolator needs complementary crossover filters.
 
-## Prototype 2: Rust-side (cpal)
-
-### Architecture
-- One `cpal::Stream` owns the output clock
-- Two `Deck` structs, each with: buffer → gain → 3-band EQ (one-pole shelving filters) → crossfade gain
-- `Mixer` combines both decks with master gain and soft clipping
-- Transport commands arrive via `crossbeam_channel` from the CLI thread
-- Pitch-preserving tempo: nearest-neighbor resampling (prototype quality; production would need a phase vocoder)
-
-### Measured characteristics
-- **Sample rate:** Configured to match output device (typically 44100Hz)
-- **Latency:** Depends on buffer size (typically 10-30ms for default config)
-- **Start accuracy:** Both decks start in the same `process()` call — start error is 0ms by construction
-- **Drift:** Zero by construction — both decks advance in the same callback
-- **Pitch preservation:** Nearest-neighbor resampling changes pitch with tempo. A phase vocoder or rubberband-style time-stretcher would be needed for true pitch preservation. This is a significant gap.
-- **Loop alignment:** Sample-accurate (position tracking in the callback)
-
-### Strengths
-- Full control over the audio graph and DSP
-- Can use Symphonia for streaming decode (not limited to in-memory buffers)
-- Can integrate with Rust-side analysis (waveforms, beat detection, etc.)
-- Can use professional audio libraries (rubberband, etc.) for pitch-preserving tempo
-- Direct access to sample data for advanced DSP
-- Better control over buffer size and latency
-
-### Weaknesses
-- Significantly more complex to build and maintain
-- IPC latency for transport commands (Tauri command → channel → audio thread)
-- No built-in EQ — must implement filters manually
-- No built-in metering — must implement RMS/peak detection manually
-- Pitch-preserving tempo requires a time-stretching library (not available in the prototype)
-- cpal's Windows backend (WASAPI) can be finicky with device selection
-- More testing required for edge cases (device changes, buffer underruns, etc.)
-
-## Decision
-
-**Recommended: Web Audio API as the primary audio engine, with Rust-side analysis support.**
-
-### Rationale
-
-1. **Drift and sync:** Both approaches have zero drift by construction (shared clock). The Web Audio API achieves this with less code and less risk.
-
-2. **Pitch preservation:** The Web Audio API's `detune` parameter provides exact pitch compensation for tempo changes. The Rust prototype would need a phase vocoder library (significant additional work) to match this.
-
-3. **EQ and metering:** The Web Audio API provides production-quality `BiquadFilterNode` EQ and `AnalyserNode` metering for free. The Rust prototype uses simplified one-pole filters that would need significant work to match.
-
-4. **Complexity:** The Web Audio API prototype is ~650 lines of JavaScript in a single HTML file. The Rust prototype is ~700 lines across 4 files and requires a separate Cargo project with cpal, symphonia, and crossbeam dependencies.
-
-5. **Integration with Tauri:** The Web Audio API runs in the webview, which is already the TuneLock UI. Transport commands can be sent directly from React without IPC latency.
-
-6. **Streaming decode:** The main weakness of the Web Audio API is that `decodeAudioData` loads the full file into memory. For the Transition Workbench use case (two tracks at a time, typically 3-8 minutes each), this is acceptable. For very long files, we can use `AudioWorklet` with a streaming decoder, or fall back to Rust-side decode with streaming via a custom AudioWorkletNode.
-
-7. **AudioWorklet escape hatch:** If we need custom DSP later (e.g., phase vocoder time-stretching, advanced EQ, stem mixing), the Web Audio API's AudioWorklet lets us write Rust-compiled-to-WASM or JavaScript DSP that runs in the audio render thread.
-
-### Architecture for Slice B
+## Corrected architecture
 
 ```
-React UI (Transport, Crossfader, EQ, Meters)
-    ↓ (direct calls)
-AudioContext (master clock)
-    ↓
-Deck A: AudioBufferSourceNode → GainNode → BiquadFilter×3 → AnalyserNode → CrossfadeGain → MasterGain → destination
-Deck B: AudioBufferSourceNode → GainNode → BiquadFilter×3 → AnalyserNode → CrossfadeGain → MasterGain → destination
-    ↑ (file decode)
-Rust side: Symphonia decode → PCM samples → transfer to frontend via Tauri command → decodeAudioData
+                    BACKGROUND / WORKER THREADS
+ Source files ──► Symphonia decode ──► Rubato sample-rate conversion
+ Stems       ──► alignment check  ──► per-deck source buffers
+                                          │
+                                 stem gain/mute/solo
+                                          │
+                                      deck sum
+                                          │
+                              Signalsmith time stretch
+                                          │
+                                  bounded ring buffer
+                                          ▼
+                         REAL-TIME CPAL OUTPUT CALLBACK
+       Deck A buffer ──► EQ/gain ──┐
+                                   ├─► crossfader ─► master meter/limiter ─► output
+       Deck B buffer ──► EQ/gain ──┘
 ```
 
-The Rust side handles:
-- File decoding (Symphonia, already implemented)
-- Waveform generation (already implemented)
-- Beat grid estimation (to be implemented)
-- Stem separation (Slice C, optional)
+### Real-time constraints (non-negotiable)
 
-The frontend handles:
-- Audio playback (Web Audio API)
-- Transport control
-- Mixer (crossfader, EQ, meters)
-- UI rendering
+The audio callback must **never**:
+- Allocate memory
+- Lock a mutex
+- Decode a file
+- Access SQLite or the filesystem
+- Log
+- Call Tauri
+- Wait for another thread
 
-### What the Rust prototype taught us
+UI actions enter a bounded lock-free command queue as frame-addressed commands. Meter snapshots and playhead position return to React at approximately 20–30 Hz.
 
-The Rust prototype validated that:
-1. cpal works on Windows with the default WASAPI backend
-2. Symphonia can decode WAV files for the audio engine
-3. Cross-channel transport commands work without blocking the audio thread
-4. The mixer architecture (two decks → EQ → crossfade → master) is sound
+### DSP priority order
 
-These insights carry forward to the waveform and beat-grid analysis, which stays in Rust regardless of the audio engine choice.
+1. **Sample-accurate transport** — one output stream, one monotonically increasing frame counter, all events scheduled against that counter
+2. **Band-limited resampling** — Rubato (MIT/Apache-2.0), not nearest-neighbor
+3. **Beat-grid DSP** — phase, downbeats, meter, DP beat tracking (not just BPM)
+4. **Pitch-preserving time stretching** — Signalsmith Stretch (MIT), not Rubber Band (GPL)
+5. **Mixer and gain staging** — real complementary crossover EQ, click-free ramps, 6 dB headroom
+6. **Metering** — ITU-R BS.1770-5 true peak, per-deck peak/RMS, master meter
+7. **Looping and seeking** — fractional-sample compensation, boundary crossfades, phase retention
+8. **Multiresolution waveform pyramid** — replaces the current 2000-column overview
+9. **Stem-specific DSP** — alignment verification, activity analysis
 
-## Test fixtures
+### Key dependencies
 
-Generated in `prototypes/fixtures/`:
-- `click_120bpm.wav` — 32s, 64 beats, 4/4 at 120 BPM
-- `click_128bpm.wav` — 30s, 64 beats, 4/4 at 128 BPM
-- `click_140bpm.wav` — 27.4s, 64 beats, 4/4 at 140 BPM
-- `click_128bpm_2min.wav` — 120s, 256 beats, for drift measurement
-- `sine_440hz.wav` — 10s, 440Hz sine tone for pitch verification
-- `sine_880hz.wav` — 10s, 880Hz sine tone for pitch verification
+| Dependency | License | Purpose |
+|---|---|---|
+| `cpal` 0.15 | MIT/Apache-2.0 | Low-level audio output (WASAPI/CoreAudio/ALSA) |
+| `rubato` | MIT/Apache-2.0 | Band-limited sample-rate conversion |
+| `signalsmith-stretch` | MIT | Pitch-preserving time stretching |
+| `symphonia` 0.5 | MPL-2.0 | Source file decoding (already used) |
 
-## Next steps
+Rubber Band is excluded because its open-source distribution is GPL, which conflicts with TuneLock's dependency rules unless a commercial license is acquired.
 
-1. **Slice A.6:** Add beat-grid data structures to the database (BeatGrid table + commands)
-2. **Slice B:** Build the standard full-mix Transition Workbench using the Web Audio API architecture
-3. **Slice C:** Optional stem provider (Rust-side, with stems streamed to the frontend for Web Audio playback)
+### Rust version compatibility
+
+TuneLock currently declares Rust 1.70. CPAL 0.15 may require a newer compiler. The engine module will either pin a compatible CPAL release or intentionally upgrade the Rust baseline after testing — no unplanned dependency upgrade will decide this.
+
+### Signal path separation
+
+- TuneLock's 22.05 kHz mono analysis pipeline is for offline music analysis (key, BPM, energy, etc.)
+- The Transition Workbench audio engine runs at full-quality stereo at the output device's rate (44.1 or 48 kHz)
+- They share metadata and analysis results, but not the same signal path
+
+## What the prototypes taught us
+
+The Web Audio prototype validated:
+- The UI interaction model (transport, crossfader, EQ, meters)
+- The component hierarchy for the frontend
+
+The Rust prototype validated:
+- cpal works on Windows with WASAPI
+- Symphonia can decode for the audio engine
+- The mixer architecture concept is sound
+
+Both prototypes are scaffolding, not production code. The real engine will be built as a proper `audio/` module in the main TuneLock crate with preallocated buffers, worker-thread decoding, and a lock-free real-time callback.
