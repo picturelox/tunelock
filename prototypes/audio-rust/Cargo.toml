@@ -1,0 +1,15 @@
+[package]
+name = "audio-rust-prototype"
+version = "0.1.0"
+edition = "2021"
+description = "Rust-side audio engine prototype for TuneLock Transition Workbench Slice A"
+
+[dependencies]
+cpal = "0.15"
+symphonia = { version = "0.5", features = ["mp3", "wav", "flac", "ogg", "pcm", "aac", "alac", "isomp4", "aiff"] }
+ringbuffer = "0.15"
+crossbeam-channel = "0.5"
+
+[[bin]]
+name = "audio-prototype"
+path = "src/main.rs"

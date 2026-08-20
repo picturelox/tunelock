@@ -1616,3 +1616,67 @@ pub async fn assist_plan_set(
         .await
         .map_err(|e| e.to_string())
 }
+
+// ============================================================================
+// Transition Workbench commands (Phase 7 / Slice A)
+// ============================================================================
+
+#[command]
+pub async fn get_beat_grid(
+    state: State<'_, AppState>,
+    track_id: i64,
+) -> Result<Option<BeatGrid>, String> {
+    let db = state.db.lock().await;
+    db.get_beat_grid(track_id).map_err(|e| e.to_string())
+}
+
+#[command]
+pub async fn save_beat_grid_override(
+    state: State<'_, AppState>,
+    track_id: i64,
+    bpm: f64,
+    first_beat_ms: i64,
+    meter_numerator: i32,
+    downbeat_offset_beats: i32,
+) -> Result<(), String> {
+    let db = state.db.lock().await;
+    db.save_beat_grid_override(track_id, bpm, first_beat_ms, meter_numerator, downbeat_offset_beats)
+        .map_err(|e| e.to_string())
+}
+
+#[command]
+pub async fn reset_beat_grid_override(
+    state: State<'_, AppState>,
+    track_id: i64,
+) -> Result<(), String> {
+    let db = state.db.lock().await;
+    db.reset_beat_grid_override(track_id).map_err(|e| e.to_string())
+}
+
+#[command]
+pub async fn get_transition_plan(
+    state: State<'_, AppState>,
+    playlist_id: i64,
+    transition_id: String,
+) -> Result<Option<TransitionPlan>, String> {
+    let db = state.db.lock().await;
+    db.get_transition_plan(playlist_id, &transition_id).map_err(|e| e.to_string())
+}
+
+#[command]
+pub async fn save_transition_plan(
+    state: State<'_, AppState>,
+    plan: TransitionPlan,
+) -> Result<(), String> {
+    let db = state.db.lock().await;
+    db.save_transition_plan(&plan).map_err(|e| e.to_string())
+}
+
+#[command]
+pub async fn get_stem_manifest(
+    state: State<'_, AppState>,
+    track_id: i64,
+) -> Result<Option<StemManifest>, String> {
+    let db = state.db.lock().await;
+    db.get_stem_manifest(track_id).map_err(|e| e.to_string())
+}

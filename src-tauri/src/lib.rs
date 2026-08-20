@@ -117,6 +117,13 @@ pub fn run() {
             commands::assist_infer_genres,
             commands::assist_explain_transition,
             commands::assist_plan_set,
+            // Transition Workbench (Phase 7 / Slice A)
+            commands::get_beat_grid,
+            commands::save_beat_grid_override,
+            commands::reset_beat_grid_override,
+            commands::get_transition_plan,
+            commands::save_transition_plan,
+            commands::get_stem_manifest,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -214,3 +214,51 @@ pub struct TrainingStats {
     pub accuracy_pct: f64,
     pub by_type: std::collections::HashMap<String, (usize, usize)>, // (total, correct)
 }
+
+// ============================================================================
+// Transition Workbench models (Phase 7 / Slice A)
+// ============================================================================
+
+/// Beat grid for a track — BPM, first-beat time, meter, downbeat, confidence.
+/// Manual corrections override engine estimates.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BeatGrid {
+    pub track_id: i64,
+    pub source: String,               // "engine" | "manual" | "imported"
+    pub bpm: f64,
+    pub first_beat_ms: i64,
+    pub meter_numerator: i32,
+    pub downbeat_offset_beats: i32,
+    pub confidence: Option<f64>,      // None for manual, 0.0-1.0 for engine
+    pub is_override: bool,
+}
+
+/// Transition plan stored per transition in a mix.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransitionPlan {
+    pub playlist_id: i64,
+    pub transition_id: String,
+    pub schema_version: i32,
+    pub plan_json: String,            // Full plan as JSON
+}
+
+/// Stem manifest — cached stem separation results.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StemManifest {
+    pub track_id: i64,
+    pub source_fingerprint: String,
+    pub provider: String,
+    pub model: String,
+    pub model_version: Option<String>,
+    pub vocals_path: Option<String>,
+    pub drums_path: Option<String>,
+    pub bass_path: Option<String>,
+    pub other_path: Option<String>,
+    pub duration_ms: Option<i64>,
+    pub alignment_offset_ms: i64,
+    pub status: String,               // "ready" | "processing" | "failed" | "stale"
+    pub storage_bytes: Option<i64>,
+}

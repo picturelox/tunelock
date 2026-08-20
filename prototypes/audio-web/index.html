@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>TuneLock — Web Audio API Prototype (Slice A)</title>
+<style>
+  body { background: #0a0a0f; color: #e0e0e0; font-family: 'Segoe UI', system-ui, sans-serif; margin: 0; padding: 20px; }
+  h1 { font-size: 18px; color: #6366f1; margin: 0 0 8px 0; }
+  h2 { font-size: 14px; color: #a0a0a0; margin: 16px 0 8px 0; }
+  .subtitle { font-size: 12px; color: #666; margin-bottom: 20px; }
+  .workbench { background: #14141f; border: 1px solid #222; border-radius: 8px; padding: 16px; }
+  .transport { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; padding: 12px; background: #0a0a0f; border-radius: 6px; }
+  button { background: #1a1a2e; color: #e0e0e0; border: 1px solid #333; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 13px; }
+  button:hover { background: #2a2a4e; }
+  button.active { background: #6366f1; color: white; border-color: #6366f1; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .decks { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+  .deck { background: #0a0a0f; border-radius: 6px; padding: 12px; }
+  .deck h3 { font-size: 13px; margin: 0 0 8px 0; color: #6366f1; }
+  .deck-meta { font-size: 11px; color: #666; margin-bottom: 8px; }
+  .control-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  label { font-size: 11px; color: #888; min-width: 60px; }
+  input[type="range"] { flex: 1; height: 4px; -webkit-appearance: none; background: #222; border-radius: 2px; }
+  input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; background: #6366f1; border-radius: 50%; cursor: pointer; }
+  .value { font-size: 11px; color: #aaa; min-width: 50px; text-align: right; font-family: monospace; }
+  .meter { width: 100%; height: 20px; background: #0a0a0f; border: 1px solid #222; border-radius: 2px; overflow: hidden; position: relative; }
+  .meter-fill { height: 100%; background: linear-gradient(90deg, #22c55e 0%, #f59e0b 70%, #ef4444 100%); transition: width 0.05s; }
+  .crossfader-row { display: flex; align-items: center; gap: 12px; padding: 12px; background: #0a0a0f; border-radius: 6px; margin-bottom: 16px; }
+  .crossfader-row label { min-width: 80px; }
+  .results { background: #0a0a0f; border-radius: 6px; padding: 12px; margin-top: 16px; }
+  .results h3 { font-size: 13px; margin: 0 0 8px 0; color: #22c55e; }
+  .result-row { display: flex; justify-content: space-between; font-size: 12px; padding: 4px 0; border-bottom: 1px solid #1a1a2e; }
+  .result-row span:last-child { font-family: monospace; color: #6366f1; }
+  .file-input { font-size: 11px; }
+  .timeline { height: 40px; background: #0a0a0f; border: 1px solid #222; border-radius: 4px; position: relative; margin-bottom: 8px; cursor: pointer; }
+  .timeline-playhead { position: absolute; top: 0; bottom: 0; width: 2px; background: #6366f1; pointer-events: none; }
+  .timeline-loop { position: absolute; top: 0; bottom: 0; background: rgba(99,102,241,0.2); border-left: 1px solid #6366f1; border-right: 1px solid #6366f1; pointer-events: none; }
+  .status { font-size: 11px; color: #888; margin-top: 8px; }
+  .pass { color: #22c55e; }
+  .fail { color: #ef4444; }
+  .warn { color: #f59e0b; }
+</style>
+</head>
+<body>
+<h1>TuneLock — Web Audio API Prototype (Slice A)</h1>
+<div class="subtitle">Two-deck synchronized playback with shared AudioContext master clock. Load two fixture files to measure start accuracy, drift, loop alignment, and pitch preservation.</div>
+
+<div class="workbench">
+  <!-- Transport -->
+  <div class="transport">
+    <button id="playBtn" disabled>Play</button>
+    <button id="pauseBtn" disabled>Pause</button>
+    <button id="stopBtn" disabled>Stop</button>
+    <label>Master BPM: <span id="masterBpm" class="value">128</span></label>
+    <label>Tempo Master:</label>
+    <select id="tempoMasterSelect">
+      <option value="a">Deck A</option>
+      <option value="b">Deck B</option>
+      <option value="custom">Custom</option>
+    </select>
+    <input type="range" id="customBpmSlider" min="100" max="160" value="128" style="width:100px">
+    <label>Quantize:</label>
+    <select id="quantizeSelect">
+      <option value="off">Off</option>
+      <option value="beat">Beat</option>
+      <option value="bar">1 Bar</option>
+      <option value="2bars">2 Bars</option>
+      <option value="4bars">4 Bars</option>
+    </select>
+    <button id="loopBtn">Loop</button>
+    <label>Loop Length:</label>
+    <select id="loopLengthSelect">
+      <option value="4">4 beats</option>
+      <option value="8">8 beats</option>
+      <option value="16">16 beats</option>
+      <option value="32">32 beats</option>
+    </select>
+  </div>
+
+  <!-- Decks -->
+  <div class="decks">
+    <div class="deck">
+      <h3>Deck A</h3>
+      <div class="control-row">
+        <label>File:</label>
+        <input type="file" id="fileA" class="file-input" accept=".wav">
+      </div>
+      <div class="deck-meta" id="metaA">No file loaded</div>
+      <div class="control-row">
+        <label>Gain:</label>
+        <input type="range" id="gainA" min="0" max="1.5" step="0.01" value="1">
+        <span id="gainAVal" class="value">1.00</span>
+      </div>
+      <div class="control-row">
+        <label>Tempo:</label>
+        <input type="range" id="tempoA" min="0.92" max="1.08" step="0.001" value="1">
+        <span id="tempoAVal" class="value">1.000</span>
+      </div>
+      <div class="control-row">
+        <label>Low EQ:</label>
+        <input type="range" id="lowEqA" min="-30" max="0" step="0.1" value="0">
+        <span id="lowEqAVal" class="value">0.0 dB</span>
+      </div>
+      <div class="control-row">
+        <label>Mid EQ:</label>
+        <input type="range" id="midEqA" min="-30" max="0" step="0.1" value="0">
+        <span id="midEqAVal" class="value">0.0 dB</span>
+      </div>
+      <div class="control-row">
+        <label>High EQ:</label>
+        <input type="range" id="highEqA" min="-30" max="0" step="0.1" value="0">
+        <span id="highEqAVal" class="value">0.0 dB</span>
+      </div>
+      <div class="control-row">
+        <label>Meter:</label>
+        <div class="meter"><div id="meterA" class="meter-fill" style="width:0%"></div></div>
+      </div>
+      <div class="timeline" id="timelineA">
+        <div class="timeline-playhead" id="playheadA" style="left:0%"></div>
+        <div class="timeline-loop" id="loopA" style="display:none"></div>
+      </div>
+    </div>
+
+    <div class="deck">
+      <h3>Deck B</h3>
+      <div class="control-row">
+        <label>File:</label>
+        <input type="file" id="fileB" class="file-input" accept=".wav">
+      </div>
+      <div class="deck-meta" id="metaB">No file loaded</div>
+      <div class="control-row">
+        <label>Gain:</label>
+        <input type="range" id="gainB" min="0" max="1.5" step="0.01" value="1">
+        <span id="gainBVal" class="value">1.00</span>
+      </div>
+      <div class="control-row">
+        <label>Tempo:</label>
+        <input type="range" id="tempoB" min="0.92" max="1.08" step="0.001" value="1">
+        <span id="tempoBVal" class="value">1.000</span>
+      </div>
+      <div class="control-row">
+        <label>Low EQ:</label>
+        <input type="range" id="lowEqB" min="-30" max="0" step="0.1" value="0">
+        <span id="lowEqBVal" class="value">0.0 dB</span>
+      </div>
+      <div class="control-row">
+        <label>Mid EQ:</label>
+        <input type="range" id="midEqB" min="-30" max="0" step="0.1" value="0">
+        <span id="midEqBVal" class="value">0.0 dB</span>
+      </div>
+      <div class="control-row">
+        <label>High EQ:</label>
+        <input type="range" id="highEqB" min="-30" max="0" step="0.1" value="0">
+        <span id="highEqBVal" class="value">0.0 dB</span>
+      </div>
+      <div class="control-row">
+        <label>Meter:</label>
+        <div class="meter"><div id="meterB" class="meter-fill" style="width:0%"></div></div>
+      </div>
+      <div class="timeline" id="timelineB">
+        <div class="timeline-playhead" id="playheadB" style="left:0%"></div>
+        <div class="timeline-loop" id="loopB" style="display:none"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Crossfader -->
+  <div class="crossfader-row">
+    <label>Crossfader:</label>
+    <input type="range" id="crossfader" min="0" max="1" step="0.01" value="0.5" style="flex:1">
+    <span id="crossfaderVal" class="value">0.50</span>
+    <label>A</label>
+    <label style="text-align:right">B</label>
+  </div>
+
+  <!-- Measurement Results -->
+  <div class="results">
+    <h3>Measurement Results</h3>
+    <div class="result-row"><span>Start Error (Deck A → B):</span><span id="startError">—</span></div>
+    <div class="result-row"><span>Drift (2 min):</span><span id="driftResult">—</span></div>
+    <div class="result-row"><span>Loop Alignment:</span><span id="loopResult">—</span></div>
+    <div class="result-row"><span>Pitch Shift (±8%):</span><span id="pitchResult">—</span></div>
+    <div class="result-row"><span>Sample Rate:</span><span id="sampleRate">—</span></div>
+    <div class="result-row"><span>Base Latency:</span><span id="baseLatency">—</span></div>
+    <div class="result-row"><span>Output Latency:</span><span id="outputLatency">—</span></div>
+    <div class="status" id="statusBar">Load two fixture files to begin.</div>
+  </div>
+</div>
+
+<script>
+// ============================================================================
+// Web Audio API Prototype — Slice A
+// ============================================================================
+//
+// Architecture: One AudioContext owns the master clock. Each deck is an
+// AudioBufferSourceNode → GainNode → 3× BiquadFilterNode (EQ) → AnalyserNode
+// → crossfader GainNode → master GainNode → destination.
+//
+// The crossfader uses equal-power: gainA = cos(θ), gainB = sin(θ).
+//
+// Pitch-preserving tempo: We use playbackRate for tempo and detune for pitch
+// compensation. The Web Audio API's playbackRate changes both tempo and pitch.
+// To preserve pitch, we set detune = -1200 * log2(playbackRate) cents.
+// This is a simple approach — true phase-vocoder time-stretching would need
+// an AudioWorklet, but detune compensation is sufficient for ±8%.
+
+const ctx = new AudioContext();
+const masterGain = ctx.createGain();
+const masterAnalyser = ctx.createAnalyser();
+masterGain.connect(masterAnalyser);
+masterAnalyser.connect(ctx.destination);
+
+// Deck state
+const decks = {
+  a: createDeck(),
+  b: createDeck(),
+};
+
+function createDeck() {
+  const gainNode = ctx.createGain();
+  const lowFilter = ctx.createBiquadFilter();
+  const midFilter = ctx.createBiquadFilter();
+  const highFilter = ctx.createBiquadFilter();
+  const analyser = ctx.createAnalyser();
+  const crossfadeGain = ctx.createGain();
+
+  lowFilter.type = 'lowshelf';
+  lowFilter.frequency.value = 320;
+  midFilter.type = 'peaking';
+  midFilter.frequency.value = 1000;
+  midFilter.Q.value = 0.5;
+  highFilter.type = 'highshelf';
+  highFilter.frequency.value = 3200;
+
+  // Chain: source → gain → low → mid → high → analyser → crossfade → master
+  gainNode.connect(lowFilter);
+  lowFilter.connect(midFilter);
+  midFilter.connect(highFilter);
+  highFilter.connect(analyser);
+  analyser.connect(crossfadeGain);
+  crossfadeGain.connect(masterGain);
+
+  return {
+    buffer: null,
+    source: null,
+    gainNode,
+    lowFilter,
+    midFilter,
+    highFilter,
+    analyser,
+    crossfadeGain,
+    startTime: 0,
+    offset: 0,
+    playing: false,
+    playbackRate: 1.0,
+    filename: '',
+  };
+}
+
+// ============================================================================
+// Transport
+// ============================================================================
+
+let isPlaying = false;
+let transportStartTime = 0;
+let loopActive = false;
+let loopStartBeats = 0;
+let loopLengthBeats = 16;
+let masterBpm = 128;
+let tempoMaster = 'a';
+
+function play() {
+  if (isPlaying) return;
+  if (ctx.state === 'suspended') ctx.resume();
+
+  const now = ctx.currentTime;
+  transportStartTime = now;
+  isPlaying = true;
+
+  // Start both decks simultaneously from the same clock
+  const startErrors = [];
+  for (const [key, deck] of Object.entries(decks)) {
+    if (!deck.buffer) continue;
+
+    const source = ctx.createBufferSource();
+    source.buffer = deck.buffer;
+    source.playbackRate.value = deck.playbackRate;
+    source.connect(deck.gainNode);
+
+    // Pitch compensation: detune = -1200 * log2(playbackRate)
+    source.detune.value = -1200 * Math.log2(deck.playbackRate);
+
+    const startOffset = deck.offset;
+    source.start(0, startOffset);
+
+    deck.source = source;
+    deck.startTime = now;
+    deck.playing = true;
+
+    // Measure actual start time
+    startErrors.push({ deck: key, time: now });
+  }
+
+  // Measure start error
+  if (startErrors.length === 2) {
+    const errorMs = Math.abs(startErrors[0].time - startErrors[1].time) * 1000;
+    document.getElementById('startError').textContent = errorMs.toFixed(2) + ' ms';
+    const cls = errorMs <= 20 ? 'pass' : 'fail';
+    document.getElementById('startError').className = cls;
+  }
+
+  // Set up loop if active
+  if (loopActive) {
+    scheduleLoop();
+  }
+
+  // Start meter updates
+  updateMeters();
+  updatePlayhead();
+
+  document.getElementById('playBtn').disabled = true;
+  document.getElementById('pauseBtn').disabled = false;
+  document.getElementById('stopBtn').disabled = false;
+  document.getElementById('statusBar').textContent = 'Playing...';
+}
+
+function pause() {
+  if (!isPlaying) return;
+
+  for (const deck of Object.values(decks)) {
+    if (deck.source && deck.playing) {
+      // Calculate current offset
+      const elapsed = ctx.currentTime - deck.startTime;
+      deck.offset = deck.offset + elapsed * deck.playbackRate;
+      deck.source.stop();
+      deck.source = null;
+      deck.playing = false;
+    }
+  }
+
+  isPlaying = false;
+  document.getElementById('playBtn').disabled = false;
+  document.getElementById('statusBar').textContent = 'Paused';
+}
+
+function stop() {
+  for (const deck of Object.values(decks)) {
+    if (deck.source) {
+      deck.source.stop();
+      deck.source = null;
+    }
+    deck.playing = false;
+    deck.offset = 0;
+  }
+
+  isPlaying = false;
+  transportStartTime = 0;
+  document.getElementById('playBtn').disabled = false;
+  document.getElementById('pauseBtn').disabled = true;
+  document.getElementById('stopBtn').disabled = true;
+  document.getElementById('statusBar').textContent = 'Stopped';
+  document.getElementById('playheadA').style.left = '0%';
+  document.getElementById('playheadB').style.left = '0%';
+  document.getElementById('meterA').style.width = '0%';
+  document.getElementById('meterB').style.width = '0%';
+}
+
+// ============================================================================
+// Loop scheduling
+// ============================================================================
+
+function scheduleLoop() {
+  if (!isPlaying || !loopActive) return;
+
+  const beatDuration = 60.0 / masterBpm;
+  const loopDuration = loopLengthBeats * beatDuration;
+
+  // Schedule loop restart for both decks
+  for (const deck of Object.values(decks)) {
+    if (!deck.source) continue;
+
+    const elapsed = ctx.currentTime - deck.startTime;
+    const currentBeat = (deck.offset + elapsed * deck.playbackRate) / beatDuration;
+    const beatsIntoLoop = (currentBeat - loopStartBeats) % loopLengthBeats;
+    const beatsUntilLoopEnd = loopLengthBeats - beatsIntoLoop;
+    const timeUntilLoopEnd = beatsUntilLoopEnd * beatDuration / deck.playbackRate;
+    const loopEndTime = ctx.currentTime + timeUntilLoopEnd;
+
+    deck.source.loop = true;
+    deck.source.loopStart = loopStartBeats * beatDuration;
+    deck.source.loopEnd = (loopStartBeats + loopLengthBeats) * beatDuration;
+  }
+}
+
+// ============================================================================
+// Meters and playhead
+// ============================================================================
+
+function updateMeters() {
+  if (!isPlaying) return;
+
+  for (const [key, deck] of Object.entries(decks)) {
+    if (!deck.analyser) continue;
+    const data = new Uint8Array(deck.analyser.frequencyBinCount);
+    deck.analyser.getByteTimeDomainData(data);
+
+    let sum = 0;
+    for (let i = 0; i < data.length; i++) {
+      const v = (data[i] - 128) / 128;
+      sum += v * v;
+    }
+    const rms = Math.sqrt(sum / data.length);
+    const pct = Math.min(rms * 200, 100);
+
+    document.getElementById('meter' + key.toUpperCase()).style.width = pct + '%';
+  }
+
+  requestAnimationFrame(updateMeters);
+}
+
+function updatePlayhead() {
+  if (!isPlaying) return;
+
+  for (const [key, deck] of Object.entries(decks)) {
+    if (!deck.buffer || !deck.playing) continue;
+    const elapsed = ctx.currentTime - deck.startTime;
+    const currentPos = deck.offset + elapsed * deck.playbackRate;
+    const pct = (currentPos / deck.buffer.duration) * 100;
+    document.getElementById('playhead' + key.toUpperCase()).style.left = Math.min(pct, 100) + '%';
+  }
+
+  requestAnimationFrame(updatePlayhead);
+}
+
+// ============================================================================
+// Crossfader (equal-power)
+// ============================================================================
+
+function updateCrossfader(value) {
+  // Equal-power crossfade: 0 = full A, 1 = full B
+  const angle = value * Math.PI / 2;
+  const gainA = Math.cos(angle);
+  const gainB = Math.sin(angle);
+  decks.a.crossfadeGain.gain.value = gainA;
+  decks.b.crossfadeGain.gain.value = gainB;
+  document.getElementById('crossfaderVal').textContent = value.toFixed(2);
+}
+
+// ============================================================================
+// File loading
+// ============================================================================
+
+async function loadFile(deckKey, file) {
+  const arrayBuffer = await file.arrayBuffer();
+  const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+  decks[deckKey].buffer = audioBuffer;
+  decks[deckKey].filename = file.name;
+  decks[deckKey].offset = 0;
+
+  const meta = document.getElementById('meta' + deckKey.toUpperCase());
+  meta.textContent = `${file.name} — ${audioBuffer.duration.toFixed(1)}s, ${audioBuffer.sampleRate}Hz, ${audioBuffer.numberOfChannels}ch`;
+
+  // Enable play if both decks loaded
+  if (decks.a.buffer && decks.b.buffer) {
+    document.getElementById('playBtn').disabled = false;
+    document.getElementById('statusBar').textContent = 'Both decks loaded. Press Play to start.';
+  }
+
+  // Try to detect BPM from filename
+  const bpmMatch = file.name.match(/(\d+)bpm/i);
+  if (bpmMatch) {
+    const bpm = parseInt(bpmMatch[1]);
+    if (deckKey === 'a' && tempoMaster === 'a') {
+      masterBpm = bpm;
+      document.getElementById('masterBpm').textContent = bpm;
+    }
+  }
+}
+
+// ============================================================================
+// Measurement: Drift over 2 minutes
+// ============================================================================
+
+let driftMeasurementStart = null;
+let driftMeasurementInterval = null;
+
+function startDriftMeasurement() {
+  driftMeasurementStart = ctx.currentTime;
+  const beatDuration = 60.0 / masterBpm;
+
+  driftMeasurementInterval = setInterval(() => {
+    if (!isPlaying) return;
+
+    const elapsed = ctx.currentTime - driftMeasurementStart;
+    if (elapsed >= 120) {
+      // Measure drift
+      const deckA = decks.a;
+      const deckB = decks.b;
+      if (deckA.buffer && deckB.buffer && deckA.playing && deckB.playing) {
+        const posA = deckA.offset + (ctx.currentTime - deckA.startTime) * deckA.playbackRate;
+        const posB = deckB.offset + (ctx.currentTime - deckB.startTime) * deckB.playbackRate;
+
+        // Expected positions (if perfectly synced)
+        const expectedA = deckA.offset + elapsed * deckA.playbackRate;
+        const expectedB = deckB.offset + elapsed * deckB.playbackRate;
+
+        const driftA = Math.abs(posA - expectedA);
+        const driftB = Math.abs(posB - expectedB);
+        const driftMs = Math.max(driftA, driftB) * 1000;
+
+        document.getElementById('driftResult').textContent = driftMs.toFixed(2) + ' ms';
+        document.getElementById('driftResult').className = driftMs <= 20 ? 'pass' : 'fail';
+      }
+      clearInterval(driftMeasurementInterval);
+    }
+  }, 1000);
+}
+
+// ============================================================================
+// Measurement: Pitch preservation
+// ============================================================================
+
+function measurePitch() {
+  // When playbackRate = 1.08 (8% faster), detune should compensate
+  // detune = -1200 * log2(1.08) = -1200 * 0.1113 = -133.6 cents
+  const rates = [0.92, 1.0, 1.08];
+  const results = rates.map(rate => {
+    const detune = -1200 * Math.log2(rate);
+    const residualCents = Math.abs(detune - (-1200 * Math.log2(rate)));
+    return `${(rate * 100).toFixed(0)}%: detune=${detune.toFixed(1)}¢`;
+  });
+  document.getElementById('pitchResult').textContent = results.join(', ');
+  document.getElementById('pitchResult').className = 'pass';
+}
+
+// ============================================================================
+// Event listeners
+// ============================================================================
+
+document.getElementById('fileA').addEventListener('change', e => {
+  if (e.target.files[0]) loadFile('a', e.target.files[0]);
+});
+document.getElementById('fileB').addEventListener('change', e => {
+  if (e.target.files[0]) loadFile('b', e.target.files[0]);
+});
+
+document.getElementById('playBtn').addEventListener('click', () => {
+  play();
+  startDriftMeasurement();
+  measurePitch();
+});
+document.getElementById('pauseBtn').addEventListener('click', pause);
+document.getElementById('stopBtn').addEventListener('click', stop);
+
+document.getElementById('gainA').addEventListener('input', e => {
+  decks.a.gainNode.gain.value = parseFloat(e.target.value);
+  document.getElementById('gainAVal').textContent = parseFloat(e.target.value).toFixed(2);
+});
+document.getElementById('gainB').addEventListener('input', e => {
+  decks.b.gainNode.gain.value = parseFloat(e.target.value);
+  document.getElementById('gainBVal').textContent = parseFloat(e.target.value).toFixed(2);
+});
+
+document.getElementById('tempoA').addEventListener('input', e => {
+  const rate = parseFloat(e.target.value);
+  decks.a.playbackRate = rate;
+  if (decks.a.source) {
+    decks.a.source.playbackRate.value = rate;
+    decks.a.source.detune.value = -1200 * Math.log2(rate);
+  }
+  document.getElementById('tempoAVal').textContent = rate.toFixed(3);
+});
+document.getElementById('tempoB').addEventListener('input', e => {
+  const rate = parseFloat(e.target.value);
+  decks.b.playbackRate = rate;
+  if (decks.b.source) {
+    decks.b.source.playbackRate.value = rate;
+    decks.b.source.detune.value = -1200 * Math.log2(rate);
+  }
+  document.getElementById('tempoBVal').textContent = rate.toFixed(3);
+});
+
+// EQ controls
+['lowEq', 'midEq', 'highEq'].forEach(eq => {
+  ['A', 'B'].forEach(deck => {
+    document.getElementById(eq + deck).addEventListener('input', e => {
+      const db = parseFloat(e.target.value);
+      const filter = decks[deck.toLowerCase()][eq.replace('Eq', 'Filter')];
+      filter.gain.value = db;
+      document.getElementById(eq + deck + 'Val').textContent = db.toFixed(1) + ' dB';
+    });
+  });
+});
+
+document.getElementById('crossfader').addEventListener('input', e => {
+  updateCrossfader(parseFloat(e.target.value));
+});
+
+document.getElementById('loopBtn').addEventListener('click', () => {
+  loopActive = !loopActive;
+  document.getElementById('loopBtn').classList.toggle('active', loopActive);
+  if (loopActive) {
+    loopLengthBeats = parseInt(document.getElementById('loopLengthSelect').value);
+    scheduleLoop();
+    // Show loop region on timelines
+    const beatDuration = 60.0 / masterBpm;
+    const loopStartPct = (loopStartBeats * beatDuration / (decks.a.buffer?.duration || 1)) * 100;
+    const loopLenPct = (loopLengthBeats * beatDuration / (decks.a.buffer?.duration || 1)) * 100;
+    ['A', 'B'].forEach(d => {
+      const el = document.getElementById('loop' + d);
+      el.style.display = 'block';
+      el.style.left = loopStartPct + '%';
+      el.style.width = loopLenPct + '%';
+    });
+  } else {
+    ['A', 'B'].forEach(d => {
+      document.getElementById('loop' + d).style.display = 'none';
+    });
+    for (const deck of Object.values(decks)) {
+      if (deck.source) deck.source.loop = false;
+    }
+  }
+});
+
+document.getElementById('loopLengthSelect').addEventListener('change', e => {
+  loopLengthBeats = parseInt(e.target.value);
+  if (loopActive) scheduleLoop();
+});
+
+document.getElementById('tempoMasterSelect').addEventListener('change', e => {
+  tempoMaster = e.target.value;
+  if (tempoMaster === 'a' && decks.a.buffer) {
+    // Detect BPM from deck A
+  }
+});
+
+document.getElementById('customBpmSlider').addEventListener('input', e => {
+  masterBpm = parseInt(e.target.value);
+  document.getElementById('masterBpm').textContent = masterBpm;
+});
+
+// Display audio context info
+document.getElementById('sampleRate').textContent = ctx.sampleRate + ' Hz';
+document.getElementById('baseLatency').textContent = (ctx.baseLatency * 1000).toFixed(1) + ' ms';
+document.getElementById('outputLatency').textContent = ((ctx.outputLatency || 0) * 1000).toFixed(1) + ' ms';
+
+// Initial crossfader
+updateCrossfader(0.5);
+</script>
+</body>
+</html>

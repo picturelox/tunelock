@@ -27,6 +27,7 @@ The ultimate mix planner. Accurate key + BPM + energy analysis with honest confi
   4. NL set planning — describe a set in plain English ("90 min, start mellow, peak at 60"), LLM sequences tracks from library using harmonic compatibility.
   5. Transition explanations — LLM explains why a transition works (with deterministic template fallback when Ollama is absent).
   Never on the critical analysis path. All features are user-initiated. Degrades gracefully when Ollama is not installed.
+- **Transition Workbench (Phase 7, Slice A):** Audio engine prototypes built and evaluated. Architecture decision: **Web Audio API** as the primary audio engine (zero drift by construction, built-in EQ/metering, `detune` for pitch preservation). Rust-side prototype validated cpal+Symphonia but requires a phase vocoder for pitch preservation. Test fixtures generated (click tracks at 120/128/140 BPM, sine tones at 440/880Hz, 2-minute drift fixture). Database infrastructure added: `beat_grids`, `transition_plans`, `stem_manifests` tables with migration 002. Tauri commands registered: `get_beat_grid`, `save_beat_grid_override`, `reset_beat_grid_override`, `get_transition_plan`, `save_transition_plan`, `get_stem_manifest`.
 
 ## Known defects (see plan, `C:\Users\louis.media\.devin\plans\plan-dfdfe6627c43db0f.md`)
 - ~~`insert_track` returns a wrong id on re-import~~ **Fixed (Phase 5)** — uses `RETURNING id`.

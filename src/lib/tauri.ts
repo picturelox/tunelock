@@ -29,6 +29,9 @@ import type {
   GenreInference,
   TransitionExplanation,
   SetPlan,
+  BeatGrid,
+  TransitionPlan,
+  StemManifest,
 } from '../types';
 
 // === Analysis Commands ===
@@ -366,4 +369,41 @@ export async function assistExplainTransition(
 
 export async function assistPlanSet(instruction: string): Promise<SetPlan> {
   return invoke('assist_plan_set', { instruction });
+}
+
+// === Transition Workbench Commands (Phase 7 / Slice A) ===
+
+export async function getBeatGrid(trackId: number): Promise<BeatGrid | null> {
+  return invoke('get_beat_grid', { trackId });
+}
+
+export async function saveBeatGridOverride(
+  trackId: number,
+  bpm: number,
+  firstBeatMs: number,
+  meterNumerator: number,
+  downbeatOffsetBeats: number,
+): Promise<void> {
+  return invoke('save_beat_grid_override', {
+    trackId, bpm, firstBeatMs, meterNumerator, downbeatOffsetBeats,
+  });
+}
+
+export async function resetBeatGridOverride(trackId: number): Promise<void> {
+  return invoke('reset_beat_grid_override', { trackId });
+}
+
+export async function getTransitionPlan(
+  playlistId: number,
+  transitionId: string,
+): Promise<TransitionPlan | null> {
+  return invoke('get_transition_plan', { playlistId, transitionId });
+}
+
+export async function saveTransitionPlan(plan: TransitionPlan): Promise<void> {
+  return invoke('save_transition_plan', { plan });
+}
+
+export async function getStemManifest(trackId: number): Promise<StemManifest | null> {
+  return invoke('get_stem_manifest', { trackId });
 }

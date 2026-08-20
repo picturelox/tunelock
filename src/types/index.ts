@@ -341,3 +341,41 @@ export interface SetPlan {
   trackIds: number[];
   reasoning: string;
 }
+
+// ============================================================================
+// Transition Workbench types (Phase 7 / Slice A)
+// ============================================================================
+
+export interface BeatGrid {
+  trackId: number;
+  source: string; // "engine" | "manual" | "imported"
+  bpm: number;
+  firstBeatMs: number;
+  meterNumerator: number;
+  downbeatOffsetBeats: number;
+  confidence: number | null;
+  isOverride: boolean;
+}
+
+export interface TransitionPlan {
+  playlistId: number;
+  transitionId: string;
+  schemaVersion: number;
+  planJson: string;
+}
+
+export interface StemManifest {
+  trackId: number;
+  sourceFingerprint: string;
+  provider: string;
+  model: string;
+  modelVersion: string | null;
+  vocalsPath: string | null;
+  drumsPath: string | null;
+  bassPath: string | null;
+  otherPath: string | null;
+  durationMs: number | null;
+  alignmentOffsetMs: number;
+  status: string;
+  storageBytes: number | null;
+}

@@ -1,0 +1,8 @@
+C:\Users\louis.media\Desktop\Desktop\notmixedinkey\prototypes\audio-rust\target\debug\deps\symphonia_codec_adpcm-8d928817dc076d4a.d: C:\Users\louis.media\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\symphonia-codec-adpcm-0.5.5\src\lib.rs C:\Users\louis.media\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\symphonia-codec-adpcm-0.5.5\src\codec_ima.rs C:\Users\louis.media\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\symphonia-codec-adpcm-0.5.5\src\codec_ms.rs C:\Users\louis.media\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\symphonia-codec-adpcm-0.5.5\src\common.rs
+
+C:\Users\louis.media\Desktop\Desktop\notmixedinkey\prototypes\audio-rust\target\debug\deps\libsymphonia_codec_adpcm-8d928817dc076d4a.rmeta: C:\Users\louis.media\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\symphonia-codec-adpcm-0.5.5\src\lib.rs C:\Users\louis.media\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\symphonia-codec-adpcm-0.5.5\src\codec_ima.rs C:\Users\louis.media\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\symphonia-codec-adpcm-0.5.5\src\codec_ms.rs C:\Users\louis.media\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\symphonia-codec-adpcm-0.5.5\src\common.rs
+
+C:\Users\louis.media\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\symphonia-codec-adpcm-0.5.5\src\lib.rs:
+C:\Users\louis.media\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\symphonia-codec-adpcm-0.5.5\src\codec_ima.rs:
+C:\Users\louis.media\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\symphonia-codec-adpcm-0.5.5\src\codec_ms.rs:
+C:\Users\louis.media\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\symphonia-codec-adpcm-0.5.5\src\common.rs:

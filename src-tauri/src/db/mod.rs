@@ -30,6 +30,10 @@ impl Database {
         let schema = include_str!("../../migrations/001_init.sql");
         self.conn.execute_batch(schema)?;
 
+        // Migration 002: Transition Workbench tables (beat grids, transition plans, stem manifests)
+        let migration_002 = include_str!("../../migrations/002_transition_workbench.sql");
+        self.conn.execute_batch(migration_002)?;
+
         // Idempotent column additions for existing databases that pre-date
         // a schema change. SQLite doesn't have `ADD COLUMN IF NOT EXISTS`,
         // so we attempt the ALTER and swallow the specific "duplicate column"
@@ -979,5 +983,168 @@ impl Database {
             accuracy_pct: accuracy,
             by_type,
         })
+    }
+
+    // ========================================================================
+    // Transition Workbench: Beat grid methods
+    // ========================================================================
+
+    pub fn get_beat_grid(&self, track_id: i64) -> Result<Option<BeatGrid>> {
+        let row = self.conn.query_row(
+            "SELECT track_id, source, bpm, first_beat_ms, meter_numerator,
+                    downbeat_offset_beats, confidence, is_override
+             FROM beat_grids
+             WHERE track_id = ?
+             ORDER BY is_override DESC, created_at DESC LIMIT 1",
+            params![track_id],
+            |row| {
+                Ok(BeatGrid {
+                    track_id: row.get(0)?,
+                    source: row.get(1)?,
+                    bpm: row.get(2)?,
+                    first_beat_ms: row.get(3)?,
+                    meter_numerator: row.get(4)?,
+                    downbeat_offset_beats: row.get(5)?,
+                    confidence: row.get(6)?,
+                    is_override: row.get::<_, i32>(7)? != 0,
+                })
+            },
+        );
+        match row {
+            Ok(grid) => Ok(Some(grid)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn save_beat_grid(&self, grid: &BeatGrid) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO beat_grids
+             (track_id, source, bpm, first_beat_ms, meter_numerator,
+              downbeat_offset_beats, confidence, is_override, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+            params![
+                grid.track_id, grid.source, grid.bpm, grid.first_beat_ms,
+                grid.meter_numerator, grid.downbeat_offset_beats,
+                grid.confidence, grid.is_override as i32,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn save_beat_grid_override(
+        &self, track_id: i64, bpm: f64, first_beat_ms: i64,
+        meter_numerator: i32, downbeat_offset_beats: i32,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO beat_grids
+             (track_id, source, bpm, first_beat_ms, meter_numerator,
+              downbeat_offset_beats, confidence, is_override, updated_at)
+             VALUES (?, 'manual', ?, ?, ?, ?, NULL, 1, datetime('now'))",
+            params![track_id, bpm, first_beat_ms, meter_numerator, downbeat_offset_beats],
+        )?;
+        Ok(())
+    }
+
+    pub fn reset_beat_grid_override(&self, track_id: i64) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM beat_grids WHERE track_id = ? AND is_override = 1",
+            params![track_id],
+        )?;
+        Ok(())
+    }
+
+    // ========================================================================
+    // Transition Workbench: Transition plan methods
+    // ========================================================================
+
+    pub fn get_transition_plan(&self, playlist_id: i64, transition_id: &str) -> Result<Option<TransitionPlan>> {
+        let row = self.conn.query_row(
+            "SELECT playlist_id, transition_id, schema_version, plan_json
+             FROM transition_plans WHERE playlist_id = ? AND transition_id = ?",
+            params![playlist_id, transition_id],
+            |row| Ok(TransitionPlan {
+                playlist_id: row.get(0)?,
+                transition_id: row.get(1)?,
+                schema_version: row.get(2)?,
+                plan_json: row.get(3)?,
+            }),
+        );
+        match row {
+            Ok(plan) => Ok(Some(plan)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn save_transition_plan(&self, plan: &TransitionPlan) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO transition_plans
+             (playlist_id, transition_id, schema_version, plan_json, updated_at)
+             VALUES (?, ?, ?, ?, datetime('now'))",
+            params![plan.playlist_id, plan.transition_id, plan.schema_version, plan.plan_json],
+        )?;
+        Ok(())
+    }
+
+    // ========================================================================
+    // Transition Workbench: Stem manifest methods
+    // ========================================================================
+
+    pub fn get_stem_manifest(&self, track_id: i64) -> Result<Option<StemManifest>> {
+        let row = self.conn.query_row(
+            "SELECT track_id, source_fingerprint, provider, model, model_version,
+                    vocals_path, drums_path, bass_path, other_path,
+                    duration_ms, alignment_offset_ms, status, storage_bytes
+             FROM stem_manifests WHERE track_id = ? AND status = 'ready'
+             ORDER BY created_at DESC LIMIT 1",
+            params![track_id],
+            |row| Ok(StemManifest {
+                track_id: row.get(0)?,
+                source_fingerprint: row.get(1)?,
+                provider: row.get(2)?,
+                model: row.get(3)?,
+                model_version: row.get(4)?,
+                vocals_path: row.get(5)?,
+                drums_path: row.get(6)?,
+                bass_path: row.get(7)?,
+                other_path: row.get(8)?,
+                duration_ms: row.get(9)?,
+                alignment_offset_ms: row.get(10)?,
+                status: row.get(11)?,
+                storage_bytes: row.get(12)?,
+            }),
+        );
+        match row {
+            Ok(manifest) => Ok(Some(manifest)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn save_stem_manifest(&self, manifest: &StemManifest) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO stem_manifests
+             (track_id, source_fingerprint, provider, model, model_version,
+              vocals_path, drums_path, bass_path, other_path,
+              duration_ms, alignment_offset_ms, status, storage_bytes, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+            params![
+                manifest.track_id, manifest.source_fingerprint, manifest.provider,
+                manifest.model, manifest.model_version, manifest.vocals_path,
+                manifest.drums_path, manifest.bass_path, manifest.other_path,
+                manifest.duration_ms, manifest.alignment_offset_ms,
+                manifest.status, manifest.storage_bytes,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_stem_manifest(&self, track_id: i64) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM stem_manifests WHERE track_id = ?",
+            params![track_id],
+        )?;
+        Ok(())
     }
 }
