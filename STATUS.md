@@ -6,12 +6,20 @@
 The ultimate mix planner. Accurate key + BPM + energy analysis with honest confidence and ranked alternatives, exploration of harmonic relationships across a whole collection, set planning, and non-destructive DJ-ready delivery. Multimedia: video files are in scope. Target: **elite, all-genre accuracy that surpasses Mixed In Key.**
 
 ## What actually works today
-- **Analyze (Tuner):** drop a file → live per-stage progress → key, Camelot, BPM, confidence, ranked runner-ups with musical reasons, Camelot wheel, Harmonic Mosaic, piano roll, metronome, chroma, timings.
+- **Analyze (Tuner):** drop a file → live per-stage progress → key, Camelot, BPM, energy, confidence, ranked runner-ups with musical reasons, Camelot wheel, Harmonic Mosaic, piano roll, metronome, chroma, timings, three-band waveform.
 - **Key engine:** HPSS → dual 12-bin + 72-band chroma → Krumhansl/Temperley/Sha'ath → 8-segment ranked vote. ~4 s/track in release (500-track sample).
+- **Key timeline:** per-segment key detection with modulation boundaries + honest abstention for atonal material.
+- **Genre-adaptive profiles:** electronic/classical/rock/hip-hop/jazz weight sets selected by genre metadata.
+- **Energy detection:** loudness + spectral centroid + onset density + percussive ratio → 1–10 scale.
+- **Consensus:** multi-source opinion model (TuneLock + MIK + Traktor + AcoustID) with four-dot agreement indicator.
+- **Traktor NML import:** parse collection.nml, match by path/filename, store as opinions.
 - **Media:** Symphonia (mp3/wav/flac/ogg/aac/alac/m4a/aiff) + ffmpeg sidecar fallback (video, malformed WAV). 0 decode failures on 20k library.
-- **Library table:** virtualised, smart filters — but only ever loads the first 200 rows.
+- **Waveforms:** three-band (low/mid/high) canvas renderer, 60 FPS, 2000 columns per track.
+- **Library table:** server-side paging (500-row pages), infinite scroll, smart filters, sorting, MIK CSV import, Traktor NML import, consensus dots.
+- **Playlist generation:** real harmonic compatibility scoring + BPM similarity. `generate_playlist` and `get_compatible_tracks` are functional.
 - **Mix Canvas:** clip timeline + transition scoring — in-memory only, nothing persists.
 - **Delivery:** CSV/M3U8 as browser downloads only; real export unreachable from UI.
+- **CNN (Phase 11):** Python ML project scaffolded (feature extraction, training, quantization, evaluation). Rust integration stub ready for ONNX models. Not yet trained.
 
 ## Known defects (see plan, `C:\Users\louis.media\.devin\plans\plan-dfdfe6627c43db0f.md`)
 - ~~`insert_track` returns a wrong id on re-import~~ **Fixed (Phase 5)** — uses `RETURNING id`.
@@ -23,7 +31,7 @@ The ultimate mix planner. Accurate key + BPM + energy analysis with honest confi
 - ~~HPSS kernel footprint is ~1.7 s (hop=4096), not the 210 ms the comments claim.~~ **Fixed (Phase 5)** — comments corrected to match actual parameters.
 - ~~setState-during-render in `MixWorkspace` and `DualAuditionPanel`.~~ **Fixed (Phase 5)** — moved to useEffect.
 - `bundle.active = false` — no installer can be produced.
-- ~~No test infrastructure beyond one Camelot unit test.~~ **Improved** — 25 tests (harmony, metrics, tempo).
+- ~~No test infrastructure beyond one Camelot unit test.~~ **Improved** — 46 tests (harmony, metrics, tempo, consensus, waveform, energy, genre profiles, key timeline, CNN stub, NML parsing).
 
 ## Ground truth
 - `ground-truth/MIKCompleteLibrary.csv` — 20,221 rows, 19,563 present on disk. Key (Camelot), Tempo, Energy, CuePoints, Genre, per track.
