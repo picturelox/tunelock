@@ -25,7 +25,7 @@ use tunelock_lib::analysis::ensemble::ProfileWeights;
 use tunelock_lib::analysis::key_detector::detect_key_diagnostic;
 use tunelock_lib::analysis::tempo_detector::detect_tempo;
 use tunelock_lib::analysis::{key_to_camelot, pitch_class_to_name};
-use tunelock_lib::proof::corpus::{load_giantsteps, load_mik_corpus, stratified_sample, CorpusRow, RowStatus};
+use tunelock_lib::proof::corpus::{load_giantsteps, load_mik_corpus, normalize_genre, stratified_sample_seeded, CorpusRow, RowStatus};
 use tunelock_lib::proof::metrics::{bpm_ratio, classify_error, is_camelot_compatible, mirex_score};
 
 // ============================================================================
@@ -38,10 +38,12 @@ struct Args {
     limit: Option<usize>,
     out: Option<String>,
     folder: Option<String>,
+    manifest: Option<String>,
+    seed: Option<u64>,
 }
 
 fn parse_args() -> Args {
-    let mut a = Args { corpus: None, giantsteps: None, limit: None, out: None, folder: None };
+    let mut a = Args { corpus: None, giantsteps: None, limit: None, out: None, folder: None, manifest: None, seed: None };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -49,9 +51,11 @@ fn parse_args() -> Args {
             "--giantsteps" => a.giantsteps = it.next(),
             "--limit" => a.limit = it.next().and_then(|s| s.parse().ok()),
             "--out" => a.out = it.next(),
+            "--manifest" => a.manifest = it.next(),
+            "--seed" => a.seed = it.next().and_then(|s| s.parse().ok()),
             "--help" | "-h" => {
                 eprintln!("Usage:");
-                eprintln!("  tunelock-bench --corpus <csv> [--limit N] [--out report.json]");
+                eprintln!("  tunelock-bench --corpus <csv> [--limit N] [--seed S] [--manifest m.json] [--out report.json]");
                 eprintln!("  tunelock-bench --giantsteps <dataset_root> [--limit N] [--out report.json]");
                 eprintln!("  tunelock-bench <folder>            (legacy diagnostic mode)");
                 std::process::exit(0);
@@ -66,14 +70,14 @@ fn parse_args() -> Args {
 fn main() {
     let args = parse_args();
     if let Some(corpus) = args.corpus {
-        run_scored_corpus(&corpus, args.limit, args.out.as_deref());
+        run_scored_corpus(&corpus, args.limit, args.out.as_deref(), args.manifest.as_deref(), args.seed);
     } else if let Some(gs) = args.giantsteps {
         run_giantsteps(&gs, args.limit, args.out.as_deref());
     } else if let Some(folder) = args.folder {
         legacy_folder_mode(&folder);
     } else {
         eprintln!("Usage:");
-        eprintln!("  tunelock-bench --corpus <csv> [--limit N] [--out report.json]");
+        eprintln!("  tunelock-bench --corpus <csv> [--limit N] [--seed S] [--manifest m.json] [--out report.json]");
         eprintln!("  tunelock-bench --giantsteps <dataset_root> [--limit N] [--out report.json]");
         eprintln!("  tunelock-bench <folder>            (legacy diagnostic mode)");
         std::process::exit(1);
@@ -86,7 +90,7 @@ fn run_giantsteps(root: &str, limit: Option<usize>, out: Option<&str>) {
         eprintln!("No GiantSteps annotations found under {}", root);
         std::process::exit(1);
     }
-    score_rows(rows, root, limit, out);
+    score_rows(rows, root, limit, out, None, None);
 }
 
 // ============================================================================
@@ -313,7 +317,7 @@ fn analyse_row(row: &CorpusRow, weights: ProfileWeights) -> TrackRecord {
     rec
 }
 
-fn run_scored_corpus(corpus_path: &str, limit: Option<usize>, out: Option<&str>) {
+fn run_scored_corpus(corpus_path: &str, limit: Option<usize>, out: Option<&str>, manifest: Option<&str>, seed: Option<u64>) {
     println!("Loading corpus: {}", corpus_path);
     let rows = match load_mik_corpus(corpus_path) {
         Ok(r) => r,
@@ -322,10 +326,10 @@ fn run_scored_corpus(corpus_path: &str, limit: Option<usize>, out: Option<&str>)
             std::process::exit(1);
         }
     };
-    score_rows(rows, corpus_path, limit, out);
+    score_rows(rows, corpus_path, limit, out, manifest, seed);
 }
 
-fn score_rows(rows: Vec<CorpusRow>, corpus_label: &str, limit: Option<usize>, out: Option<&str>) {
+fn score_rows(rows: Vec<CorpusRow>, corpus_label: &str, limit: Option<usize>, out: Option<&str>, manifest: Option<&str>, seed: Option<u64>) {
     // Classification summary
     let mut status_counts: BTreeMap<String, usize> = BTreeMap::new();
     for r in &rows {
@@ -350,8 +354,35 @@ fn score_rows(rows: Vec<CorpusRow>, corpus_label: &str, limit: Option<usize>, ou
         .collect();
 
     if let Some(limit) = limit {
-        ready = stratified_sample(&ready, limit);
+        let s = seed.unwrap_or(0x542E_4E4C_6F63_6B00);
+        ready = stratified_sample_seeded(&ready, limit, s);
     }
+
+    // Write manifest (the selected sample) for reproducibility.
+    if let Some(manifest_path) = manifest {
+        let manifest_entries: Vec<serde_json::Value> = ready.iter().map(|r| {
+            serde_json::json!({
+                "location": r.location,
+                "title": r.title,
+                "artist": r.artist,
+                "genre_raw": r.genre,
+                "genre_normalized": tunelock_lib::proof::corpus::normalize_genre(&r.genre),
+                "key_camelot": r.key_camelot,
+                "extension": r.extension,
+            })
+        }).collect();
+        let manifest_json = serde_json::json!({
+            "seed": seed.unwrap_or(0x542E_4E4C_6F63_6B00),
+            "limit": limit,
+            "count": ready.len(),
+            "tracks": manifest_entries,
+        });
+        match std::fs::write(manifest_path, serde_json::to_string_pretty(&manifest_json).unwrap()) {
+            Ok(_) => println!("Manifest written to {} ({} tracks)", manifest_path, ready.len()),
+            Err(e) => eprintln!("Failed to write manifest: {}", e),
+        }
+    }
+
     let total = ready.len();
     println!("Scoring {} tracks{}…\n", total, limit.map(|l| format!(" (stratified limit {})", l)).unwrap_or_default());
 
@@ -392,7 +423,7 @@ fn score_rows(rows: Vec<CorpusRow>, corpus_label: &str, limit: Option<usize>, ou
             continue;
         }
         overall.add(r);
-        let genre = if r.genre.is_empty() { "(unknown)".to_string() } else { r.genre.to_lowercase() };
+        let genre = normalize_genre(&r.genre).to_string();
         by_genre.entry(genre).or_default().add(r);
         by_ext.entry(r.extension.clone()).or_default().add(r);
         if let (Some(pred), Some(truth)) = (r.pred_bpm, r.truth_bpm) {

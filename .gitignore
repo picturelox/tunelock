@@ -38,6 +38,7 @@ ground-truth/MIK*.csv
 ground-truth/*-500.json
 ground-truth/smoke-report.json
 ground-truth/*report*.json
+ground-truth/manifest-*.json
 
 # OS
 Thumbs.db

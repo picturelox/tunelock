@@ -275,25 +275,161 @@ fn classify(location: &str, extension: &str, key: Option<&str>) -> RowStatus {
     }
 }
 
-/// Deterministic stratified sample: round-robin across genres so a 500-track
-/// sample covers the collection's diversity instead of its head.
-pub fn stratified_sample(rows: &[CorpusRow], limit: usize) -> Vec<CorpusRow> {
-    let mut by_genre: std::collections::BTreeMap<String, Vec<CorpusRow>> =
-        std::collections::BTreeMap::new();
-    for row in rows {
-        let genre = if row.genre.is_empty() {
-            "(unknown)".to_string()
-        } else {
-            row.genre.to_lowercase()
-        };
-        by_genre.entry(genre).or_default().push(row.clone());
-    }
-    // Stable order within each genre for reproducibility.
-    for v in by_genre.values_mut() {
-        v.sort_by(|a, b| a.location.cmp(&b.location));
+/// Normalize a raw genre string into a small, meaningful taxonomy.
+///
+/// The MIK corpus contains 439 distinct raw genre strings including typos,
+/// website names, combined tags, emojis, and arbitrary metadata. This
+/// function maps them to ~15 meaningful categories so that stratified
+/// sampling produces a representative sample rather than round-robin over
+/// noise.
+pub fn normalize_genre(raw: &str) -> &'static str {
+    let g = raw.trim().to_lowercase();
+
+    // Empty or placeholder
+    if g.is_empty() || g == "unknown" || g == "unknown genre" || g == "unclassifiable" || g == "various" {
+        return "unknown";
     }
 
-    let mut out = Vec::with_capacity(limit.min(rows.len()));
+    // Electronic — broad
+    if g.contains("electr") || g.contains("edm") || g.contains("dance") {
+        return "electronic";
+    }
+
+    // House family
+    if g.contains("house") {
+        return "house";
+    }
+
+    // Techno
+    if g.contains("techno") {
+        return "techno";
+    }
+
+    // Trance
+    if g.contains("trance") || g.contains("psy") {
+        return "trance";
+    }
+
+    // Dubstep / bass music
+    if g.contains("dubstep") || g.contains("drum") || g.contains("bass") || g.contains("riddim") {
+        return "bass";
+    }
+
+    // Hip-hop / rap
+    if g.contains("hip") || g.contains("hop") || g.contains("rap") || g.contains("trap") {
+        return "hip-hop";
+    }
+
+    // R&B / soul / funk
+    if g.contains("r&b") || g.contains("r'n'b") || g.contains("r-n-b") || g.contains("soul") || g.contains("funk") {
+        return "r&b";
+    }
+
+    // Rock
+    if g.contains("rock") || g.contains("punk") || g.contains("metal") || g.contains("guitar") {
+        return "rock";
+    }
+
+    // Pop
+    if g.contains("pop") || g.contains("top 40") || g.contains("top40") {
+        return "pop";
+    }
+
+    // Reggae / dancehall / latin
+    if g.contains("reggae") || g.contains("dancehall") || g.contains("shatta") || g.contains("salsa") || g.contains("latin") || g.contains("ragga") {
+        return "reggae-latin";
+    }
+
+    // Classical / soundtrack
+    if g.contains("classical") || g.contains("orchestr") || g.contains("soundtrack") || g.contains("score") || g.contains("theme") || g.contains("anime") {
+        return "classical";
+    }
+
+    // Jazz / blues
+    if g.contains("jazz") || g.contains("blues") || g.contains("swing") {
+        return "jazz";
+    }
+
+    // Ambient / chill
+    if g.contains("chill") || g.contains("ambient") || g.contains("lounge") {
+        return "ambient";
+    }
+
+    // World / folk
+    if g.contains("world") || g.contains("folk") || g.contains("acoustic") || g.contains("country") {
+        return "world";
+    }
+
+    // Fallback: anything else goes to "other"
+    "other"
+}
+
+/// A simple, deterministic PRNG (xorshift64) so that sampling is
+/// reproducible across platforms without depending on the standard
+/// library's platform-specific RNG.
+struct SeededRng {
+    state: u64,
+}
+
+impl SeededRng {
+    fn new(seed: u64) -> Self {
+        // Avoid the degenerate all-zero state.
+        Self { state: seed.max(1) }
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        let mut x = self.state;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.state = x;
+        x
+    }
+
+    /// Fisher-Yates shuffle in place.
+    fn shuffle<T>(&mut self, slice: &mut [T]) {
+        for i in (1..slice.len()).rev() {
+            let j = (self.next_u64() % (i as u64 + 1)) as usize;
+            slice.swap(i, j);
+        }
+    }
+}
+
+/// Deterministic stratified sample: shuffle within each normalized genre
+/// bucket (seeded), then round-robin across genres so the sample covers
+/// the collection's diversity.
+///
+/// **Important:** This replaces the prior broken stratification that used
+/// raw genre strings (439 distinct values, 378 with one track). Genres
+/// are now normalized to ~15 meaningful categories via `normalize_genre`.
+pub fn stratified_sample(rows: &[CorpusRow], limit: usize) -> Vec<CorpusRow> {
+    stratified_sample_seeded(rows, limit, 0x542E_4E4C_6F63_6B00)
+}
+
+/// Seeded variant for explicit reproducibility.
+pub fn stratified_sample_seeded(rows: &[CorpusRow], limit: usize, seed: u64) -> Vec<CorpusRow> {
+    // Only sample from Ready rows.
+    let ready: Vec<&CorpusRow> = rows.iter().filter(|r| r.status == RowStatus::Ready).collect();
+    if ready.is_empty() {
+        return Vec::new();
+    }
+
+    // Group by normalized genre.
+    let mut by_genre: std::collections::BTreeMap<&str, Vec<CorpusRow>> =
+        std::collections::BTreeMap::new();
+    for row in &ready {
+        let genre = normalize_genre(&row.genre);
+        by_genre.entry(genre).or_default().push((*row).clone());
+    }
+
+    // Seeded shuffle within each genre bucket for reproducibility.
+    let mut rng = SeededRng::new(seed);
+    for v in by_genre.values_mut() {
+        rng.shuffle(v);
+    }
+
+    // Round-robin across genre buckets.
+    let mut out = Vec::with_capacity(limit.min(ready.len()));
     let mut idx = 0usize;
     'outer: loop {
         let mut added_this_round = false;
@@ -360,5 +496,158 @@ mod tests {
         assert_eq!(camelot_to_key(""), None);
         assert_eq!(camelot_to_key("13A"), None);
         assert_eq!(camelot_to_key("8C"), None);
+    }
+
+    #[test]
+    fn genre_normalization_maps_common_strings() {
+        assert_eq!(normalize_genre("Tech House"), "house");
+        assert_eq!(normalize_genre("Deep House"), "house");
+        assert_eq!(normalize_genre("Techno"), "techno");
+        assert_eq!(normalize_genre("Trance"), "trance");
+        assert_eq!(normalize_genre("Psy-trance"), "trance");
+        assert_eq!(normalize_genre("Hip-Hop"), "hip-hop");
+        assert_eq!(normalize_genre("rap & hip hop"), "hip-hop");
+        assert_eq!(normalize_genre("Trap"), "hip-hop");
+        assert_eq!(normalize_genre("R&B"), "r&b");
+        assert_eq!(normalize_genre("r'n'b / hip-hop"), "hip-hop");
+        assert_eq!(normalize_genre("Rock"), "rock");
+        assert_eq!(normalize_genre("rock & roll"), "rock");
+        assert_eq!(normalize_genre("Pop"), "pop");
+        assert_eq!(normalize_genre("Top 40"), "pop");
+        assert_eq!(normalize_genre("Reggae"), "reggae-latin");
+        assert_eq!(normalize_genre("Salsa"), "reggae-latin");
+        assert_eq!(normalize_genre("Classical"), "classical");
+        assert_eq!(normalize_genre("Soundtrack"), "classical");
+        assert_eq!(normalize_genre("Jazz"), "jazz");
+        assert_eq!(normalize_genre("Blues"), "jazz");
+        assert_eq!(normalize_genre("Chill-out"), "ambient");
+        assert_eq!(normalize_genre("Ambient"), "ambient");
+        assert_eq!(normalize_genre("World"), "world");
+        assert_eq!(normalize_genre("Folk"), "world");
+        assert_eq!(normalize_genre("Electronic"), "electronic");
+        assert_eq!(normalize_genre("EDM"), "electronic");
+        assert_eq!(normalize_genre("Dubstep"), "bass");
+        assert_eq!(normalize_genre("Drum and Bass"), "bass");
+        assert_eq!(normalize_genre(""), "unknown");
+        assert_eq!(normalize_genre("unknown genre"), "unknown");
+        assert_eq!(normalize_genre("🎉"), "other");
+        assert_eq!(normalize_genre("www.electronicfresh.com"), "electronic");
+    }
+
+    #[test]
+    fn genre_normalization_collapses_to_small_taxonomy() {
+        // The MIK corpus has 439 distinct raw genre strings. After
+        // normalization they should collapse to ~15 categories.
+        let raw_genres = [
+            "Tech House", "Deep House", "House", "Soul House", "Tropical House",
+            "Techno", "Acid Techno", "Hardcore Hard-Techno",
+            "Trance", "Psy-trance",
+            "Dubstep", "Drum & Bass", "Riddim Bass",
+            "Hip-Hop", "Rap", "Trap", "Underground Rap",
+            "R&B", "Soul", "Funk",
+            "Rock", "Rock & Roll", "Punk",
+            "Pop", "Top 40", "Synthpop",
+            "Reggae", "Dancehall", "Salsa", "Reggaeton",
+            "Classical", "Soundtrack", "Score",
+            "Jazz", "Blues",
+            "Chill-out", "Ambient", "Lounge",
+            "World", "Folk", "Country",
+            "Electronic", "EDM", "Dance",
+            "", "Unknown", "Unclassifiable",
+            "🎉", "remix-nation.com",
+        ];
+        let normalized: std::collections::HashSet<&str> =
+            raw_genres.iter().map(|g| normalize_genre(g)).collect();
+        // Should be well under 20 categories.
+        assert!(
+            normalized.len() <= 20,
+            "expected <= 20 normalized genres, got {}: {:?}",
+            normalized.len(),
+            normalized
+        );
+    }
+
+    #[test]
+    fn seeded_sample_is_deterministic() {
+        fn make_row(genre: &str, location: &str) -> CorpusRow {
+            CorpusRow {
+                title: location.to_string(),
+                artist: String::new(),
+                key_camelot: Some("8A".to_string()),
+                truth_tonic: Some(9),
+                truth_is_major: Some(false),
+                truth_bpm: None,
+                truth_energy: None,
+                genre: genre.to_string(),
+                location: location.to_string(),
+                extension: "mp3".to_string(),
+                status: RowStatus::Ready,
+            }
+        }
+
+        let rows: Vec<CorpusRow> = (0..100)
+            .map(|i| {
+                let genre = match i % 5 {
+                    0 => "House",
+                    1 => "Techno",
+                    2 => "Hip-Hop",
+                    3 => "Rock",
+                    _ => "Pop",
+                };
+                make_row(genre, &format!("track_{:03}.mp3", i))
+            })
+            .collect();
+
+        let sample1 = stratified_sample_seeded(&rows, 25, 42);
+        let sample2 = stratified_sample_seeded(&rows, 25, 42);
+
+        // Same seed → identical sample.
+        assert_eq!(sample1.len(), sample2.len());
+        for (a, b) in sample1.iter().zip(sample2.iter()) {
+            assert_eq!(a.location, b.location);
+        }
+
+        // Different seed → different order (with high probability).
+        let sample3 = stratified_sample_seeded(&rows, 25, 999);
+        let same = sample1.iter().zip(sample3.iter())
+            .filter(|(a, b)| a.location == b.location)
+            .count();
+        // At least one position should differ.
+        assert!(same < 25, "different seeds produced identical samples");
+    }
+
+    #[test]
+    fn seeded_sample_covers_all_genres() {
+        fn make_row(genre: &str, location: &str) -> CorpusRow {
+            CorpusRow {
+                title: location.to_string(),
+                artist: String::new(),
+                key_camelot: Some("8A".to_string()),
+                truth_tonic: Some(9),
+                truth_is_major: Some(false),
+                truth_bpm: None,
+                truth_energy: None,
+                genre: genre.to_string(),
+                location: location.to_string(),
+                extension: "mp3".to_string(),
+                status: RowStatus::Ready,
+            }
+        }
+
+        // 50 house + 5 jazz. With round-robin, a 20-track sample should
+        // include both genres, not just the dominant one.
+        let mut rows: Vec<CorpusRow> = (0..50)
+            .map(|i| make_row("House", &format!("house_{:02}.mp3", i)))
+            .collect();
+        rows.extend((0..5).map(|i| make_row("Jazz", &format!("jazz_{:02}.mp3", i))));
+
+        let sample = stratified_sample_seeded(&rows, 20, 42);
+        let genres: std::collections::HashSet<&str> =
+            sample.iter().map(|r| normalize_genre(&r.genre)).collect();
+        assert!(
+            genres.contains("house") && genres.contains("jazz"),
+            "sample should cover both house and jazz, got: {:?}",
+            genres
+        );
     }
 }

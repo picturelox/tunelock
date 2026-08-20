@@ -27,20 +27,24 @@ Updated after each measured change.
 - **Build:** `cargo build --release` (optimised).
 - **Parallelism:** Rayon across all available cores.
 
-## Stratification issue
+## Stratification issue (FIXED)
 
-The 500-track MIK sample uses `row.genre.to_lowercase()` as the bucket key
-for round-robin selection (`corpus.rs:280`). The corpus contains 439
-distinct raw genre strings, including typos, website names, combined tags,
-emojis, and arbitrary metadata. 378 buckets contain one track; 61 contain
-two. The resulting sample is neither representative of the library nor a
-clean macro-average across meaningful genres. Tracks within each bucket
-are sorted by path, not randomly sampled.
+The prior 500-track MIK sample used `row.genre.to_lowercase()` as the
+bucket key for round-robin selection (`corpus.rs`). The corpus contained
+439 distinct raw genre strings, including typos, website names, combined
+tags, emojis, and arbitrary metadata. 378 buckets contained one track;
+61 contained two. The resulting sample was neither representative of the
+library nor a clean macro-average across meaningful genres.
 
-**Consequence:** The MIK 500-sample score is a convenience number, not a
-stratified estimate. It should not be used for parameter tuning. Step 2
-of the remediation plan will replace it with frozen, seeded, normalized
-sampling.
+**Fix (Step 2):** Genre strings are now normalized to 16 meaningful
+categories via `normalize_genre()`. Sampling uses a seeded xorshift64 PRNG
+for reproducible shuffling within each normalized genre bucket, then
+round-robin across buckets. The frozen manifest is at
+`ground-truth/manifest-mik-500-seed42.json` (gitignored).
+
+The new sample produces 61.6% MIK agreement vs the old 68.8% — the
+difference is sample composition, not engine regression. The old sample
+was biased toward easier tracks.
 
 ## Results — current release binary
 
@@ -70,20 +74,47 @@ a random 15% of annotations and found them correct.
 
 ### MIK 500 sample (MIK agreement — not ground truth)
 
+**Note:** The sample now uses normalized genre stratification (16 categories)
+with seeded shuffling (seed=42). The prior sample used raw genre strings
+(439 distinct values) and was not meaningfully stratified. The new sample
+is more representative and produces a lower MIK agreement score (61.6% vs
+the prior 68.8%) because the old sample was biased toward easier tracks.
+
 | Metric | Value |
 |---|---|
-| **Scored** | 497 (3 failed) |
-| **Key exact match (MIK agreement)** | **68.8%** (342/497) |
-| Tonic correct (mode-agnostic) | 70.6% |
-| MIREX weighted score | 0.759 |
-| **Camelot compatible** | **85.9%** |
-| **BPM ±1 BPM (raw)** | 59.0% |
-| **BPM ±1 BPM (octave-corrected)** | 60.8% |
-| BPM ratio median | 1.000 |
+| **Scored** | 490 (10 failed) |
+| **Key exact match (MIK agreement)** | **61.6%** (302/490) |
+| Tonic correct (mode-agnostic) | 65.3% |
+| MIREX weighted score | 0.706 |
+| **Camelot compatible** | **84.3%** |
+| **BPM ±1 BPM (raw)** | 53.3% |
+| **BPM ±1 BPM (octave-corrected)** | 54.5% |
+| BPM ratio median | 1.001 |
 
-Note: 3 WAV files fail decoding intermittently due to non-standard fmt
-chunks. When they fail, the score drops to 68.6% (341/497). This decode
-instability should not affect the accuracy assessment.
+The 10 failed tracks are WAV files with non-standard fmt chunks. The
+manifest is frozen at `ground-truth/manifest-mik-500-seed42.json`
+(gitignored — contains personal paths).
+
+**By normalized genre:**
+
+| Genre | n | Exact % | MIREX |
+|---|---|---|---|
+| techno | 26 | 76.9% | 0.769 |
+| ambient | 32 | 71.9% | 0.772 |
+| electronic | 32 | 68.8% | 0.747 |
+| other | 32 | 68.8% | 0.772 |
+| jazz | 32 | 65.6% | 0.703 |
+| reggae-latin | 31 | 64.5% | 0.745 |
+| rock | 31 | 64.5% | 0.732 |
+| world | 31 | 64.5% | 0.732 |
+| classical | 32 | 59.4% | 0.697 |
+| bass | 23 | 60.9% | 0.674 |
+| r&b | 31 | 58.1% | 0.684 |
+| trance | 31 | 54.8% | 0.665 |
+| hip-hop | 32 | 53.1% | 0.672 |
+| unknown | 31 | 61.3% | 0.726 |
+| house | 31 | 48.4% | 0.565 |
+| pop | 32 | 46.9% | 0.647 |
 
 ## Error taxonomy
 
@@ -98,16 +129,16 @@ instability should not affect the accuracy assessment.
 | parallel | 23 | 3.8% | Same tonic, wrong mode |
 | semitone | 16 | 2.6% | Off by one semitone |
 
-### MIK 500 sample (497 scored)
+### MIK 500 sample (490 scored, normalized stratification, seed=42)
 
 | Error type | Count | % | Meaning |
 |---|---|---|---|
-| correct | 342 | 68.8% | Exact key match (MIK agreement) |
-| fifth | 54 | 10.9% | Perfect-fifth substitution |
-| other | 54 | 10.9% | No simple relationship |
-| relative | 22 | 4.4% | Relative major/minor |
-| parallel | 9 | 1.8% | Same tonic, wrong mode |
-| semitone | 16 | 3.2% | Off by one semitone |
+| correct | 302 | 61.6% | Exact key match (MIK agreement) |
+| fifth | 63 | 12.9% | Perfect-fifth substitution |
+| other | 61 | 12.4% | No simple relationship |
+| relative | 30 | 6.1% | Relative major/minor |
+| parallel | 18 | 3.7% | Same tonic, wrong mode |
+| semitone | 15 | 3.1% | Off by one semitone |
 
 ## By format (MIK sample)
 
@@ -259,14 +290,18 @@ this is a provisional improvement, not a demonstrated optimum.
 ```powershell
 cd src-tauri
 $env:PATH = "C:\Users\louis.media\.cargo\bin;" + $env:PATH
+
+# GiantSteps (primary accuracy benchmark, 604 tracks)
 cargo run --release --bin tunelock-bench -- --giantsteps ..\ground-truth\giantsteps-key
-cargo run --release --bin tunelock-bench -- --corpus ..\ground-truth\MIKCompleteLibrary.csv --limit 500
+
+# MIK 500 sample (MIK agreement, normalized stratification, seed=42)
+cargo run --release --bin tunelock-bench -- --corpus ..\ground-truth\MIKCompleteLibrary.csv --limit 500 --seed 42 --manifest ..\ground-truth\manifest-mik-500-seed42.json
 ```
 
 ## Remediation plan
 
 1. ✅ Repair benchmark and documentation (this file)
-2. Freeze train/validation/test manifests with seeded, normalized sampling
+2. ✅ Freeze train/validation/test manifests with seeded, normalized sampling
 3. Return and aggregate all 24 key scores per segment; calibrate confidence
 4. Run clean ablations: 12/72 paths, no-HPSS, kernel sweep, multiple windows
 5. Implement braw/bgate HPCP experiment on a separate chroma path
