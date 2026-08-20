@@ -110,6 +110,31 @@ export async function getPlaylistTracks(playlistId: number): Promise<Track[]> {
   return invoke('get_playlist_tracks', { playlistId });
 }
 
+// === Mix Persistence (Loose End — Mix Canvas survives restarts) ===
+
+export interface SavedMix {
+  id: number;
+  name: string;
+  description: string | null;
+  trackIds: number[];
+  clipNotes: (string | null)[];
+  createdAt: string;
+}
+
+export async function saveMix(
+  id: number | null,
+  name: string,
+  description: string | null,
+  trackIds: number[],
+  clipNotes: [number, string][],
+): Promise<number> {
+  return invoke('save_mix', { id, name, description, trackIds, clipNotes });
+}
+
+export async function loadMix(playlistId: number): Promise<SavedMix> {
+  return invoke('load_mix', { playlistId });
+}
+
 // === MIK CSV Import ===
 export interface MikImportResult {
   totalRows: number;

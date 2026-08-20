@@ -83,6 +83,8 @@ pub fn run() {
             commands::save_playlist,
             commands::get_playlists,
             commands::delete_playlist,
+            commands::save_mix,
+            commands::load_mix,
             commands::get_playlist_tracks,
             commands::import_mik_csv,
             commands::get_consensus,

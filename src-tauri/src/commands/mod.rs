@@ -927,6 +927,38 @@ pub async fn delete_playlist(state: State<'_, AppState>, id: i64) -> Result<(), 
 }
 
 #[command]
+pub async fn save_mix(
+    state: State<'_, AppState>,
+    id: Option<i64>,
+    name: String,
+    description: Option<String>,
+    track_ids: Vec<i64>,
+    clip_notes: Vec<(usize, String)>,
+) -> Result<i64, String> {
+    let db = state.db.lock().await;
+    db.save_mix(id, &name, description.as_deref(), &track_ids, &clip_notes)
+        .map_err(|e| e.to_string())
+}
+
+#[command]
+pub async fn load_mix(
+    state: State<'_, AppState>,
+    playlist_id: i64,
+) -> Result<serde_json::Value, String> {
+    let db = state.db.lock().await;
+    let (playlist, track_ids, clip_notes) = db.load_mix(playlist_id)
+        .map_err(|e| e.to_string())?;
+    Ok(serde_json::json!({
+        "id": playlist.id,
+        "name": playlist.name,
+        "description": playlist.description,
+        "trackIds": track_ids,
+        "clipNotes": clip_notes,
+        "createdAt": playlist.created_at,
+    }))
+}
+
+#[command]
 pub async fn get_playlist_tracks(
     state: State<'_, AppState>,
     playlist_id: i64,

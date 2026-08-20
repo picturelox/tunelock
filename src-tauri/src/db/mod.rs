@@ -456,6 +456,108 @@ impl Database {
         Ok(())
     }
 
+    /// Save a mix project: updates an existing playlist or creates a new one.
+    /// The clip metadata (notes, etc.) is stored as JSON in the `rules` column.
+    /// Returns the playlist ID.
+    pub fn save_mix(
+        &self,
+        id: Option<i64>,
+        name: &str,
+        description: Option<&str>,
+        track_ids: &[i64],
+        clip_notes: &[(usize, String)], // (position, notes) per clip
+    ) -> Result<i64> {
+        // Build the mix metadata JSON to store in the rules column
+        let mix_meta = serde_json::json!({
+            "type": "mix",
+            "clipNotes": clip_notes.iter().map(|(pos, notes)| {
+                serde_json::json!({"position": pos, "notes": notes})
+            }).collect::<Vec<_>>(),
+        });
+        let rules_json = serde_json::to_string(&mix_meta)?;
+
+        let playlist_id = if let Some(existing_id) = id {
+            // Update existing playlist
+            self.conn.execute(
+                "UPDATE playlists SET name = ?1, description = ?2, rules = ?3 WHERE id = ?4",
+                params![name, description, &rules_json, existing_id],
+            )?;
+            // Clear existing tracks and re-add
+            self.conn.execute(
+                "DELETE FROM playlist_tracks WHERE playlist_id = ?1",
+                params![existing_id],
+            )?;
+            existing_id
+        } else {
+            // Create new playlist
+            self.conn.execute(
+                "INSERT INTO playlists (name, description, rules) VALUES (?1, ?2, ?3)",
+                params![name, description, &rules_json],
+            )?;
+            self.conn.last_insert_rowid()
+        };
+
+        // Add tracks in order
+        for (i, track_id) in track_ids.iter().enumerate() {
+            self.conn.execute(
+                "INSERT INTO playlist_tracks (playlist_id, track_id, position) VALUES (?1, ?2, ?3)",
+                params![playlist_id, track_id, i as i64],
+            )?;
+        }
+
+        Ok(playlist_id)
+    }
+
+    /// Load a mix project: returns the playlist plus ordered track IDs and clip notes.
+    pub fn load_mix(&self, playlist_id: i64) -> Result<(Playlist, Vec<i64>, Vec<Option<String>>)> {
+        let playlist: Playlist = self.conn.query_row(
+            "SELECT id, name, description, rules, created_at FROM playlists WHERE id = ?1",
+            params![playlist_id],
+            |row| {
+                let rules_text: Option<String> = row.get(3)?;
+                let rules = rules_text
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str(s).ok());
+                Ok(Playlist {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    description: row.get(2)?,
+                    rules,
+                    created_at: row.get(4)?,
+                })
+            },
+        )?;
+
+        // Get ordered track IDs
+        let mut stmt = self.conn.prepare(
+            "SELECT track_id, position FROM playlist_tracks WHERE playlist_id = ?1 ORDER BY position"
+        )?;
+        let track_rows: Vec<(i64, i64)> = stmt
+            .query_map(params![playlist_id], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let track_ids: Vec<i64> = track_rows.iter().map(|(id, _)| *id).collect();
+
+        // Extract clip notes from the rules JSON
+        let mut clip_notes = vec![None; track_ids.len()];
+        if let Some(serde_json::Value::Object(ref meta)) = playlist.rules {
+            if let Some(serde_json::Value::Array(notes_arr)) = meta.get("clipNotes") {
+                for note_entry in notes_arr {
+                    if let Some(pos) = note_entry.get("position").and_then(|p| p.as_u64()) {
+                        if let Some(notes) = note_entry.get("notes").and_then(|n| n.as_str()) {
+                            let pos = pos as usize;
+                            if pos < clip_notes.len() {
+                                clip_notes[pos] = Some(notes.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok((playlist, track_ids, clip_notes))
+    }
+
     pub fn get_playlist_tracks(&self, playlist_id: i64) -> Result<Vec<Track>> {        let mut stmt = self.conn.prepare(
             "SELECT t.id, t.file_path, t.filename, t.title, t.artist, t.album,
              t.duration_ms, t.key_standard, t.key_camelot, t.key_confidence, t.bpm,

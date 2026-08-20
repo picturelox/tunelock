@@ -2,12 +2,20 @@ import { create } from 'zustand';
 import type { MixClip, MixTransition, MixProject } from '../types/mix';
 import { getCamelotRelationship } from '../lib/harmony';
 import type { Track } from '../types';
+import { saveMix, loadMix, getPlaylists, type SavedMix } from '../lib/tauri';
 
 interface MixStore {
   // Current project
   project: MixProject;
   // Track lookup (injected from library store)
   trackMap: Map<number, Track>;
+  // The database ID of the current project (null = unsaved)
+  savedId: number | null;
+  // All saved mixes (loaded from DB)
+  savedMixes: SavedMix[];
+  // Loading state
+  saving: boolean;
+  loading: boolean;
 
   // Actions
   createProject: (name: string) => void;
@@ -20,6 +28,10 @@ interface MixStore {
   selectTransition: (transitionId: string | null) => void;
   updateClipNotes: (clipId: string, notes: string) => void;
   recalculateTransitions: () => void;
+  // Persistence
+  saveCurrentMix: () => Promise<void>;
+  loadSavedMixes: () => Promise<void>;
+  loadMixById: (id: number) => Promise<void>;
 }
 
 function genId(): string {
@@ -42,9 +54,13 @@ function emptyProject(name: string): MixProject {
 export const useMixStore = create<MixStore>((set, get) => ({
   project: emptyProject('New Mix'),
   trackMap: new Map(),
+  savedId: null,
+  savedMixes: [],
+  saving: false,
+  loading: false,
 
   createProject: (name) => {
-    set({ project: emptyProject(name) });
+    set({ project: emptyProject(name), savedId: null });
   },
 
   setTrackMap: (trackMap) => set({ trackMap }),
@@ -165,5 +181,88 @@ export const useMixStore = create<MixStore>((set, get) => ({
       };
       return { project: nextProject };
     });
+  },
+
+  saveCurrentMix: async () => {
+    const { project, savedId } = get();
+    if (project.clips.length === 0) return;
+
+    set({ saving: true });
+    try {
+      const trackIds = project.clips.map((c) => c.trackId);
+      const clipNotes: [number, string][] = project.clips.map((c, i) => [
+        i,
+        c.notes ?? '',
+      ]);
+      const newId = await saveMix(
+        savedId,
+        project.name,
+        null,
+        trackIds,
+        clipNotes,
+      );
+      set({ savedId: newId, saving: false });
+      // Refresh the saved mixes list
+      await get().loadSavedMixes();
+    } catch (e) {
+      console.error('Failed to save mix:', e);
+      set({ saving: false });
+    }
+  },
+
+  loadSavedMixes: async () => {
+    try {
+      const playlists = await getPlaylists();
+      // Filter to only those that have mix metadata in rules
+      const mixes: SavedMix[] = playlists
+        .filter((p) => p.rules && (p.rules as unknown as Record<string, unknown>).type === 'mix')
+        .map((p) => ({
+          id: p.id,
+          name: p.name,
+          description: p.description,
+          trackIds: [],
+          clipNotes: [],
+          createdAt: p.created_at,
+        }));
+      set({ savedMixes: mixes });
+    } catch (e) {
+      console.error('Failed to load saved mixes:', e);
+    }
+  },
+
+  loadMixById: async (id: number) => {
+    set({ loading: true });
+    try {
+      const saved = await loadMix(id);
+      const { trackMap } = get();
+
+      // Rebuild clips from saved data
+      const clips: MixClip[] = saved.trackIds.map((trackId, i) => ({
+        id: genId(),
+        trackId,
+        position: i,
+        notes: saved.clipNotes[i] ?? undefined,
+      }));
+
+      const project: MixProject = {
+        id: genId(),
+        name: saved.name,
+        clips,
+        transitions: [],
+        createdAt: saved.createdAt,
+        updatedAt: new Date().toISOString(),
+        selectedClipId: null,
+        selectedTransitionId: null,
+      };
+
+      set({ project, savedId: id, loading: false });
+      // Recalculate transitions using the current track map
+      if (trackMap.size > 0) {
+        get().recalculateTransitions();
+      }
+    } catch (e) {
+      console.error('Failed to load mix:', e);
+      set({ loading: false });
+    }
   },
 }));

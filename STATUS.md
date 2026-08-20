@@ -17,7 +17,7 @@ The ultimate mix planner. Accurate key + BPM + energy analysis with honest confi
 - **Waveforms:** three-band (low/mid/high) canvas renderer, 60 FPS, 2000 columns per track.
 - **Library table:** server-side paging (500-row pages), infinite scroll, smart filters, sorting, MIK CSV import, Traktor NML import, consensus dots.
 - **Playlist generation:** real harmonic compatibility scoring + BPM similarity. `generate_playlist` and `get_compatible_tracks` are functional.
-- **Mix Canvas:** clip timeline + transition scoring — in-memory only, nothing persists.
+- **Mix Canvas:** clip timeline + transition scoring. **Persists to database** — save/load across restarts via `save_mix`/`load_mix` commands. Clip notes stored in playlist `rules` JSON.
 - **Delivery:** CSV/M3U8 as browser downloads only; real export unreachable from UI.
 - **CNN (Phase 11):** Python ML project scaffolded and **trained, but the experiment was invalid** (not fairly evaluated). Multiple implementation bugs: windowing loaded only first 30s, augmentation was a no-op (rolled channel axis of length 1), best-epoch selection bias, no pitch-shift augmentation, insufficient training data (604 tracks vs 1,077 in the reference work). The 29.6% result diagnoses implementation problems, not CNN viability. Status: **experiment invalid; deferred.** The `ml/` scaffolding remains for a corrected re-run with MTG training data and the Korzeniowski protocol. The Rust `key_cnn.rs` stub returns `None` and is not wired into the ensemble.
 
