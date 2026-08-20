@@ -4,6 +4,7 @@ use walkdir::WalkDir;
 
 use crate::analysis::key_detector::detect_key;
 use crate::analysis::tempo_detector::detect_tempo;
+use crate::consensus::{compute_consensus, ConsensusResult, OpinionSource};
 use crate::models::*;
 use crate::{AppState, AnalysisQueue};
 
@@ -240,6 +241,17 @@ async fn analyze_batch(
                         eprintln!("[analyze] DB write failed for {}: {}", r.track_id, e);
                         continue;
                     }
+                    // Also store as a TuneLock opinion for consensus
+                    let _ = db_guard.upsert_opinion(
+                        r.track_id,
+                        "tunelock",
+                        Some(&key_cam),
+                        Some(&key_std),
+                        Some(bpm),
+                        None,
+                        conf,
+                        "TuneLock engine",
+                    );
                     completed_this_batch += 1;
                     match db_guard.get_track_by_id(r.track_id) {
                         Ok(Some(track)) => {
@@ -843,7 +855,28 @@ pub async fn import_mik_csv(
                     Some(row.key.trim())
                 };
                 match db.update_mik_reference(&row.location, mik_key, energy, genre) {
-                    Ok(true) => matched += 1,
+                    Ok(true) => {
+                        matched += 1;
+                        // Also store as an MIK opinion for consensus.
+                        // We need the track_id — look it up by path.
+                        let normalized = row.location.replace('/', "\\");
+                        let track = db.get_track_by_path(&row.location)
+                            .or_else(|_| db.get_track_by_path(&normalized))
+                            .ok()
+                            .flatten();
+                        if let Some(t) = track {
+                            let _ = db.upsert_opinion(
+                                t.id,
+                                "mik",
+                                mik_key,
+                                None,
+                                None,
+                                energy,
+                                1.0,
+                                "MIK CSV import",
+                            );
+                        }
+                    }
                     Ok(false) => unmatched += 1,
                     Err(e) => {
                         errors.push(format!("Row {}: {}", total_rows, e));
@@ -864,4 +897,242 @@ pub async fn import_mik_csv(
         unmatched,
         errors,
     })
+}
+
+// ============================================================================
+// Consensus commands
+// ============================================================================
+
+/// Get the consensus result for a single track (all opinions + agreement).
+#[command]
+pub async fn get_consensus(
+    state: State<'_, AppState>,
+    track_id: i64,
+) -> Result<ConsensusResult, String> {
+    let db = state.db.lock().await;
+    let opinions = db.get_opinions_for_track(track_id).map_err(|e| e.to_string())?;
+    Ok(compute_consensus(&opinions))
+}
+
+/// Get consensus for a batch of tracks (for library display).
+/// Returns a map of track_id → ConsensusResult.
+#[command]
+pub async fn get_consensus_batch(
+    state: State<'_, AppState>,
+    track_ids: Vec<i64>,
+) -> Result<std::collections::HashMap<i64, ConsensusResult>, String> {
+    let db = state.db.lock().await;
+    let opinions_map = db.get_opinions_batch(&track_ids).map_err(|e| e.to_string())?;
+    let mut result = std::collections::HashMap::new();
+    for track_id in track_ids {
+        let opinions = opinions_map.get(&track_id).cloned().unwrap_or_default();
+        result.insert(track_id, compute_consensus(&opinions));
+    }
+    Ok(result)
+}
+
+/// Get the list of tracks with contested opinions (for adjudication queue).
+#[command]
+pub async fn get_contested_tracks(
+    state: State<'_, AppState>,
+    limit: Option<usize>,
+) -> Result<Vec<i64>, String> {
+    let db = state.db.lock().await;
+    db.get_contested_tracks(limit.unwrap_or(100)).map_err(|e| e.to_string())
+}
+
+/// Manually set an opinion for a track (used by adjudication UI to write
+/// the human verdict as a "gold" opinion).
+#[command]
+pub async fn set_track_opinion(
+    state: State<'_, AppState>,
+    track_id: i64,
+    source: String,
+    key_camelot: Option<String>,
+    key_standard: Option<String>,
+    bpm: Option<f64>,
+    energy: Option<i32>,
+    confidence: Option<f64>,
+    provenance: String,
+) -> Result<(), String> {
+    let db = state.db.lock().await;
+    db.upsert_opinion(
+        track_id,
+        &source,
+        key_camelot.as_deref(),
+        key_standard.as_deref(),
+        bpm,
+        energy,
+        confidence.unwrap_or(1.0),
+        &provenance,
+    ).map_err(|e| e.to_string())
+}
+
+// ============================================================================
+// Traktor NML import
+// ============================================================================
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NmlImportResult {
+    pub total_entries: usize,
+    pub matched: usize,
+    pub unmatched: usize,
+    pub errors: Vec<String>,
+}
+
+/// Import a Traktor collection.nml file. Parses each entry's key and BPM
+/// and stores them as opinions with source "traktor".
+#[command]
+pub async fn import_traktor_nml(
+    state: State<'_, AppState>,
+    nml_path: String,
+) -> Result<NmlImportResult, String> {
+    let file_content = std::fs::read_to_string(&nml_path)
+        .map_err(|e| format!("Failed to read NML: {}", e))?;
+
+    let db = state.db.lock().await;
+    let mut total_entries = 0;
+    let mut matched = 0;
+    let mut unmatched = 0;
+    let mut errors: Vec<String> = Vec::new();
+
+    // Simple NML parsing: extract <ENTRY> blocks with KEY and BPM attributes.
+    // NML format: <ENTRY TITLE="..." ARTIST="..."><LOCATION FILE="..." DIR="..."/><MUSICAL_KEY VALUE="..."/><TEMPO BPM="..."/></ENTRY>
+    // We use a simple string-based parser to avoid adding a heavy XML dependency.
+    let content = file_content.as_str();
+    let mut pos = 0;
+    while let Some(entry_start) = content[pos..].find("<ENTRY ") {
+        let abs_start = pos + entry_start;
+        let entry_end = content[abs_start..].find("</ENTRY>")
+            .map(|e| abs_start + e + 8)
+            .unwrap_or(content.len());
+        let entry = &content[abs_start..entry_end];
+        total_entries += 1;
+
+        // Extract location (file + dir)
+        let file_name = extract_attr(entry, "LOCATION", "FILE");
+        let dir = extract_attr(entry, "LOCATION", "DIR");
+
+        // Extract musical key (Traktor uses internal numeric key codes)
+        let key_val = extract_attr(entry, "MUSICAL_KEY", "VALUE");
+
+        // Extract BPM
+        let bpm_str = extract_attr(entry, "TEMPO", "BPM");
+
+        // Build the full path (Traktor dirs end with : and use forward slashes)
+        let full_path = if let (Some(f), Some(d)) = (&file_name, &dir) {
+            let clean_dir = d.replace("file://localhost/", "").replace("/", "\\");
+            Some(format!("{}{}", clean_dir, f))
+        } else {
+            file_name.clone()
+        };
+
+        // Try to match by path or filename
+        let matched_track = if let Some(ref path) = full_path {
+            // Try exact match
+            let normalized = path.replace('/', "\\");
+            db.get_track_by_path(path)
+                .or_else(|_| db.get_track_by_path(&normalized))
+                .or_else(|_| {
+                    // Try by filename only
+                    if let Some(fname) = path.rsplit(['\\', '/']).next() {
+                        db.get_track_by_filename(fname)
+                    } else {
+                        Ok(None)
+                    }
+                })
+                .map_err(|e| e.to_string())?
+        } else {
+            None
+        };
+
+        if let Some(track) = matched_track {
+            // Convert Traktor key code to Camelot.
+            // Traktor uses a numeric mapping: 0=C maj(8B), 1=D maj(9B), etc.
+            let camelot = key_val
+                .as_deref()
+                .and_then(|v| v.parse::<u32>().ok())
+                .and_then(traktor_key_to_camelot);
+
+            let bpm = bpm_str.as_deref().and_then(|s| s.parse::<f64>().ok());
+
+            db.upsert_opinion(
+                track.id,
+                "traktor",
+                camelot.as_deref(),
+                None,
+                bpm,
+                None,
+                1.0,
+                "Traktor NML import",
+            ).map_err(|e| e.to_string())?;
+            matched += 1;
+        } else {
+            unmatched += 1;
+        }
+
+        pos = entry_end;
+    }
+
+    Ok(NmlImportResult {
+        total_entries,
+        matched,
+        unmatched,
+        errors,
+    })
+}
+
+/// Extract an XML attribute value from a tag.
+/// e.g. extract_attr(s, "TEMPO", "BPM") finds <TEMPO BPM="128.0" ...> and returns "128.0"
+fn extract_attr(content: &str, tag: &str, attr: &str) -> Option<String> {
+    let tag_start = content.find(&format!("<{}", tag))?;
+    let tag_end = content[tag_start..].find('>')?;
+    let tag_content = &content[tag_start..tag_start + tag_end];
+    let attr_pattern = format!("{}=\"", attr);
+    let attr_start = tag_content.find(&attr_pattern)?;
+    let value_start = attr_start + attr_pattern.len();
+    let value_end = tag_content[value_start..].find('"')?;
+    Some(tag_content[value_start..value_start + value_end].to_string())
+}
+
+/// Convert Traktor's internal key code to Camelot notation.
+/// Traktor uses a 0-indexed mapping where:
+/// 0=C maj(8B), 1=D maj(9B), 2=E maj(10B), ..., 11=A maj(7B)
+/// 12=C min(5A), 13=D min(6A), ..., 23=A min(4A)
+fn traktor_key_to_camelot(code: u32) -> Option<String> {
+    let major = [
+        "8B", "9B", "10B", "11B", "12B", "1B", "2B", "3B", "4B", "5B", "6B", "7B",
+    ];
+    let minor = [
+        "5A", "6A", "7A", "8A", "9A", "10A", "11A", "12A", "1A", "2A", "3A", "4A",
+    ];
+    if code < 12 {
+        Some(major[code as usize].to_string())
+    } else if code < 24 {
+        Some(minor[(code - 12) as usize].to_string())
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_traktor_key_mapping() {
+        assert_eq!(traktor_key_to_camelot(0), Some("8B".to_string())); // C major
+        assert_eq!(traktor_key_to_camelot(1), Some("9B".to_string())); // D major
+        assert_eq!(traktor_key_to_camelot(12), Some("5A".to_string())); // C minor
+        assert_eq!(traktor_key_to_camelot(13), Some("6A".to_string())); // D minor
+        assert_eq!(traktor_key_to_camelot(24), None); // Invalid
+    }
+
+    #[test]
+    fn test_extract_attr() {
+        let xml = r#"<TEMPO BPM="128.5" /><MUSICAL_KEY VALUE="0" />"#;
+        assert_eq!(extract_attr(xml, "TEMPO", "BPM"), Some("128.5".to_string()));
+        assert_eq!(extract_attr(xml, "MUSICAL_KEY", "VALUE"), Some("0".to_string()));
+    }
 }

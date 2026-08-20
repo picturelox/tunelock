@@ -98,6 +98,23 @@ CREATE INDEX IF NOT EXISTS idx_cue_points_track ON cue_points(track_id);
 CREATE INDEX IF NOT EXISTS idx_validation_track ON validation_results(track_id);
 CREATE INDEX IF NOT EXISTS idx_tracks_status ON tracks(status);
 
+-- track_opinions: multi-source key/BPM/energy opinions for consensus
+CREATE TABLE IF NOT EXISTS track_opinions (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    track_id      INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    source        TEXT NOT NULL,           -- 'tunelock' | 'mik' | 'traktor' | 'acoustid'
+    key_camelot   TEXT,
+    key_standard  TEXT,
+    bpm           REAL,
+    energy        INTEGER,
+    confidence    REAL DEFAULT 1.0,
+    provenance    TEXT,                    -- e.g. "MIK CSV 2024-01-13"
+    created_at    TEXT DEFAULT (datetime('now')),
+    UNIQUE(track_id, source)
+);
+CREATE INDEX IF NOT EXISTS idx_track_opinions_track ON track_opinions(track_id);
+CREATE INDEX IF NOT EXISTS idx_track_opinions_source ON track_opinions(source);
+
 -- Performance optimizations
 PRAGMA journal_mode = WAL;
 PRAGMA cache_size = -65536;

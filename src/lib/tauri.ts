@@ -118,6 +118,77 @@ export async function importMikCsv(csvPath: string): Promise<MikImportResult> {
   return invoke('import_mik_csv', { csvPath });
 }
 
+// === Consensus Commands ===
+export interface TrackOpinion {
+  id: number;
+  trackId: number;
+  source: 'tunelock' | 'mik' | 'traktor' | 'acoustid';
+  keyCamelot: string | null;
+  keyStandard: string | null;
+  bpm: number | null;
+  energy: number | null;
+  confidence: number;
+  provenance: string;
+  createdAt: string;
+}
+
+export interface ConsensusResult {
+  sourceCount: number;
+  keyAgreement: number;
+  bpmAgreement: number;
+  consensusKey: string | null;
+  consensusBpm: number | null;
+  status: 'agreed' | 'contested' | 'single' | 'unknown';
+  opinions: TrackOpinion[];
+}
+
+export async function getConsensus(trackId: number): Promise<ConsensusResult> {
+  return invoke('get_consensus', { trackId });
+}
+
+export async function getConsensusBatch(
+  trackIds: number[]
+): Promise<Record<number, ConsensusResult>> {
+  return invoke('get_consensus_batch', { trackIds });
+}
+
+export async function getContestedTracks(limit?: number): Promise<number[]> {
+  return invoke('get_contested_tracks', { limit });
+}
+
+export async function setTrackOpinion(
+  trackId: number,
+  source: string,
+  keyCamelot?: string | null,
+  keyStandard?: string | null,
+  bpm?: number | null,
+  energy?: number | null,
+  confidence?: number,
+  provenance?: string
+): Promise<void> {
+  return invoke('set_track_opinion', {
+    trackId,
+    source,
+    keyCamelot: keyCamelot ?? null,
+    keyStandard: keyStandard ?? null,
+    bpm: bpm ?? null,
+    energy: energy ?? null,
+    confidence: confidence ?? 1.0,
+    provenance: provenance ?? 'manual',
+  });
+}
+
+export interface NmlImportResult {
+  totalEntries: number;
+  matched: number;
+  unmatched: number;
+  errors: string[];
+}
+
+export async function importTraktorNml(nmlPath: string): Promise<NmlImportResult> {
+  return invoke('import_traktor_nml', { nmlPath });
+}
+
 // === Export Commands ===
 export async function exportTracks(
   trackIds: number[],

@@ -4,6 +4,7 @@ use tokio::sync::Mutex;
 
 pub mod analysis;
 pub mod commands;
+pub mod consensus;
 pub mod db;
 pub mod export;
 pub mod harmony;
@@ -84,6 +85,11 @@ pub fn run() {
             commands::delete_playlist,
             commands::get_playlist_tracks,
             commands::import_mik_csv,
+            commands::get_consensus,
+            commands::get_consensus_batch,
+            commands::get_contested_tracks,
+            commands::set_track_opinion,
+            commands::import_traktor_nml,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

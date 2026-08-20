@@ -5,7 +5,8 @@ import { useLibraryStore } from '../../stores/libraryStore';
 import { useMixStore } from '../../stores/mixStore';
 import ImportDialog from './ImportDialog';
 import TrackRow from './TrackRow';
-import { scanFolder, getLibraryPage, startAnalysis, importMikCsv } from '../../lib/tauri';
+import { scanFolder, getLibraryPage, startAnalysis, importMikCsv, getConsensusBatch, importTraktorNml } from '../../lib/tauri';
+import type { ConsensusResult } from '../../lib/tauri';
 import { open } from '@tauri-apps/plugin-dialog';
 
 const PAGE_SIZE = 500;
@@ -20,6 +21,8 @@ export default function LibraryTable() {
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const [mikStatus, setMikStatus] = useState<string | null>(null);
+  const [consensusMap, setConsensusMap] = useState<Record<number, ConsensusResult>>({});
+  const [nmlStatus, setNmlStatus] = useState<string | null>(null);
 
   const {
     tracks,
@@ -88,6 +91,26 @@ export default function LibraryTable() {
     loadPage(0, false);
   }, [loadPage]);
 
+  // Fetch consensus data for loaded tracks (debounced to avoid spamming
+  // on every scroll event). Only fetches for tracks we don't already have.
+  useEffect(() => {
+    if (trackList.length === 0) return;
+    const trackIds = trackList.map((t) => t.id);
+    const missing = trackIds.filter((id) => !(id in consensusMap));
+    if (missing.length === 0) return;
+
+    const timer = setTimeout(async () => {
+      try {
+        const batch = await getConsensusBatch(missing);
+        setConsensusMap((prev) => ({ ...prev, ...batch }));
+      } catch (err) {
+        console.warn('[library] consensus fetch failed:', err);
+      }
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [trackList.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleImport = async (path: string) => {
     try {
       const result = await scanFolder(path);
@@ -120,6 +143,26 @@ export default function LibraryTable() {
       await loadPage(0, false);
     } catch (err) {
       setMikStatus(`MIK import failed: ${err}`);
+    }
+  };
+
+  // Import a Traktor collection.nml to add Traktor key/BPM as opinions.
+  const handleNmlImport = async () => {
+    try {
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: 'Traktor NML', extensions: ['nml'] }],
+      });
+      if (typeof selected !== 'string') return;
+      setNmlStatus('Importing NML...');
+      const result = await importTraktorNml(selected);
+      setNmlStatus(
+        `Traktor: ${result.matched.toLocaleString()} matched, ${result.unmatched.toLocaleString()} unmatched of ${result.totalEntries.toLocaleString()} entries`
+      );
+      // Reload consensus data
+      setConsensusMap({});
+    } catch (err) {
+      setNmlStatus(`NML import failed: ${err}`);
     }
   };
 
@@ -176,6 +219,14 @@ export default function LibraryTable() {
           Import MIK CSV
         </button>
 
+        <button
+          onClick={handleNmlImport}
+          className="flex items-center gap-2 px-3 py-1.5 bg-surface-light text-text-secondary rounded-md text-sm hover:text-text-primary hover:bg-white/5 transition-colors"
+          title="Import a Traktor collection.nml to add key/BPM opinions"
+        >
+          Import Traktor NML
+        </button>
+
         <div className="flex items-center gap-2 flex-1 max-w-md">
           <Search className="w-4 h-4 text-text-secondary" />
           <input
@@ -189,6 +240,7 @@ export default function LibraryTable() {
 
         <div className="flex items-center gap-2 text-sm text-text-secondary">
           {mikStatus && <span className="text-xs">{mikStatus}</span>}
+          {nmlStatus && <span className="text-xs">{nmlStatus}</span>}
           <span>{tracks.size.toLocaleString()} loaded</span>
           {isAnalyzing && <RefreshCw className="w-4 h-4 animate-spin text-accent-primary" />}
         </div>
@@ -265,6 +317,7 @@ export default function LibraryTable() {
                 <TrackRow
                   track={track}
                   index={virtualRow.index + 1}
+                  consensus={consensusMap[track.id] ?? null}
                 />
               </div>
             );

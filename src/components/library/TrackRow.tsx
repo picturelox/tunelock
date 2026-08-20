@@ -2,10 +2,13 @@ import type { Track } from '../../types';
 import { Music2 } from 'lucide-react';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { formatCamelotBadge } from '../../lib/harmony';
+import ConsensusDots from './ConsensusDots';
+import type { ConsensusResult } from '../../lib/tauri';
 
 interface TrackRowProps {
   track: Track;
   index: number;
+  consensus?: ConsensusResult | null;
 }
 
 function formatDuration(ms: number | null): string {
@@ -16,7 +19,7 @@ function formatDuration(ms: number | null): string {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 }
 
-export default function TrackRow({ track, index }: TrackRowProps) {
+export default function TrackRow({ track, index, consensus }: TrackRowProps) {
   const badge = track.key_camelot ? formatCamelotBadge(track.key_camelot) : null;
 
   return (
@@ -80,7 +83,9 @@ export default function TrackRow({ track, index }: TrackRowProps) {
           <div className="w-2 h-2 rounded-full bg-red-500" title="Error" />
         )}
       </div>
-      
+
+      <ConsensusDots consensus={consensus ?? null} />
+
     </div>
   );
 }

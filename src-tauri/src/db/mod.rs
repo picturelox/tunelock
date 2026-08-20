@@ -515,4 +515,203 @@ impl Database {
         )?;
         Ok(affected2 > 0)
     }
+
+    // ========================================================================
+    // Track opinions (consensus)
+    // ========================================================================
+
+    /// Look up a track by exact file_path match.
+    pub fn get_track_by_path(&self, path: &str) -> Result<Option<Track>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, file_path, filename, title, artist, album, duration_ms,
+             key_standard, key_camelot, key_confidence, bpm, energy_level,
+             file_format, file_size, sample_rate, bit_depth, analyzed_at, status,
+             artwork_path, created_at, updated_at
+             FROM tracks WHERE file_path = ?1"
+        )?;
+        let track = stmt
+            .query_map(params![path], |row| {
+                Ok(Track {
+                    id: row.get(0)?,
+                    file_path: row.get(1)?,
+                    filename: row.get(2)?,
+                    title: row.get(3)?,
+                    artist: row.get(4)?,
+                    album: row.get(5)?,
+                    duration_ms: row.get(6)?,
+                    key_standard: row.get(7)?,
+                    key_camelot: row.get(8)?,
+                    key_confidence: row.get(9)?,
+                    bpm: row.get(10)?,
+                    energy_level: row.get(11)?,
+                    file_format: row.get(12)?,
+                    file_size: row.get(13)?,
+                    sample_rate: row.get(14)?,
+                    bit_depth: row.get(15)?,
+                    analyzed_at: row.get(16)?,
+                    status: TrackStatus::from(row.get::<_, String>(17)?),
+                    artwork_path: row.get(18)?,
+                    created_at: row.get(19)?,
+                    updated_at: row.get(20)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(track.into_iter().next())
+    }
+
+    /// Look up a track by filename only (case-insensitive).
+    pub fn get_track_by_filename(&self, filename: &str) -> Result<Option<Track>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, file_path, filename, title, artist, album, duration_ms,
+             key_standard, key_camelot, key_confidence, bpm, energy_level,
+             file_format, file_size, sample_rate, bit_depth, analyzed_at, status,
+             artwork_path, created_at, updated_at
+             FROM tracks WHERE filename = ?1 COLLATE NOCASE LIMIT 1"
+        )?;
+        let track = stmt
+            .query_map(params![filename], |row| {
+                Ok(Track {
+                    id: row.get(0)?,
+                    file_path: row.get(1)?,
+                    filename: row.get(2)?,
+                    title: row.get(3)?,
+                    artist: row.get(4)?,
+                    album: row.get(5)?,
+                    duration_ms: row.get(6)?,
+                    key_standard: row.get(7)?,
+                    key_camelot: row.get(8)?,
+                    key_confidence: row.get(9)?,
+                    bpm: row.get(10)?,
+                    energy_level: row.get(11)?,
+                    file_format: row.get(12)?,
+                    file_size: row.get(13)?,
+                    sample_rate: row.get(14)?,
+                    bit_depth: row.get(15)?,
+                    analyzed_at: row.get(16)?,
+                    status: TrackStatus::from(row.get::<_, String>(17)?),
+                    artwork_path: row.get(18)?,
+                    created_at: row.get(19)?,
+                    updated_at: row.get(20)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(track.into_iter().next())
+    }
+
+    /// Upsert an opinion for a track. If an opinion from the same source
+    /// already exists, it is replaced.
+    pub fn upsert_opinion(
+        &self,
+        track_id: i64,
+        source: &str,
+        key_camelot: Option<&str>,
+        key_standard: Option<&str>,
+        bpm: Option<f64>,
+        energy: Option<i32>,
+        confidence: f64,
+        provenance: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO track_opinions (track_id, source, key_camelot, key_standard, bpm, energy, confidence, provenance)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(track_id, source) DO UPDATE SET
+               key_camelot = excluded.key_camelot,
+               key_standard = excluded.key_standard,
+               bpm = excluded.bpm,
+               energy = excluded.energy,
+               confidence = excluded.confidence,
+               provenance = excluded.provenance",
+            params![track_id, source, key_camelot, key_standard, bpm, energy, confidence, provenance],
+        )?;
+        Ok(())
+    }
+
+    /// Get all opinions for a track.
+    pub fn get_opinions_for_track(&self, track_id: i64) -> Result<Vec<crate::consensus::TrackOpinion>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, track_id, source, key_camelot, key_standard, bpm, energy, confidence, provenance, created_at
+             FROM track_opinions WHERE track_id = ?1 ORDER BY id"
+        )?;
+        let opinions = stmt
+            .query_map(params![track_id], |row| {
+                let source_str: String = row.get(2)?;
+                let source = crate::consensus::OpinionSource::from_str(&source_str)
+                    .unwrap_or(crate::consensus::OpinionSource::Tunelock);
+                Ok(crate::consensus::TrackOpinion {
+                    id: row.get(0)?,
+                    track_id: row.get(1)?,
+                    source,
+                    key_camelot: row.get(3)?,
+                    key_standard: row.get(4)?,
+                    bpm: row.get(5)?,
+                    energy: row.get(6)?,
+                    confidence: row.get(7)?,
+                    provenance: row.get(8)?,
+                    created_at: row.get(9)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(opinions)
+    }
+
+    /// Get opinions for multiple tracks (batch, for library display).
+    pub fn get_opinions_batch(&self, track_ids: &[i64]) -> Result<std::collections::HashMap<i64, Vec<crate::consensus::TrackOpinion>>> {
+        if track_ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+        let placeholders = track_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!(
+            "SELECT id, track_id, source, key_camelot, key_standard, bpm, energy, confidence, provenance, created_at
+             FROM track_opinions WHERE track_id IN ({}) ORDER BY id",
+            placeholders
+        );
+        let mut stmt = self.conn.prepare(&sql)?;
+        let params: Vec<&dyn rusqlite::ToSql> = track_ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
+        let opinions = stmt
+            .query_map(&*params, |row| {
+                let source_str: String = row.get(2)?;
+                let source = crate::consensus::OpinionSource::from_str(&source_str)
+                    .unwrap_or(crate::consensus::OpinionSource::Tunelock);
+                Ok((
+                    row.get::<_, i64>(1)?,
+                    crate::consensus::TrackOpinion {
+                        id: row.get(0)?,
+                        track_id: row.get(1)?,
+                        source,
+                        key_camelot: row.get(3)?,
+                        key_standard: row.get(4)?,
+                        bpm: row.get(5)?,
+                        energy: row.get(6)?,
+                        confidence: row.get(7)?,
+                        provenance: row.get(8)?,
+                        created_at: row.get(9)?,
+                    },
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut map: std::collections::HashMap<i64, Vec<crate::consensus::TrackOpinion>> = std::collections::HashMap::new();
+        for (track_id, opinion) in opinions {
+            map.entry(track_id).or_default().push(opinion);
+        }
+        Ok(map)
+    }
+
+    /// Get tracks that have contested opinions (disagreement between sources).
+    /// Ordered by disagreement count descending, then by track id.
+    pub fn get_contested_tracks(&self, limit: usize) -> Result<Vec<i64>> {
+        // Find tracks where at least two sources disagree on the key.
+        let mut stmt = self.conn.prepare(
+            "SELECT track_id, COUNT(DISTINCT key_camelot) as distinct_keys
+             FROM track_opinions
+             WHERE key_camelot IS NOT NULL
+             GROUP BY track_id
+             HAVING distinct_keys > 1
+             ORDER BY distinct_keys DESC, track_id
+             LIMIT ?1"
+        )?;
+        let track_ids = stmt
+            .query_map(params![limit as i64], |row| row.get::<_, i64>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(track_ids)
+    }
 }
