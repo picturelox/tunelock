@@ -1423,3 +1423,70 @@ pub async fn get_training_stats(
     let db = state.db.lock().await;
     db.get_training_stats().map_err(|e| e.to_string())
 }
+
+// ============================================================================
+// Assist layer commands (Phase 11)
+// ============================================================================
+
+#[command]
+pub async fn assist_status(
+    state: State<'_, AppState>,
+) -> Result<crate::assist::AssistStatus, String> {
+    let (available, models) = state.ollama.check_status().await;
+    let enabled = *state.assist_enabled.lock().await;
+    let selected_model = state.assist_model.lock().await.clone();
+    Ok(crate::assist::AssistStatus {
+        available,
+        ollama_url: "http://localhost:11434".to_string(),
+        models,
+        selected_model,
+        enabled,
+    })
+}
+
+#[command]
+pub async fn assist_set_enabled(
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<(), String> {
+    *state.assist_enabled.lock().await = enabled;
+    Ok(())
+}
+
+#[command]
+pub async fn assist_set_model(
+    state: State<'_, AppState>,
+    model: String,
+) -> Result<(), String> {
+    *state.assist_model.lock().await = Some(model);
+    Ok(())
+}
+
+#[command]
+pub async fn assist_analyze_setlist(
+    state: State<'_, AppState>,
+    raw_text: String,
+) -> Result<crate::assist::SetlistAnalysis, String> {
+    let enabled = *state.assist_enabled.lock().await;
+    if !enabled {
+        return Err("Assist layer is not enabled".to_string());
+    }
+    let model = state.assist_model.lock().await.clone()
+        .ok_or("No model selected")?;
+
+    // Get library tracks for matching
+    let db = state.db.lock().await;
+    let page = db.get_library_page(0, 5000, "filename", "asc", None)
+        .map_err(|e| e.to_string())?;
+    drop(db);
+
+    // Build the library tuple for matching
+    let library: Vec<(i64, String, Option<String>, Option<String>, Option<String>, Option<f64>, Option<i32>)> = page.tracks.iter().map(|t| {
+        (t.id, t.filename.clone(), t.title.clone(), t.artist.clone(),
+         t.key_camelot.clone(), t.bpm, t.energy_level)
+    }).collect();
+
+    crate::assist::analyze_setlist(&state.ollama, &model, &raw_text, &library)
+        .await
+        .map_err(|e| e.to_string())
+}

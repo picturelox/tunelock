@@ -3,6 +3,7 @@ use tauri::Manager;
 use tokio::sync::Mutex;
 
 pub mod analysis;
+pub mod assist;
 pub mod commands;
 pub mod consensus;
 pub mod db;
@@ -17,6 +18,9 @@ use db::Database;
 pub struct AppState {
     pub db: Arc<Mutex<Database>>,
     pub analysis_queue: Arc<Mutex<AnalysisQueue>>,
+    pub ollama: Arc<assist::OllamaClient>,
+    pub assist_enabled: Arc<Mutex<bool>>,
+    pub assist_model: Arc<Mutex<Option<String>>>,
 }
 
 pub struct AnalysisQueue {
@@ -62,6 +66,9 @@ pub fn run() {
             let state = AppState {
                 db,
                 analysis_queue: Arc::new(Mutex::new(AnalysisQueue::default())),
+                ollama: Arc::new(assist::OllamaClient::new()),
+                assist_enabled: Arc::new(Mutex::new(false)),
+                assist_model: Arc::new(Mutex::new(None)),
             };
             
             app.manage(state);
@@ -100,6 +107,11 @@ pub fn run() {
             commands::get_gold_annotation_summary,
             commands::save_training_session,
             commands::get_training_stats,
+            // Phase 11: Assist layer
+            commands::assist_status,
+            commands::assist_set_enabled,
+            commands::assist_set_model,
+            commands::assist_analyze_setlist,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

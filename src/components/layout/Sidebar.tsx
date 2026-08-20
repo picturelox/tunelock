@@ -1,4 +1,4 @@
-import { Activity, Library, Layers, PackageOpen, Disc3, GraduationCap } from 'lucide-react';
+import { Activity, Library, Layers, PackageOpen, Disc3, GraduationCap, Sparkles } from 'lucide-react';
 import type { View } from '../../App';
 
 interface SidebarProps {
@@ -12,6 +12,7 @@ const navItems: { view: View; label: string; icon: typeof Activity }[] = [
   { view: 'mix', label: 'Mix Canvas', icon: Layers },
   { view: 'delivery', label: 'Delivery', icon: PackageOpen },
   { view: 'gold', label: 'Gold Set', icon: GraduationCap },
+  { view: 'assist', label: 'Assist', icon: Sparkles },
 ];
 
 export default function Sidebar({ currentView, onViewChange }: SidebarProps) {

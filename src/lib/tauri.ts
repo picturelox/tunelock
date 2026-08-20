@@ -22,6 +22,8 @@ import type {
   GoldAnnotationSummary,
   TrainingSession,
   TrainingStats,
+  AssistStatus,
+  SetlistAnalysis,
 } from '../types';
 
 // === Analysis Commands ===
@@ -316,4 +318,22 @@ export async function saveTrainingSession(session: TrainingSession): Promise<num
 
 export async function getTrainingStats(): Promise<TrainingStats> {
   return invoke('get_training_stats');
+}
+
+// === Assist Layer Commands (Phase 11) ===
+
+export async function assistStatus(): Promise<AssistStatus> {
+  return invoke('assist_status');
+}
+
+export async function assistSetEnabled(enabled: boolean): Promise<void> {
+  return invoke('assist_set_enabled', { enabled });
+}
+
+export async function assistSetModel(model: string): Promise<void> {
+  return invoke('assist_set_model', { model });
+}
+
+export async function assistAnalyzeSetlist(rawText: string): Promise<SetlistAnalysis> {
+  return invoke('assist_analyze_setlist', { rawText });
 }

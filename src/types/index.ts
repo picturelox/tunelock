@@ -234,3 +234,67 @@ export interface TrainingStats {
   accuracyPct: number;
   byType: Record<string, [number, number]>;  // [total, correct]
 }
+
+// ============================================================================
+// Assist layer types (Phase 11)
+// ============================================================================
+
+export interface OllamaModel {
+  name: string;
+  size: number | null;
+}
+
+export interface AssistStatus {
+  available: boolean;
+  ollamaUrl: string;
+  models: OllamaModel[];
+  selectedModel: string | null;
+  enabled: boolean;
+}
+
+export interface ParsedTrack {
+  position: number;
+  artist: string;
+  title: string;
+  timestamp: string | null;
+  keyHint: string | null;
+}
+
+export interface ParsedSetlist {
+  setName: string | null;
+  djName: string | null;
+  tracks: ParsedTrack[];
+}
+
+export interface LocalMatch {
+  trackId: number;
+  filename: string;
+  title: string | null;
+  artist: string | null;
+  keyCamelot: string | null;
+  bpm: number | null;
+  energyLevel: number | null;
+  matchScore: number;
+}
+
+export interface MatchedTrack {
+  parsed: ParsedTrack;
+  localMatch: LocalMatch | null;
+  harmonicFlow: string | null;
+}
+
+export interface SetlistSummary {
+  totalTracks: number;
+  matchedLocally: number;
+  unmatched: number;
+  keyFlow: string[];
+  bpmRange: [number, number] | null;
+  energyArc: (number | null)[];
+  transitions: string[];
+}
+
+export interface SetlistAnalysis {
+  parsed: ParsedSetlist;
+  matchedTracks: MatchedTrack[];
+  summary: SetlistSummary;
+}
