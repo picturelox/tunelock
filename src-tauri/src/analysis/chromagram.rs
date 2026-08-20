@@ -61,6 +61,60 @@ pub fn compute_chromagram(samples: &[f32]) -> Result<Array2<f64>> {
     Ok(chromagram_from_spec(&spec))
 }
 
+/// Convert a magnitude spectrogram into a 12-bin HPCP (Harmonic Pitch Class
+/// Profile) chromagram.
+///
+/// HPCP differs from plain chroma in that it performs harmonic summation:
+/// spectral energy at the 2nd, 3rd, and 4th harmonics of a frequency is
+/// folded back toward the fundamental's pitch class. This emphasises the
+/// tonal center more strongly, which is particularly useful for EDM where
+/// the bassline often plays the root note.
+///
+/// The Faraldo braw/bgate profiles were designed for HPCP chroma, not plain
+/// chroma. Using them with plain chroma would mismatch the representation.
+///
+/// Parameters follow the Essentia/Faraldo convention:
+/// - High-pass filter at 200 Hz (skip bins below this frequency)
+/// - Up to 4 harmonics with linear weight decay (1.0, 0.5, 0.33, 0.25)
+/// - 12-bin resolution (no sub-semitone splitting)
+pub fn hpcp_from_spec(spec: &Array2<f64>) -> Array2<f64> {
+    let (bins, frames) = spec.dim();
+    let bin_hz = SAMPLE_RATE as f64 / FFT_SIZE as f64;
+    let min_bin = (200.0 / bin_hz).ceil() as usize; // high-pass at 200 Hz
+    let max_bin = bins - 1;
+
+    const NUM_HARMONICS: usize = 4;
+    const HARMONIC_WEIGHTS: [f64; NUM_HARMONICS] = [1.0, 0.5, 1.0 / 3.0, 0.25];
+
+    let mut chroma = Array2::zeros((12, frames));
+    for f in 0..frames {
+        for bin in min_bin..=max_bin {
+            let freq = bin as f64 * bin_hz;
+            if freq <= 0.0 {
+                continue;
+            }
+            let mag = spec[[bin, f]];
+            if mag <= 0.0 {
+                continue;
+            }
+
+            // For each harmonic h, this bin's energy contributes to the
+            // pitch class of freq/h (the fundamental that would produce
+            // this bin as its h-th harmonic).
+            for h in 1..=NUM_HARMONICS {
+                let fundamental_freq = freq / h as f64;
+                if fundamental_freq < 20.0 {
+                    continue; // below audible range
+                }
+                let midi_note = 12.0 * (fundamental_freq / 440.0).log2() + 69.0;
+                let pitch_class = (midi_note.round() as i32).rem_euclid(12) as usize;
+                chroma[[pitch_class, f]] += mag * HARMONIC_WEIGHTS[h - 1];
+            }
+        }
+    }
+    chroma
+}
+
 /// Convert a magnitude spectrogram into a 72-band chromagram using the
 /// Direct Spectral Kernel (CQT approximation from libKeyFinder).
 ///

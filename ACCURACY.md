@@ -304,9 +304,60 @@ cargo run --release --bin tunelock-bench -- --corpus ..\ground-truth\MIKComplete
 2. ✅ Freeze train/validation/test manifests with seeded, normalized sampling
 3. ✅ Return and aggregate all 24 key scores per segment; calibrate confidence
 4. ✅ Run clean ablations: 12/72 paths, no-HPSS, kernel sweep, multiple windows
-5. Implement braw/bgate HPCP experiment on a separate chroma path
+5. ✅ Implement braw/bgate HPCP experiment on a separate chroma path
 6. Build gold set infrastructure + key-identification tooling
 7. Download MTG dataset, fix CNN bugs, re-run corrected experiment
+
+## Step 5: HPCP + braw/bgate EDM experiment
+
+**Goal:** Test whether the Faraldo braw/bgate profiles, designed
+specifically for electronic dance music, outperform the existing
+Krumhansl/Temperley/Sha'ath profiles on GiantSteps (which is heavily EDM).
+
+**Implementation:**
+- Added `hpcp_from_spec()` — Harmonic Pitch Class Profile chroma with
+  4-harmonic summation and 200 Hz high-pass filter.
+- Added braw and bgate profile sets from Essentia (Faraldo 2017).
+  Each set has 3 profiles: major, minor, and "other" (amodal).
+- Added `temporal_vote_edm_soft()` — soft voting on HPCP with braw/bgate.
+- Tested both HPCP and plain chroma with both profile sets.
+
+**Results on GiantSteps (604 tracks):**
+
+| Configuration | Exact | Count | MIREX | vs default |
+|---|---|---|---|---|
+| **Default (dual, K+T+Sha'ath)** | **64.4%** | **389** | **0.725** | **baseline** |
+| HPCP + braw | 44.0% | 266 | 0.544 | −20.4 |
+| HPCP + bgate | 42.7% | 258 | 0.528 | −21.7 |
+| Plain chroma + braw | 52.6% | 318 | 0.618 | −11.8 |
+| Plain chroma + bgate | 52.5% | 317 | 0.608 | −11.9 |
+
+**Conclusion:** The braw/bgate profiles perform significantly worse than
+the existing profiles on GiantSteps, regardless of chroma representation.
+The HPCP representation makes things worse, not better.
+
+**Why the EDM path underperforms:**
+1. Our simplified HPCP lacks spectral whitening — a critical preprocessing
+   step in the Faraldo pipeline that normalises spectral peaks before PCP
+   computation. Without it, HPCP is dominated by the strongest spectral
+   peaks regardless of harmonic relationship.
+2. The braw/bgate profiles were trained on Beatport metadata, which is
+   heavily biased toward specific EDM subgenres. GiantSteps is a mixed
+   EDM corpus with diverse subgenres.
+3. The "other" (amodal) profile adds noise rather than capturing useful
+   ambiguity — it competes with minor and pulls predictions away from
+   the correct answer.
+4. The existing Krumhansl/Temperley/Sha'ath profiles are more robust
+   across genres because they capture universal tonal hierarchies.
+
+**Decision:** The EDM path is retained as an ablation option
+(`--edm-braw`, `--edm-bgate`, `--edm-braw-plain`, `--edm-bgate-plain`)
+but is NOT promoted to the default path. The universal fallback
+(Krumhansl/Temperley/Sha'ath dual chroma) remains the primary engine.
+
+A future iteration could implement the full Faraldo pipeline with
+spectral whitening and PCP gate, then re-evaluate. For now, the
+simplified HPCP is insufficient.
 
 ## Step 4: Clean ablations
 

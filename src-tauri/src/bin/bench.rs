@@ -46,6 +46,10 @@ struct Args {
     chroma72_only: bool,
     hpss_kernel: Option<usize>,
     analysis_seconds: Option<usize>,
+    edm_braw: bool,
+    edms_bgate: bool,
+    edm_braw_plain: bool,
+    edm_bgate_plain: bool,
 }
 
 fn parse_args() -> Args {
@@ -54,6 +58,8 @@ fn parse_args() -> Args {
         folder: None, manifest: None, seed: None,
         no_hpss: false, chroma12_only: false, chroma72_only: false,
         hpss_kernel: None, analysis_seconds: None,
+        edm_braw: false, edms_bgate: false,
+        edm_braw_plain: false, edm_bgate_plain: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -69,6 +75,10 @@ fn parse_args() -> Args {
             "--chroma72-only" => a.chroma72_only = true,
             "--hpss-kernel" => a.hpss_kernel = it.next().and_then(|s| s.parse().ok()),
             "--analysis-seconds" => a.analysis_seconds = it.next().and_then(|s| s.parse().ok()),
+            "--edm-braw" => a.edm_braw = true,
+            "--edm-bgate" => a.edms_bgate = true,
+            "--edm-braw-plain" => a.edm_braw_plain = true,
+            "--edm-bgate-plain" => a.edm_bgate_plain = true,
             "--help" | "-h" => {
                 eprintln!("Usage:");
                 eprintln!("  tunelock-bench --corpus <csv> [--limit N] [--seed S] [--manifest m.json] [--out report.json]");
@@ -81,6 +91,8 @@ fn parse_args() -> Args {
                 eprintln!("    --chroma72-only          Use only 72-band path (Sha'ath-72)");
                 eprintln!("    --hpss-kernel N          HPSS kernel size (default 9)");
                 eprintln!("    --analysis-seconds N     Analysis window in seconds (default 180)");
+                eprintln!("    --edm-braw               Use HPCP + Faraldo braw profiles (EDM path)");
+                eprintln!("    --edm-bgate              Use HPCP + Faraldo bgate profiles (EDM path)");
                 std::process::exit(0);
             }
             other if !other.starts_with("--") => a.folder = Some(other.to_string()),
@@ -94,17 +106,36 @@ fn main() {
     let args = parse_args();
 
     // Build ablation config from flags
+    let edm_profile = if args.edm_braw {
+        Some(tunelock_lib::analysis::ensemble::EdmProfile::Braw)
+    } else if args.edms_bgate {
+        Some(tunelock_lib::analysis::ensemble::EdmProfile::Bgate)
+    } else {
+        None
+    };
     let ablation = tunelock_lib::analysis::key_detector::AblationConfig {
         no_hpss: args.no_hpss,
         hpss_kernel: args.hpss_kernel.unwrap_or(tunelock_lib::analysis::HPSS_KERNEL),
         chroma12_only: args.chroma12_only,
         chroma72_only: args.chroma72_only,
         analysis_seconds: args.analysis_seconds,
+        edm_profile,
+    };
+
+    // Build plain-chroma EDM option (braw/bgate profiles with plain chroma
+    // instead of HPCP, to isolate profile vs representation effects)
+    let edm_plain = if args.edm_braw_plain {
+        Some(tunelock_lib::analysis::ensemble::EdmProfile::Braw)
+    } else if args.edm_bgate_plain {
+        Some(tunelock_lib::analysis::ensemble::EdmProfile::Bgate)
+    } else {
+        None
     };
 
     // Print ablation mode if any non-default settings
     let is_ablation = args.no_hpss || args.chroma12_only || args.chroma72_only
-        || args.hpss_kernel.is_some() || args.analysis_seconds.is_some();
+        || args.hpss_kernel.is_some() || args.analysis_seconds.is_some()
+        || args.edm_braw || args.edms_bgate || args.edm_braw_plain || args.edm_bgate_plain;
     if is_ablation {
         eprintln!("Ablation mode:");
         if args.no_hpss { eprintln!("  no HPSS (raw spectrogram)"); }
@@ -112,12 +143,16 @@ fn main() {
         if args.chroma72_only { eprintln!("  72-band only (Sha'ath-72)"); }
         if let Some(k) = args.hpss_kernel { eprintln!("  HPSS kernel: {}", k); }
         if let Some(s) = args.analysis_seconds { eprintln!("  Analysis window: {}s", s); }
+        if args.edm_braw { eprintln!("  HPCP + braw (EDM path)"); }
+        if args.edms_bgate { eprintln!("  HPCP + bgate (EDM path)"); }
+        if args.edm_braw_plain { eprintln!("  plain chroma + braw (EDM profiles, no HPCP)"); }
+        if args.edm_bgate_plain { eprintln!("  plain chroma + bgate (EDM profiles, no HPCP)"); }
     }
 
     if let Some(corpus) = args.corpus {
-        run_scored_corpus(&corpus, args.limit, args.out.as_deref(), args.manifest.as_deref(), args.seed, &ablation);
+        run_scored_corpus(&corpus, args.limit, args.out.as_deref(), args.manifest.as_deref(), args.seed, &ablation, edm_plain);
     } else if let Some(gs) = args.giantsteps {
-        run_giantsteps(&gs, args.limit, args.out.as_deref(), &ablation);
+        run_giantsteps(&gs, args.limit, args.out.as_deref(), &ablation, edm_plain);
     } else if let Some(folder) = args.folder {
         legacy_folder_mode(&folder);
     } else {
@@ -129,13 +164,13 @@ fn main() {
     }
 }
 
-fn run_giantsteps(root: &str, limit: Option<usize>, out: Option<&str>, ablation: &tunelock_lib::analysis::key_detector::AblationConfig) {
+fn run_giantsteps(root: &str, limit: Option<usize>, out: Option<&str>, ablation: &tunelock_lib::analysis::key_detector::AblationConfig, edm_plain: Option<tunelock_lib::analysis::ensemble::EdmProfile>) {
     let rows = load_giantsteps(Path::new(root));
     if rows.is_empty() {
         eprintln!("No GiantSteps annotations found under {}", root);
         std::process::exit(1);
     }
-    score_rows(rows, root, limit, out, None, None, ablation);
+    score_rows(rows, root, limit, out, None, None, ablation, edm_plain);
 }
 
 // ============================================================================
@@ -261,7 +296,7 @@ struct CorpusReport {
     records: Vec<TrackRecord>,
 }
 
-fn analyse_row(row: &CorpusRow, weights: ProfileWeights, ablation: &tunelock_lib::analysis::key_detector::AblationConfig) -> TrackRecord {
+fn analyse_row(row: &CorpusRow, weights: ProfileWeights, ablation: &tunelock_lib::analysis::key_detector::AblationConfig, edm_plain: Option<tunelock_lib::analysis::ensemble::EdmProfile>) -> TrackRecord {
     let start = Instant::now();
     let mut rec = TrackRecord {
         path: row.location.clone(),
@@ -299,12 +334,23 @@ fn analyse_row(row: &CorpusRow, weights: ProfileWeights, ablation: &tunelock_lib
     };
     rec.decode_ms = decode_start.elapsed().as_millis() as u64;
 
-    let candidates = match tunelock_lib::analysis::key_detector::detect_key_ablation(&samples, weights, ablation) {
-        Ok(c) => c,
-        Err(e) => {
-            rec.failure = Some(format!("key: {}", e));
-            rec.total_ms = start.elapsed().as_millis() as u64;
-            return rec;
+    let candidates = if let Some(edm) = edm_plain {
+        match tunelock_lib::analysis::key_detector::detect_key_edm_plain_chroma(&samples, ablation, edm) {
+            Ok(c) => c,
+            Err(e) => {
+                rec.failure = Some(format!("key: {}", e));
+                rec.total_ms = start.elapsed().as_millis() as u64;
+                return rec;
+            }
+        }
+    } else {
+        match tunelock_lib::analysis::key_detector::detect_key_ablation(&samples, weights, ablation) {
+            Ok(c) => c,
+            Err(e) => {
+                rec.failure = Some(format!("key: {}", e));
+                rec.total_ms = start.elapsed().as_millis() as u64;
+                return rec;
+            }
         }
     };
 
@@ -361,7 +407,7 @@ fn analyse_row(row: &CorpusRow, weights: ProfileWeights, ablation: &tunelock_lib
     rec
 }
 
-fn run_scored_corpus(corpus_path: &str, limit: Option<usize>, out: Option<&str>, manifest: Option<&str>, seed: Option<u64>, ablation: &tunelock_lib::analysis::key_detector::AblationConfig) {
+fn run_scored_corpus(corpus_path: &str, limit: Option<usize>, out: Option<&str>, manifest: Option<&str>, seed: Option<u64>, ablation: &tunelock_lib::analysis::key_detector::AblationConfig, edm_plain: Option<tunelock_lib::analysis::ensemble::EdmProfile>) {
     println!("Loading corpus: {}", corpus_path);
     let rows = match load_mik_corpus(corpus_path) {
         Ok(r) => r,
@@ -370,10 +416,10 @@ fn run_scored_corpus(corpus_path: &str, limit: Option<usize>, out: Option<&str>,
             std::process::exit(1);
         }
     };
-    score_rows(rows, corpus_path, limit, out, manifest, seed, ablation);
+    score_rows(rows, corpus_path, limit, out, manifest, seed, ablation, edm_plain);
 }
 
-fn score_rows(rows: Vec<CorpusRow>, corpus_label: &str, limit: Option<usize>, out: Option<&str>, manifest: Option<&str>, seed: Option<u64>, ablation: &tunelock_lib::analysis::key_detector::AblationConfig) {
+fn score_rows(rows: Vec<CorpusRow>, corpus_label: &str, limit: Option<usize>, out: Option<&str>, manifest: Option<&str>, seed: Option<u64>, ablation: &tunelock_lib::analysis::key_detector::AblationConfig, edm_plain: Option<tunelock_lib::analysis::ensemble::EdmProfile>) {
     // Classification summary
     let mut status_counts: BTreeMap<String, usize> = BTreeMap::new();
     for r in &rows {
@@ -437,7 +483,7 @@ fn score_rows(rows: Vec<CorpusRow>, corpus_label: &str, limit: Option<usize>, ou
     let records: Vec<TrackRecord> = ready
         .par_iter()
         .map(|row| {
-            let rec = analyse_row(row, weights, ablation);
+            let rec = analyse_row(row, weights, ablation, edm_plain);
             let n = done.fetch_add(1, Ordering::Relaxed) + 1;
             if n % 50 == 0 || n == total {
                 let elapsed = bench_start.elapsed().as_secs_f64();

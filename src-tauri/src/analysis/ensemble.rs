@@ -689,3 +689,105 @@ fn build_ranked_from_aggregate(aggregate: &[[f64; 12]; 2], valid_segments: usize
     });
     ranked
 }
+
+// ============================================================================
+// HPCP + braw/bgate path (Step 5 — separate from the plain-chroma path)
+// ============================================================================
+
+/// Which EDM profile family to use with HPCP chroma.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EdmProfile {
+    /// Faraldo braw — median profiles from Beatport corpus.
+    Braw,
+    /// Faraldo bgate — braw with 4 least relevant elements zeroed.
+    Bgate,
+}
+
+/// Vote with a braw/bgate profile set on HPCP chroma.
+/// Returns 36 scores: 12 major + 12 minor + 12 "other" (amodal).
+fn edm_vote(hpcp: &[f64; 12], profile: EdmProfile) -> [[f64; 12]; 3] {
+    let (maj, min, other) = match profile {
+        EdmProfile::Braw => (
+            &KeyProfiles::BRAW_MAJOR,
+            &KeyProfiles::BRAW_MINOR,
+            &KeyProfiles::BRAW_OTHER,
+        ),
+        EdmProfile::Bgate => (
+            &KeyProfiles::BGATE_MAJOR,
+            &KeyProfiles::BGATE_MINOR,
+            &KeyProfiles::BGATE_OTHER,
+        ),
+    };
+
+    const LOG_GAIN_HPCP: f64 = 5.0;
+    let compressed: [f64; 12] = {
+        let mut w = [0.0f64; 12];
+        for i in 0..12 {
+            w[i] = (1.0 + LOG_GAIN_HPCP * hpcp[i].abs()).ln();
+        }
+        w
+    };
+
+    let mut scores = [[0.0f64; 12]; 3];
+    for tonic in 0..12 {
+        scores[0][tonic] = cosine_similarity_12(&compressed, &rotate(maj, tonic));
+        scores[1][tonic] = cosine_similarity_12(&compressed, &rotate(min, tonic));
+        scores[2][tonic] = cosine_similarity_12(&compressed, &rotate(other, tonic));
+    }
+    scores
+}
+
+/// Soft temporal voting on HPCP chroma with braw/bgate profiles.
+/// Separate EDM path — does NOT touch the plain-chroma Krumhansl/Temperley/
+/// Sha'ath path. The "other" profile is folded into minor per Faraldo.
+pub fn temporal_vote_edm_soft(
+    hpcp: &Array2<f64>,
+    segments: usize,
+    profile: EdmProfile,
+) -> Vec<RankedCandidate> {
+    let (_, total_frames) = hpcp.dim();
+    if total_frames == 0 {
+        return vec![];
+    }
+    let segments = segments.max(1);
+    let seg_len = total_frames / segments;
+
+    let mut aggregate = [[0.0f64; 12]; 2];
+    let mut valid_segments = 0usize;
+
+    for s in 0..segments {
+        let start = s * seg_len;
+        let end = if s == segments - 1 { total_frames } else { (s + 1) * seg_len };
+        if start >= end {
+            continue;
+        }
+
+        let mut mean = [0.0f64; 12];
+        for pc in 0..12 {
+            let slice = hpcp.slice(ndarray::s![pc, start..end]);
+            mean[pc] = slice.mean().unwrap_or(0.0);
+        }
+        let norm: f64 = mean.iter().map(|x| x * x).sum::<f64>().sqrt();
+        if norm > 0.0 {
+            for v in &mut mean {
+                *v /= norm;
+            }
+        }
+
+        let scores = edm_vote(&mean, profile);
+
+        let all_scores = scores.iter().flat_map(|row| row.iter()).copied();
+        let min_score = all_scores.clone().fold(f64::INFINITY, f64::min);
+        let max_score = all_scores.fold(f64::NEG_INFINITY, f64::max);
+        let range = (max_score - min_score).max(1e-10);
+
+        for t in 0..12 {
+            aggregate[0][t] += (scores[0][t] - min_score) / range;
+            let minor_score = scores[1][t].max(scores[2][t]);
+            aggregate[1][t] += (minor_score - min_score) / range;
+        }
+        valid_segments += 1;
+    }
+
+    build_ranked_from_aggregate(&aggregate, valid_segments)
+}

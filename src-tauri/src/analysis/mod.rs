@@ -99,6 +99,32 @@ impl KeyProfiles {
     pub const SHAATH_MINOR: [f64; 12] = [
         0.183, 0.047, 0.063, 0.113, 0.047, 0.064, 0.046, 0.097, 0.088, 0.049, 0.060, 0.054
     ];
+
+    /// Faraldo braw profiles — median profiles from Beatport EDM corpus.
+    /// Designed for HPCP chroma, not plain chroma.
+    /// Source: Faraldo, Jordà, Herrera (2017) via Essentia key.cpp.
+    /// There are 3 profiles: major, minor, and "other" (amodal/ambiguous).
+    pub const BRAW_MAJOR: [f64; 12] = [
+        1.0000, 0.1573, 0.4200, 0.1570, 0.5296, 0.3669, 0.1632, 0.7711, 0.1676, 0.3827, 0.2113, 0.2965
+    ];
+    pub const BRAW_MINOR: [f64; 12] = [
+        1.0000, 0.2330, 0.3615, 0.3905, 0.2925, 0.3777, 0.1961, 0.7425, 0.2701, 0.2161, 0.4228, 0.2272
+    ];
+    pub const BRAW_OTHER: [f64; 12] = [
+        1.0000, 0.2608, 0.3528, 0.2935, 0.4393, 0.3580, 0.2137, 0.7809, 0.2578, 0.2539, 0.3233, 0.2615
+    ];
+
+    /// Faraldo bgate profiles — same as braw but with the 4 least relevant
+    /// elements zeroed. Essentia's default profile type.
+    pub const BGATE_MAJOR: [f64; 12] = [
+        1.00, 0.00, 0.42, 0.00, 0.53, 0.37, 0.00, 0.77, 0.00, 0.38, 0.21, 0.30
+    ];
+    pub const BGATE_MINOR: [f64; 12] = [
+        1.00, 0.00, 0.36, 0.39, 0.00, 0.38, 0.00, 0.74, 0.27, 0.00, 0.42, 0.23
+    ];
+    pub const BGATE_OTHER: [f64; 12] = [
+        1.00, 0.26, 0.35, 0.29, 0.44, 0.36, 0.21, 0.78, 0.26, 0.25, 0.32, 0.26
+    ];
 }
 
 // =============================================================================

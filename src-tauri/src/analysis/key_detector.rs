@@ -13,8 +13,8 @@
 use anyhow::Result;
 use ndarray::Array2;
 
-use super::chromagram::{chromagram72_from_spec, chromagram_from_spec, compute_spectrogram};
-use super::ensemble::{format_key, temporal_vote_ranked_dual_soft, temporal_vote_ranked_soft_12, temporal_vote_ranked_soft_72, ProfileWeights, RankedCandidate};
+use super::chromagram::{chromagram72_from_spec, chromagram_from_spec, compute_spectrogram, hpcp_from_spec};
+use super::ensemble::{format_key, temporal_vote_ranked_dual_soft, temporal_vote_ranked_soft_12, temporal_vote_ranked_soft_72, temporal_vote_edm_soft, EdmProfile, ProfileWeights, RankedCandidate};
 use super::hpss::hpss;
 use super::{HPSS_KERNEL, MAX_ANALYSIS_SECONDS, SAMPLE_RATE};
 
@@ -48,7 +48,7 @@ pub struct KeyResult {
 pub struct AblationConfig {
     /// If true, skip HPSS and use the raw spectrogram for chroma.
     pub no_hpss: bool,
-    /// HPSS kernel size (default 9). Only used if no_hpss is false.
+    /// HPSS kernel size (default 17). Only used if no_hpss is false.
     pub hpss_kernel: usize,
     /// If true, use only the 12-bin path (Krumhansl + Temperley + Sha'ath-12).
     pub chroma12_only: bool,
@@ -56,6 +56,8 @@ pub struct AblationConfig {
     pub chroma72_only: bool,
     /// Override the analysis window in seconds (default 180).
     pub analysis_seconds: Option<usize>,
+    /// If set, use the HPCP + braw/bgate EDM path instead of plain chroma.
+    pub edm_profile: Option<EdmProfile>,
 }
 
 impl Default for AblationConfig {
@@ -66,6 +68,7 @@ impl Default for AblationConfig {
             chroma12_only: false,
             chroma72_only: false,
             analysis_seconds: None,
+            edm_profile: None,
         }
     }
 }
@@ -107,7 +110,11 @@ pub fn detect_key_ablation(
     let chroma72 = chromagram72_from_spec(&harmonic_source);
 
     // 4. Voting — use the appropriate path based on ablation flags
-    if cfg.chroma12_only {
+    if let Some(edm) = cfg.edm_profile {
+        // HPCP + braw/bgate EDM path (separate from plain chroma)
+        let hpcp = hpcp_from_spec(&harmonic_source);
+        Ok(temporal_vote_edm_soft(&hpcp, 8, edm))
+    } else if cfg.chroma12_only {
         // 12-bin only: use the legacy single-chroma path with soft voting
         Ok(temporal_vote_ranked_soft_12(&chroma12, 8, weights))
     } else if cfg.chroma72_only {
@@ -117,6 +124,40 @@ pub fn detect_key_ablation(
         // Default dual path
         Ok(temporal_vote_ranked_dual_soft(&chroma12, &chroma72, 8, weights))
     }
+}
+
+/// Ablation entry point that uses plain chroma (not HPCP) with EDM profiles.
+/// This isolates whether the braw/bgate profiles themselves help, separate
+/// from the HPCP representation question.
+pub fn detect_key_edm_plain_chroma(
+    samples: &[f32],
+    cfg: &AblationConfig,
+    edm: EdmProfile,
+) -> Result<Vec<RankedCandidate>> {
+    let max_samples = cfg.analysis_seconds.unwrap_or(MAX_ANALYSIS_SECONDS) * SAMPLE_RATE;
+    let samples_win = if samples.len() <= max_samples {
+        samples
+    } else {
+        let start = (samples.len() - max_samples) / 2;
+        &samples[start..start + max_samples]
+    };
+
+    let spec = compute_spectrogram(samples_win)?;
+    let (_, frames) = spec.dim();
+    if frames == 0 {
+        return Ok(vec![]);
+    }
+
+    let harmonic_source: Array2<f64> = if cfg.no_hpss {
+        spec
+    } else {
+        let (h, _p) = hpss(&spec, cfg.hpss_kernel);
+        h
+    };
+
+    // Use plain 12-bin chroma with EDM profiles
+    let chroma12 = chromagram_from_spec(&harmonic_source);
+    Ok(temporal_vote_edm_soft(&chroma12, 8, edm))
 }
 
 /// Main entry point used by the analysis worker.
