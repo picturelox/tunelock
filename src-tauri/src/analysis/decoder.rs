@@ -11,19 +11,28 @@ use std::path::Path;
 use super::SAMPLE_RATE;
 
 /// Decode audio file to mono f32 samples at the analysis sample rate
-/// (`super::SAMPLE_RATE`, currently 11.025 kHz).
+/// (`super::SAMPLE_RATE`, currently 22.05 kHz).
 ///
 /// Resampling from typical source rates (44.1 / 48 kHz) is a significant
 /// **downsample**, so we apply a moving-average anti-alias lowpass before
 /// the linear resampler to keep frequencies above the new Nyquist from
 /// folding back as noise. See `resample` for details.
 pub fn decode_audio<P: AsRef<Path>>(path: P) -> Result<Vec<f32>> {
-    let file = File::open(path.as_ref())
-        .with_context(|| format!("Failed to open file: {:?}", path.as_ref()))?;
+    let path_ref = path.as_ref();
+    let file = File::open(path_ref)
+        .with_context(|| format!("Failed to open file: {:?}", path_ref))?;
     
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
     
-    let hint = Hint::new();
+    // Pass the file extension as a hint so Symphonia can select the correct
+    // demuxer without guessing from the byte stream alone. This fixes probe
+    // failures on files with unusual headers (e.g. float WAV, extensible WAV).
+    let mut hint = Hint::new();
+    if let Some(ext) = path_ref.extension() {
+        if let Some(ext_str) = ext.to_str() {
+            hint.with_extension(ext_str);
+        }
+    }
     let format_opts: FormatOptions = Default::default();
     let metadata_opts: MetadataOptions = Default::default();
     let decoder_opts: DecoderOptions = Default::default();

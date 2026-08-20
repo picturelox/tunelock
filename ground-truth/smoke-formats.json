@@ -1,0 +1,1176 @@
+{
+  "corpus_path": "..\\ground-truth\\MIKCompleteLibrary.csv",
+  "scored": 20,
+  "failed": 0,
+  "status_counts": {
+    "atonal": 30,
+    "missing_file": 658,
+    "ready": 18909,
+    "unsupported_format": 624
+  },
+  "overall": {
+    "n": 20,
+    "exact_pct": 55.0,
+    "tonic_only_pct": 60.0,
+    "mirex_mean": 0.635,
+    "compatible_pct": 75.0,
+    "bpm_exact_pct": 60.0,
+    "bpm_octave_pct": 70.0,
+    "bpm_scored": 20,
+    "confusion": {
+      "correct": 11,
+      "fifth": 3,
+      "other": 3,
+      "parallel": 1,
+      "semitone": 2
+    }
+  },
+  "by_genre": {
+    "!pop/rock; rock & soul": {
+      "n": 1,
+      "exact_pct": 100.0,
+      "tonic_only_pct": 100.0,
+      "mirex_mean": 1.0,
+      "compatible_pct": 100.0,
+      "bpm_exact_pct": 0.0,
+      "bpm_octave_pct": 100.0,
+      "bpm_scored": 1,
+      "confusion": {
+        "correct": 1
+      }
+    },
+    "#nipponsei @ irc.rizon.net": {
+      "n": 1,
+      "exact_pct": 0.0,
+      "tonic_only_pct": 0.0,
+      "mirex_mean": 0.0,
+      "compatible_pct": 0.0,
+      "bpm_exact_pct": 0.0,
+      "bpm_octave_pct": 100.0,
+      "bpm_scored": 1,
+      "confusion": {
+        "other": 1
+      }
+    },
+    "(unknown)": {
+      "n": 1,
+      "exact_pct": 100.0,
+      "tonic_only_pct": 100.0,
+      "mirex_mean": 1.0,
+      "compatible_pct": 100.0,
+      "bpm_exact_pct": 0.0,
+      "bpm_octave_pct": 0.0,
+      "bpm_scored": 1,
+      "confusion": {
+        "correct": 1
+      }
+    },
+    "148": {
+      "n": 1,
+      "exact_pct": 100.0,
+      "tonic_only_pct": 100.0,
+      "mirex_mean": 1.0,
+      "compatible_pct": 100.0,
+      "bpm_exact_pct": 0.0,
+      "bpm_octave_pct": 0.0,
+      "bpm_scored": 1,
+      "confusion": {
+        "correct": 1
+      }
+    },
+    "20040630": {
+      "n": 1,
+      "exact_pct": 0.0,
+      "tonic_only_pct": 0.0,
+      "mirex_mean": 0.5,
+      "compatible_pct": 100.0,
+      "bpm_exact_pct": 100.0,
+      "bpm_octave_pct": 100.0,
+      "bpm_scored": 1,
+      "confusion": {
+        "fifth": 1
+      }
+    },
+    "60's rock & roll": {
+      "n": 1,
+      "exact_pct": 0.0,
+      "tonic_only_pct": 0.0,
+      "mirex_mean": 0.0,
+      "compatible_pct": 0.0,
+      "bpm_exact_pct": 100.0,
+      "bpm_octave_pct": 100.0,
+      "bpm_scored": 1,
+      "confusion": {
+        "other": 1
+      }
+    },
+    "60s-pop": {
+      "n": 1,
+      "exact_pct": 100.0,
+      "tonic_only_pct": 100.0,
+      "mirex_mean": 1.0,
+      "compatible_pct": 100.0,
+      "bpm_exact_pct": 100.0,
+      "bpm_octave_pct": 100.0,
+      "bpm_scored": 1,
+      "confusion": {
+        "correct": 1
+      }
+    },
+    "80's": {
+      "n": 1,
+      "exact_pct": 100.0,
+      "tonic_only_pct": 100.0,
+      "mirex_mean": 1.0,
+      "compatible_pct": 100.0,
+      "bpm_exact_pct": 100.0,
+      "bpm_octave_pct": 100.0,
+      "bpm_scored": 1,
+      "confusion": {
+        "correct": 1
+      }
+    },
+    "80's hinrg": {
+      "n": 1,
+      "exact_pct": 0.0,
+      "tonic_only_pct": 0.0,
+      "mirex_mean": 0.5,
+      "compatible_pct": 100.0,
+      "bpm_exact_pct": 100.0,
+      "bpm_octave_pct": 100.0,
+      "bpm_scored": 1,
+      "confusion": {
+        "fifth": 1
+      }
+    },
+    "80s disco": {
+      "n": 1,
+      "exact_pct": 100.0,
+      "tonic_only_pct": 100.0,
+      "mirex_mean": 1.0,
+      "compatible_pct": 100.0,
+      "bpm_exact_pct": 100.0,
+      "bpm_octave_pct": 100.0,
+      "bpm_scored": 1,
+      "confusion": {
+        "correct": 1
+      }
+    },
+    "[hip-hop/rap]": {
+      "n": 1,
+      "exact_pct": 100.0,
+      "tonic_only_pct": 100.0,
+      "mirex_mean": 1.0,
+      "compatible_pct": 100.0,
+      "bpm_exact_pct": 100.0,
+      "bpm_octave_pct": 100.0,
+      "bpm_scored": 1,
+      "confusion": {
+        "correct": 1
+      }
+    },
+    "a cappella": {
+      "n": 1,
+      "exact_pct": 100.0,
+      "tonic_only_pct": 100.0,
+      "mirex_mean": 1.0,
+      "compatible_pct": 100.0,
+      "bpm_exact_pct": 0.0,
+      "bpm_octave_pct": 0.0,
+      "bpm_scored": 1,
+      "confusion": {
+        "correct": 1
+      }
+    },
+    "abstract": {
+      "n": 1,
+      "exact_pct": 100.0,
+      "tonic_only_pct": 100.0,
+      "mirex_mean": 1.0,
+      "compatible_pct": 100.0,
+      "bpm_exact_pct": 100.0,
+      "bpm_octave_pct": 100.0,
+      "bpm_scored": 1,
+      "confusion": {
+        "correct": 1
+      }
+    },
+    "accapellas": {
+      "n": 1,
+      "exact_pct": 0.0,
+      "tonic_only_pct": 0.0,
+      "mirex_mean": 0.0,
+      "compatible_pct": 0.0,
+      "bpm_exact_pct": 0.0,
+      "bpm_octave_pct": 0.0,
+      "bpm_scored": 1,
+      "confusion": {
+        "semitone": 1
+      }
+    },
+    "african": {
+      "n": 1,
+      "exact_pct": 0.0,
+      "tonic_only_pct": 0.0,
+      "mirex_mean": 0.5,
+      "compatible_pct": 100.0,
+      "bpm_exact_pct": 100.0,
+      "bpm_octave_pct": 100.0,
+      "bpm_scored": 1,
+      "confusion": {
+        "fifth": 1
+      }
+    },
+    "aguinaldo": {
+      "n": 1,
+      "exact_pct": 0.0,
+      "tonic_only_pct": 100.0,
+      "mirex_mean": 0.2,
+      "compatible_pct": 100.0,
+      "bpm_exact_pct": 0.0,
+      "bpm_octave_pct": 0.0,
+      "bpm_scored": 1,
+      "confusion": {
+        "parallel": 1
+      }
+    },
+    "all": {
+      "n": 1,
+      "exact_pct": 100.0,
+      "tonic_only_pct": 100.0,
+      "mirex_mean": 1.0,
+      "compatible_pct": 100.0,
+      "bpm_exact_pct": 0.0,
+      "bpm_octave_pct": 0.0,
+      "bpm_scored": 1,
+      "confusion": {
+        "correct": 1
+      }
+    },
+    "alt. rock": {
+      "n": 1,
+      "exact_pct": 100.0,
+      "tonic_only_pct": 100.0,
+      "mirex_mean": 1.0,
+      "compatible_pct": 100.0,
+      "bpm_exact_pct": 100.0,
+      "bpm_octave_pct": 100.0,
+      "bpm_scored": 1,
+      "confusion": {
+        "correct": 1
+      }
+    },
+    "alternative": {
+      "n": 1,
+      "exact_pct": 0.0,
+      "tonic_only_pct": 0.0,
+      "mirex_mean": 0.0,
+      "compatible_pct": 0.0,
+      "bpm_exact_pct": 100.0,
+      "bpm_octave_pct": 100.0,
+      "bpm_scored": 1,
+      "confusion": {
+        "semitone": 1
+      }
+    },
+    "alternative & indie": {
+      "n": 1,
+      "exact_pct": 0.0,
+      "tonic_only_pct": 0.0,
+      "mirex_mean": 0.0,
+      "compatible_pct": 0.0,
+      "bpm_exact_pct": 100.0,
+      "bpm_octave_pct": 100.0,
+      "bpm_scored": 1,
+      "confusion": {
+        "other": 1
+      }
+    }
+  },
+  "by_extension": {
+    "flac": {
+      "n": 2,
+      "exact_pct": 100.0,
+      "tonic_only_pct": 100.0,
+      "mirex_mean": 1.0,
+      "compatible_pct": 100.0,
+      "bpm_exact_pct": 100.0,
+      "bpm_octave_pct": 100.0,
+      "bpm_scored": 2,
+      "confusion": {
+        "correct": 2
+      }
+    },
+    "mp3": {
+      "n": 18,
+      "exact_pct": 50.0,
+      "tonic_only_pct": 55.55555555555556,
+      "mirex_mean": 0.5944444444444444,
+      "compatible_pct": 72.22222222222223,
+      "bpm_exact_pct": 55.55555555555556,
+      "bpm_octave_pct": 66.66666666666667,
+      "bpm_scored": 18,
+      "confusion": {
+        "correct": 9,
+        "fifth": 3,
+        "other": 3,
+        "parallel": 1,
+        "semitone": 2
+      }
+    }
+  },
+  "bpm_ratio_median": 0.9995553770215272,
+  "avg_total_ms": 4497.65,
+  "records": [
+    {
+      "path": "C:\\iTunes\\Music\\Lionel X. Love\\Lionel X. Love Presents Pop_Rock! Hits & Misses\\Somebody Please.mp3",
+      "title": "Somebody Please",
+      "artist": "The Vanguards",
+      "genre": "!Pop/Rock; Rock & Soul",
+      "extension": "mp3",
+      "truth_camelot": "1A",
+      "truth_bpm": 80.7,
+      "truth_energy": 4,
+      "pred_camelot": "1A",
+      "pred_standard": "G# minor",
+      "pred_confidence": 0.8729226514437561,
+      "pred_agreement": 0.875,
+      "pred_bpm": 163.09888946711052,
+      "candidates": [
+        {
+          "camelot": "1A",
+          "standard": "G# minor",
+          "confidence": 0.8729226514437561,
+          "agreement": 0.875,
+          "segment_count": 7
+        },
+        {
+          "camelot": "12A",
+          "standard": "C# minor",
+          "confidence": 0.4277444333443409,
+          "agreement": 0.125,
+          "segment_count": 1
+        }
+      ],
+      "mirex": 1.0,
+      "error_type": "correct",
+      "tonic_correct": true,
+      "bpm_error": 82.39888946711052,
+      "bpm_error_octave": 0.8494447335552593,
+      "total_ms": 4859,
+      "decode_ms": 1010,
+      "failure": null
+    },
+    {
+      "path": "C:\\iTunes\\Music\\Compilations\\Samurai Champloo_ Playlist\\04 let me know what U think.mp3",
+      "title": "let me know what U think",
+      "artist": "Tsutchie - fat jon",
+      "genre": "#NIPPONSEI @ IRC.RIZON.NET",
+      "extension": "mp3",
+      "truth_camelot": "11B",
+      "truth_bpm": 82.0,
+      "truth_energy": 6,
+      "pred_camelot": "10A",
+      "pred_standard": "B minor",
+      "pred_confidence": 0.9321320289116577,
+      "pred_agreement": 1.0,
+      "pred_bpm": 163.9736571144421,
+      "candidates": [
+        {
+          "camelot": "10A",
+          "standard": "B minor",
+          "confidence": 0.9321320289116577,
+          "agreement": 1.0,
+          "segment_count": 8
+        }
+      ],
+      "mirex": 0.0,
+      "error_type": "other",
+      "tonic_correct": false,
+      "bpm_error": 81.97365711444209,
+      "bpm_error_octave": -0.013171442778954656,
+      "total_ms": 3434,
+      "decode_ms": 1429,
+      "failure": null
+    },
+    {
+      "path": "C:\\Users\\louis.media\\Documents\\Soulseek Downloads\\Get Up and Get.mp3",
+      "title": "Get Up and Get",
+      "artist": "Lord Kitchener",
+      "genre": "",
+      "extension": "mp3",
+      "truth_camelot": "1B",
+      "truth_bpm": 135.9,
+      "truth_energy": 3,
+      "pred_camelot": "1B",
+      "pred_standard": "B major",
+      "pred_confidence": 0.957192956855094,
+      "pred_agreement": 1.0,
+      "pred_bpm": 105.0780803436393,
+      "candidates": [
+        {
+          "camelot": "1B",
+          "standard": "B major",
+          "confidence": 0.957192956855094,
+          "agreement": 1.0,
+          "segment_count": 8
+        }
+      ],
+      "mirex": 1.0,
+      "error_type": "correct",
+      "tonic_correct": true,
+      "bpm_error": -30.821919656360706,
+      "bpm_error_octave": -30.821919656360706,
+      "total_ms": 4132,
+      "decode_ms": 1126,
+      "failure": null
+    },
+    {
+      "path": "C:\\Users\\louis.media\\Documents\\Soulseek Downloads\\complete\\albiemedia\\DMX - Exodus @320 2021\\02 DMX - Bath Salts ft. JAY-Z, Nas.mp3",
+      "title": "Bath Salts ft. JAY-Z, Nas",
+      "artist": "DMX",
+      "genre": "148",
+      "extension": "mp3",
+      "truth_camelot": "11A",
+      "truth_bpm": 92.0,
+      "truth_energy": 6,
+      "pred_camelot": "11A",
+      "pred_standard": "F# minor",
+      "pred_confidence": 0.9250499313017996,
+      "pred_agreement": 1.0,
+      "pred_bpm": 122.70958717737128,
+      "candidates": [
+        {
+          "camelot": "11A",
+          "standard": "F# minor",
+          "confidence": 0.9250499313017996,
+          "agreement": 1.0,
+          "segment_count": 8
+        }
+      ],
+      "mirex": 1.0,
+      "error_type": "correct",
+      "tonic_correct": true,
+      "bpm_error": 30.709587177371276,
+      "bpm_error_octave": -30.645206411314362,
+      "total_ms": 4192,
+      "decode_ms": 969,
+      "failure": null
+    },
+    {
+      "path": "C:\\iTunes\\Music\\Röyksopp\\DJ Kicks\\13 Poor Leno (Silicon Soul remix)+ Erlend Oye - There is a light that never goes out (Acapella)(rip).mp3",
+      "title": "Poor Leno (Silicon Soul remix)+ Erlend Oye - There is a light that never goes out (Acapella)(rip)",
+      "artist": "Röyksopp",
+      "genre": "20040630",
+      "extension": "mp3",
+      "truth_camelot": "3A",
+      "truth_bpm": 130.2,
+      "truth_energy": 6,
+      "pred_camelot": "2A",
+      "pred_standard": "D# minor",
+      "pred_confidence": 0.74172765241852,
+      "pred_agreement": 0.625,
+      "pred_bpm": 129.76826125770384,
+      "candidates": [
+        {
+          "camelot": "2A",
+          "standard": "D# minor",
+          "confidence": 0.74172765241852,
+          "agreement": 0.625,
+          "segment_count": 5
+        },
+        {
+          "camelot": "1A",
+          "standard": "G# minor",
+          "confidence": 0.5798672487075492,
+          "agreement": 0.375,
+          "segment_count": 3
+        }
+      ],
+      "mirex": 0.5,
+      "error_type": "fifth",
+      "tonic_correct": false,
+      "bpm_error": -0.4317387422961474,
+      "bpm_error_octave": -0.4317387422961474,
+      "total_ms": 3353,
+      "decode_ms": 1566,
+      "failure": null
+    },
+    {
+      "path": "C:\\Users\\louis.media\\Documents\\Soulseek Downloads\\complete\\vian2x\\CD 1   320kb\\19 - tell him - the exciters.mp3",
+      "title": "Tell Him",
+      "artist": "The Exciters",
+      "genre": "60's Rock & Roll",
+      "extension": "mp3",
+      "truth_camelot": "12B",
+      "truth_bpm": 87.4,
+      "truth_energy": 4,
+      "pred_camelot": "8A",
+      "pred_standard": "A minor",
+      "pred_confidence": 0.650763061993304,
+      "pred_agreement": 0.5,
+      "pred_bpm": 86.76325127617702,
+      "candidates": [
+        {
+          "camelot": "8A",
+          "standard": "A minor",
+          "confidence": 0.650763061993304,
+          "agreement": 0.5,
+          "segment_count": 4
+        },
+        {
+          "camelot": "9A",
+          "standard": "E minor",
+          "confidence": 0.5161498802489928,
+          "agreement": 0.25,
+          "segment_count": 2
+        },
+        {
+          "camelot": "1B",
+          "standard": "B major",
+          "confidence": 0.43713473901152533,
+          "agreement": 0.125,
+          "segment_count": 1
+        },
+        {
+          "camelot": "12A",
+          "standard": "C# minor",
+          "confidence": 0.4245831982382182,
+          "agreement": 0.125,
+          "segment_count": 1
+        }
+      ],
+      "mirex": 0.0,
+      "error_type": "other",
+      "tonic_correct": false,
+      "bpm_error": -0.6367487238229899,
+      "bpm_error_octave": -0.6367487238229899,
+      "total_ms": 4830,
+      "decode_ms": 578,
+      "failure": null
+    },
+    {
+      "path": "C:\\Users\\louis.media\\Documents\\Soulseek Downloads\\complete\\NerdVision\\Classic Rock 1969 The Beat Goes On\\12 - In the Year 2525 (Exordium & Terminus) (Zager & Evans).flac",
+      "title": "In the Year 2525 (Exordium & Terminus) (Zager & Evans)",
+      "artist": "Time Life",
+      "genre": "60s-Pop",
+      "extension": "flac",
+      "truth_camelot": "1A",
+      "truth_bpm": 124.9,
+      "truth_energy": 4,
+      "pred_camelot": "1A",
+      "pred_standard": "G# minor",
+      "pred_confidence": 0.5877797164381642,
+      "pred_agreement": 0.375,
+      "pred_bpm": 124.69901885767128,
+      "candidates": [
+        {
+          "camelot": "1A",
+          "standard": "G# minor",
+          "confidence": 0.5877797164381642,
+          "agreement": 0.375,
+          "segment_count": 3
+        },
+        {
+          "camelot": "3A",
+          "standard": "A# minor",
+          "confidence": 0.582913316933797,
+          "agreement": 0.375,
+          "segment_count": 3
+        },
+        {
+          "camelot": "2A",
+          "standard": "D# minor",
+          "confidence": 0.43884013425611984,
+          "agreement": 0.125,
+          "segment_count": 1
+        },
+        {
+          "camelot": "8A",
+          "standard": "A minor",
+          "confidence": 0.43718685586304773,
+          "agreement": 0.125,
+          "segment_count": 1
+        }
+      ],
+      "mirex": 1.0,
+      "error_type": "correct",
+      "tonic_correct": true,
+      "bpm_error": -0.20098114232872888,
+      "bpm_error_octave": -0.20098114232872888,
+      "total_ms": 4925,
+      "decode_ms": 655,
+      "failure": null
+    },
+    {
+      "path": "C:\\iTunes\\Music\\After The Fire\\80's Pop Hits - Disc 3\\13 Der Kommissar.mp3",
+      "title": "Der Kommissar",
+      "artist": "After The Fire",
+      "genre": "80's",
+      "extension": "mp3",
+      "truth_camelot": "8A",
+      "truth_bpm": 119.9,
+      "truth_energy": 7,
+      "pred_camelot": "8A",
+      "pred_standard": "A minor",
+      "pred_confidence": 0.7260457037520708,
+      "pred_agreement": 0.625,
+      "pred_bpm": 120.39430504439198,
+      "candidates": [
+        {
+          "camelot": "8A",
+          "standard": "A minor",
+          "confidence": 0.7260457037520708,
+          "agreement": 0.625,
+          "segment_count": 5
+        },
+        {
+          "camelot": "9A",
+          "standard": "E minor",
+          "confidence": 0.5829219439986459,
+          "agreement": 0.375,
+          "segment_count": 3
+        }
+      ],
+      "mirex": 1.0,
+      "error_type": "correct",
+      "tonic_correct": true,
+      "bpm_error": 0.49430504439197875,
+      "bpm_error_octave": 0.49430504439197875,
+      "total_ms": 4000,
+      "decode_ms": 1136,
+      "failure": null
+    },
+    {
+      "path": "C:\\iTunes\\Music\\Vikki Benson\\Gay Classics - Vol. V Heading Out\\01 Easy Love.mp3",
+      "title": "Easy Love",
+      "artist": "Vikki Benson",
+      "genre": "80's HiNrg",
+      "extension": "mp3",
+      "truth_camelot": "8A",
+      "truth_bpm": 117.6,
+      "truth_energy": 7,
+      "pred_camelot": "9A",
+      "pred_standard": "E minor",
+      "pred_confidence": 0.5723462470504415,
+      "pred_agreement": 0.375,
+      "pred_bpm": 117.5477123377316,
+      "candidates": [
+        {
+          "camelot": "9A",
+          "standard": "E minor",
+          "confidence": 0.5723462470504415,
+          "agreement": 0.375,
+          "segment_count": 3
+        },
+        {
+          "camelot": "7A",
+          "standard": "D minor",
+          "confidence": 0.5088486685549765,
+          "agreement": 0.25,
+          "segment_count": 2
+        },
+        {
+          "camelot": "6A",
+          "standard": "G minor",
+          "confidence": 0.5080436449992499,
+          "agreement": 0.25,
+          "segment_count": 2
+        },
+        {
+          "camelot": "1A",
+          "standard": "G# minor",
+          "confidence": 0.424743880941368,
+          "agreement": 0.125,
+          "segment_count": 1
+        }
+      ],
+      "mirex": 0.5,
+      "error_type": "fifth",
+      "tonic_correct": false,
+      "bpm_error": -0.052287662268398094,
+      "bpm_error_octave": -0.052287662268398094,
+      "total_ms": 4185,
+      "decode_ms": 1842,
+      "failure": null
+    },
+    {
+      "path": "C:\\iTunes\\Music\\Vivien Vee\\Vivien Vee Give Me A Break [12''] 80\\Give Me A Break [12''] 80.mp3",
+      "title": "Give Me A Break [12''] 80",
+      "artist": "Vivien Vee",
+      "genre": "80s Disco",
+      "extension": "mp3",
+      "truth_camelot": "8A",
+      "truth_bpm": 124.9,
+      "truth_energy": 6,
+      "pred_camelot": "8A",
+      "pred_standard": "A minor",
+      "pred_confidence": 0.6721400044326611,
+      "pred_agreement": 0.5,
+      "pred_bpm": 124.67515447284167,
+      "candidates": [
+        {
+          "camelot": "8A",
+          "standard": "A minor",
+          "confidence": 0.6721400044326611,
+          "agreement": 0.5,
+          "segment_count": 4
+        },
+        {
+          "camelot": "9A",
+          "standard": "E minor",
+          "confidence": 0.6678540724794939,
+          "agreement": 0.5,
+          "segment_count": 4
+        }
+      ],
+      "mirex": 1.0,
+      "error_type": "correct",
+      "tonic_correct": true,
+      "bpm_error": -0.22484552715833672,
+      "bpm_error_octave": -0.22484552715833672,
+      "total_ms": 4933,
+      "decode_ms": 2221,
+      "failure": null
+    },
+    {
+      "path": "C:\\iTunes\\Music\\GZA\\Unknown Album\\Liquid Swords (Instrumental).mp3",
+      "title": "Liquid Swords (Instrumental)",
+      "artist": "GZA",
+      "genre": "[Hip-Hop/Rap]",
+      "extension": "mp3",
+      "truth_camelot": "11A",
+      "truth_bpm": 89.2,
+      "truth_energy": 4,
+      "pred_camelot": "11A",
+      "pred_standard": "F# minor",
+      "pred_confidence": 0.827280336435561,
+      "pred_agreement": 0.875,
+      "pred_bpm": 90.14551212818421,
+      "candidates": [
+        {
+          "camelot": "11A",
+          "standard": "F# minor",
+          "confidence": 0.827280336435561,
+          "agreement": 0.875,
+          "segment_count": 7
+        },
+        {
+          "camelot": "6A",
+          "standard": "G minor",
+          "confidence": 0.37548738465867065,
+          "agreement": 0.125,
+          "segment_count": 1
+        }
+      ],
+      "mirex": 1.0,
+      "error_type": "correct",
+      "tonic_correct": true,
+      "bpm_error": 0.9455121281842054,
+      "bpm_error_octave": 0.9455121281842054,
+      "total_ms": 4981,
+      "decode_ms": 457,
+      "failure": null
+    },
+    {
+      "path": "C:\\iTunes\\Music\\Unknown Artist\\Unknown Album\\08.mp3",
+      "title": "08",
+      "artist": "",
+      "genre": "A Cappella",
+      "extension": "mp3",
+      "truth_camelot": "2A",
+      "truth_bpm": 119.0,
+      "truth_energy": 5,
+      "pred_camelot": "2A",
+      "pred_standard": "D# minor",
+      "pred_confidence": 0.8074879036419447,
+      "pred_agreement": 0.75,
+      "pred_bpm": 157.90369629086055,
+      "candidates": [
+        {
+          "camelot": "2A",
+          "standard": "D# minor",
+          "confidence": 0.8074879036419447,
+          "agreement": 0.75,
+          "segment_count": 6
+        },
+        {
+          "camelot": "3A",
+          "standard": "A# minor",
+          "confidence": 0.43905948110707876,
+          "agreement": 0.125,
+          "segment_count": 1
+        },
+        {
+          "camelot": "1A",
+          "standard": "G# minor",
+          "confidence": 0.42611560715575614,
+          "agreement": 0.125,
+          "segment_count": 1
+        }
+      ],
+      "mirex": 1.0,
+      "error_type": "correct",
+      "tonic_correct": true,
+      "bpm_error": 38.90369629086055,
+      "bpm_error_octave": 38.90369629086055,
+      "total_ms": 4713,
+      "decode_ms": 737,
+      "failure": null
+    },
+    {
+      "path": "C:\\iTunes\\Music\\DAF\\Alles ist gut\\Alles Ist Gut (1998 Remaster).mp3",
+      "title": "Alles Ist Gut (1998 Remaster)",
+      "artist": "DAF",
+      "genre": "Abstract",
+      "extension": "mp3",
+      "truth_camelot": "2A",
+      "truth_bpm": 120.7,
+      "truth_energy": 4,
+      "pred_camelot": "2A",
+      "pred_standard": "D# minor",
+      "pred_confidence": 0.9554746723041261,
+      "pred_agreement": 1.0,
+      "pred_bpm": 120.41175386493408,
+      "candidates": [
+        {
+          "camelot": "2A",
+          "standard": "D# minor",
+          "confidence": 0.9554746723041261,
+          "agreement": 1.0,
+          "segment_count": 8
+        }
+      ],
+      "mirex": 1.0,
+      "error_type": "correct",
+      "tonic_correct": true,
+      "bpm_error": -0.28824613506591845,
+      "bpm_error_octave": -0.28824613506591845,
+      "total_ms": 4386,
+      "decode_ms": 1048,
+      "failure": null
+    },
+    {
+      "path": "C:\\Users\\louis.media\\Documents\\Soulseek Downloads\\complete\\princenassim\\acapella & vox\\acca_-_biz_markie_-_just_a_friend_(diy).mp3",
+      "title": "Just A Friend (DIY Accapella)",
+      "artist": "Biz Markie",
+      "genre": "Accapellas",
+      "extension": "mp3",
+      "truth_camelot": "8A",
+      "truth_bpm": 113.5,
+      "truth_energy": 3,
+      "pred_camelot": "1A",
+      "pred_standard": "G# minor",
+      "pred_confidence": 0.5475509776233165,
+      "pred_agreement": 0.375,
+      "pred_bpm": 85.51630566707455,
+      "candidates": [
+        {
+          "camelot": "1A",
+          "standard": "G# minor",
+          "confidence": 0.5475509776233165,
+          "agreement": 0.375,
+          "segment_count": 3
+        },
+        {
+          "camelot": "11A",
+          "standard": "F# minor",
+          "confidence": 0.48399351570659077,
+          "agreement": 0.25,
+          "segment_count": 2
+        },
+        {
+          "camelot": "9A",
+          "standard": "E minor",
+          "confidence": 0.39802573687378034,
+          "agreement": 0.125,
+          "segment_count": 1
+        },
+        {
+          "camelot": "10A",
+          "standard": "B minor",
+          "confidence": 0.39378498371896886,
+          "agreement": 0.125,
+          "segment_count": 1
+        },
+        {
+          "camelot": "8A",
+          "standard": "A minor",
+          "confidence": 0.3858694904712602,
+          "agreement": 0.125,
+          "segment_count": 1
+        }
+      ],
+      "mirex": 0.0,
+      "error_type": "semitone",
+      "tonic_correct": false,
+      "bpm_error": -27.983694332925452,
+      "bpm_error_octave": -27.983694332925452,
+      "total_ms": 4972,
+      "decode_ms": 1041,
+      "failure": null
+    },
+    {
+      "path": "C:\\Users\\louis.media\\Music\\Disco\\Only You Steve Monite.mp3",
+      "title": "Only You",
+      "artist": "Steve Monite",
+      "genre": "African",
+      "extension": "mp3",
+      "truth_camelot": "8A",
+      "truth_bpm": 118.4,
+      "truth_energy": 7,
+      "pred_camelot": "9A",
+      "pred_standard": "E minor",
+      "pred_confidence": 0.8990922827240821,
+      "pred_agreement": 0.875,
+      "pred_bpm": 118.30060856451661,
+      "candidates": [
+        {
+          "camelot": "9A",
+          "standard": "E minor",
+          "confidence": 0.8990922827240821,
+          "agreement": 0.875,
+          "segment_count": 7
+        },
+        {
+          "camelot": "8A",
+          "standard": "A minor",
+          "confidence": 0.44406325416686643,
+          "agreement": 0.125,
+          "segment_count": 1
+        }
+      ],
+      "mirex": 0.5,
+      "error_type": "fifth",
+      "tonic_correct": false,
+      "bpm_error": -0.09939143548339757,
+      "bpm_error_octave": -0.09939143548339757,
+      "total_ms": 4333,
+      "decode_ms": 1760,
+      "failure": null
+    },
+    {
+      "path": "C:\\iTunes\\Music\\odilio gonzález\\ni de medera son buenas\\05 de borinquen flores.mp3",
+      "title": "de borinquen flores",
+      "artist": "odilio gonzález",
+      "genre": "aguinaldo",
+      "extension": "mp3",
+      "truth_camelot": "1B",
+      "truth_bpm": 126.8,
+      "truth_energy": 6,
+      "pred_camelot": "10A",
+      "pred_standard": "B minor",
+      "pred_confidence": 0.6363493849269577,
+      "pred_agreement": 0.5,
+      "pred_bpm": 97.69497020000624,
+      "candidates": [
+        {
+          "camelot": "10A",
+          "standard": "B minor",
+          "confidence": 0.6363493849269577,
+          "agreement": 0.5,
+          "segment_count": 4
+        },
+        {
+          "camelot": "1B",
+          "standard": "B major",
+          "confidence": 0.6355616802113129,
+          "agreement": 0.5,
+          "segment_count": 4
+        }
+      ],
+      "mirex": 0.2,
+      "error_type": "parallel",
+      "tonic_correct": true,
+      "bpm_error": -29.10502979999376,
+      "bpm_error_octave": -29.10502979999376,
+      "total_ms": 4665,
+      "decode_ms": 787,
+      "failure": null
+    },
+    {
+      "path": "C:\\iTunes\\Music\\PV Nova\\Evolution of Get Lucky\\01 Evolution of Get Lucky.mp3",
+      "title": "Evolution of Get Lucky",
+      "artist": "PV Nova",
+      "genre": "All",
+      "extension": "mp3",
+      "truth_camelot": "9A",
+      "truth_bpm": 112.0,
+      "truth_energy": 6,
+      "pred_camelot": "9A",
+      "pred_standard": "E minor",
+      "pred_confidence": 0.74016981875018,
+      "pred_agreement": 0.625,
+      "pred_bpm": 116.96294072357904,
+      "candidates": [
+        {
+          "camelot": "9A",
+          "standard": "E minor",
+          "confidence": 0.74016981875018,
+          "agreement": 0.625,
+          "segment_count": 5
+        },
+        {
+          "camelot": "8A",
+          "standard": "A minor",
+          "confidence": 0.591568379337275,
+          "agreement": 0.375,
+          "segment_count": 3
+        }
+      ],
+      "mirex": 1.0,
+      "error_type": "correct",
+      "tonic_correct": true,
+      "bpm_error": 4.962940723579038,
+      "bpm_error_octave": 4.962940723579038,
+      "total_ms": 4959,
+      "decode_ms": 666,
+      "failure": null
+    },
+    {
+      "path": "C:\\Users\\louis.media\\Documents\\Soulseek Downloads\\complete\\Stalaktite\\{1997} Under the Western Freeway [16-44.1]\\Grandaddy - 01 - Nonphenomenal Lineage.flac",
+      "title": "Nonphenomenal Lineage",
+      "artist": "Grandaddy",
+      "genre": "Alt. Rock",
+      "extension": "flac",
+      "truth_camelot": "10A",
+      "truth_bpm": 96.0,
+      "truth_energy": 4,
+      "pred_camelot": "10A",
+      "pred_standard": "B minor",
+      "pred_confidence": 0.6423963750585626,
+      "pred_agreement": 0.5,
+      "pred_bpm": 95.84999687582861,
+      "candidates": [
+        {
+          "camelot": "10A",
+          "standard": "B minor",
+          "confidence": 0.6423963750585626,
+          "agreement": 0.5,
+          "segment_count": 4
+        },
+        {
+          "camelot": "10B",
+          "standard": "D major",
+          "confidence": 0.4885315214963143,
+          "agreement": 0.25,
+          "segment_count": 2
+        },
+        {
+          "camelot": "9A",
+          "standard": "E minor",
+          "confidence": 0.42570389789673246,
+          "agreement": 0.125,
+          "segment_count": 1
+        },
+        {
+          "camelot": "1B",
+          "standard": "B major",
+          "confidence": 0.4040133111403261,
+          "agreement": 0.125,
+          "segment_count": 1
+        }
+      ],
+      "mirex": 1.0,
+      "error_type": "correct",
+      "tonic_correct": true,
+      "bpm_error": -0.15000312417139128,
+      "bpm_error_octave": -0.15000312417139128,
+      "total_ms": 4828,
+      "decode_ms": 618,
+      "failure": null
+    },
+    {
+      "path": "C:\\Users\\louis.media\\Music\\Disco\\I Found Lovin' Fatback.mp3",
+      "title": "I Found Lovin'",
+      "artist": "Fatback",
+      "genre": "Alternative",
+      "extension": "mp3",
+      "truth_camelot": "8A",
+      "truth_bpm": 105.4,
+      "truth_energy": 6,
+      "pred_camelot": "1A",
+      "pred_standard": "G# minor",
+      "pred_confidence": 0.5818105526848679,
+      "pred_agreement": 0.375,
+      "pred_bpm": 105.49775606182396,
+      "candidates": [
+        {
+          "camelot": "1A",
+          "standard": "G# minor",
+          "confidence": 0.5818105526848679,
+          "agreement": 0.375,
+          "segment_count": 3
+        },
+        {
+          "camelot": "8A",
+          "standard": "A minor",
+          "confidence": 0.516720568302775,
+          "agreement": 0.25,
+          "segment_count": 2
+        },
+        {
+          "camelot": "9A",
+          "standard": "E minor",
+          "confidence": 0.44213869624099406,
+          "agreement": 0.125,
+          "segment_count": 1
+        },
+        {
+          "camelot": "12B",
+          "standard": "E major",
+          "confidence": 0.44204030269674444,
+          "agreement": 0.125,
+          "segment_count": 1
+        },
+        {
+          "camelot": "10A",
+          "standard": "B minor",
+          "confidence": 0.4352966777327325,
+          "agreement": 0.125,
+          "segment_count": 1
+        }
+      ],
+      "mirex": 0.0,
+      "error_type": "semitone",
+      "tonic_correct": false,
+      "bpm_error": 0.09775606182395791,
+      "bpm_error_octave": 0.09775606182395791,
+      "total_ms": 4468,
+      "decode_ms": 1299,
+      "failure": null
+    },
+    {
+      "path": "C:\\iTunes\\Music\\Courtney Barnett\\Sometimes I Sit And Think, And Sometimes I Just Sit\\01 Elevator Operator.mp3",
+      "title": "Elevator Operator",
+      "artist": "Courtney Barnett",
+      "genre": "Alternative & Indie",
+      "extension": "mp3",
+      "truth_camelot": "3B",
+      "truth_bpm": 131.7,
+      "truth_energy": 8,
+      "pred_camelot": "1A",
+      "pred_standard": "G# minor",
+      "pred_confidence": 0.9679074108025247,
+      "pred_agreement": 1.0,
+      "pred_bpm": 131.7733212937444,
+      "candidates": [
+        {
+          "camelot": "1A",
+          "standard": "G# minor",
+          "confidence": 0.9679074108025247,
+          "agreement": 1.0,
+          "segment_count": 8
+        }
+      ],
+      "mirex": 0.0,
+      "error_type": "other",
+      "tonic_correct": false,
+      "bpm_error": 0.07332129374441365,
+      "bpm_error_octave": 0.07332129374441365,
+      "total_ms": 4805,
+      "decode_ms": 1063,
+      "failure": null
+    }
+  ]
+}

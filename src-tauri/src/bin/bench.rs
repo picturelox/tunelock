@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use rayon::prelude::*;
-use tunelock_lib::analysis::decoder::decode_audio;
+use tunelock_lib::media::decode_media;
 use tunelock_lib::analysis::ensemble::ProfileWeights;
 use tunelock_lib::analysis::key_detector::detect_key_diagnostic;
 use tunelock_lib::analysis::tempo_detector::detect_tempo;
@@ -240,7 +240,7 @@ fn analyse_row(row: &CorpusRow, weights: ProfileWeights) -> TrackRecord {
     };
 
     let decode_start = Instant::now();
-    let samples = match decode_audio(&row.location) {
+    let samples = match decode_media(&row.location) {
         Ok(s) => s,
         Err(e) => {
             rec.failure = Some(format!("decode: {}", e));
@@ -484,7 +484,12 @@ fn print_summary(r: &CorpusReport) {
 // ============================================================================
 
 fn legacy_folder_mode(folder: &str) {
-    let audio_exts = ["mp3", "wav", "flac", "ogg", "aiff", "m4a", "aac", "wma"];
+    let audio_exts = [
+        "mp3", "wav", "flac", "ogg", "oga", "opus", "aiff", "aif", "m4a", "aac",
+        "wma", "alac", "mkv",
+        // Video containers — audio extracted via ffmpeg sidecar.
+        "mp4", "mov", "webm", "m4v", "avi", "flv", "mpg", "mpeg", "ts", "3gp",
+    ];
     let mut files: Vec<String> = Vec::new();
 
     for entry in walkdir::WalkDir::new(folder).into_iter().filter_map(|e| e.ok()) {
@@ -516,7 +521,7 @@ fn legacy_folder_mode(folder: &str) {
         println!("── [{}/{}] {} ──", i + 1, files.len(), filename);
 
         let decode_start = Instant::now();
-        let samples = match decode_audio(path) {
+        let samples = match decode_media(path) {
             Ok(s) => s,
             Err(e) => {
                 println!("  ERROR: Decode failed: {}", e);

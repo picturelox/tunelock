@@ -7,9 +7,15 @@
 
 use std::path::Path;
 
-/// Formats the current symphonia build can decode natively.
-/// `.m4a`/`.aif` arrive in Phase 2 via extra codec features + ffmpeg.
-const DECODABLE_EXTS: &[&str] = &["mp3", "wav", "flac", "ogg", "opus"];
+/// Formats the current symphonia build + ffmpeg sidecar can decode.
+/// Phase 2 added: aac, alac, isomp4 (m4a/mp4), aiff, plus video containers
+/// via the ffmpeg sidecar fallback.
+const DECODABLE_EXTS: &[&str] = &[
+    "mp3", "wav", "flac", "ogg", "oga", "opus", "aiff", "aif", "m4a", "aac",
+    "wma", "alac", "mkv",
+    // Video containers — audio extracted via ffmpeg sidecar.
+    "mp4", "mov", "webm", "m4v", "avi", "flv", "mpg", "mpeg", "ts", "3gp",
+];
 
 /// Files larger than this are DJ mixes, not tracks: decoding one into memory
 /// at 44.1 kHz mono costs ~1.7 GB per hour of audio. Excluded from the corpus

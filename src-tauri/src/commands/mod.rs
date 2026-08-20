@@ -12,7 +12,12 @@ pub async fn scan_folder(
     state: State<'_, AppState>,
     path: String,
 ) -> Result<ScanResult, String> {
-    let audio_extensions = ["mp3", "wav", "flac", "ogg", "aiff", "m4a", "aac", "wma"];
+    let audio_extensions = [
+        "mp3", "wav", "flac", "ogg", "oga", "opus", "aiff", "aif", "m4a", "aac",
+        "wma", "alac", "mkv",
+        // Video containers — audio is extracted via ffmpeg sidecar.
+        "mp4", "mov", "webm", "m4v", "avi", "flv", "mpg", "mpeg", "ts", "3gp",
+    ];
     
     let mut total_files = 0;
     let mut new_files = 0;
@@ -148,7 +153,7 @@ struct TrackAnalysisRaw {
 
 fn analyze_cpu(track_id: i64, file_path: String) -> TrackAnalysisRaw {
     let outcome: Result<(String, String, f64, f64)> = (|| {
-        let samples = crate::analysis::decoder::decode_audio(&file_path)?;
+        let samples = crate::media::decode_media(&file_path)?;
         let key = detect_key(&samples)?;
         let bpm = detect_tempo(&samples)?;
         Ok((key.key_standard, key.key_camelot, key.confidence, bpm))
@@ -372,7 +377,7 @@ pub async fn analyze_file(
     ), String> {
         let _ = tx.send(("decode".to_string(), 0.05));
         let decode_start = Instant::now();
-        let samples = crate::analysis::decoder::decode_audio(&path_for_blocking)
+        let samples = crate::media::decode_media(&path_for_blocking)
             .map_err(|e| format!("Decode failed: {}", e))?;
         let decode_ms = decode_start.elapsed().as_millis() as u64;
         let _ = tx.send(("decode".to_string(), 0.20));

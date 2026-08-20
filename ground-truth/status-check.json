@@ -1,0 +1,96 @@
+{
+  "corpus_path": "..\\ground-truth\\MIKCompleteLibrary.csv",
+  "scored": 1,
+  "failed": 0,
+  "status_counts": {
+    "atonal": 32,
+    "missing_file": 658,
+    "ready": 19531
+  },
+  "overall": {
+    "n": 1,
+    "exact_pct": 100.0,
+    "tonic_only_pct": 100.0,
+    "mirex_mean": 1.0,
+    "compatible_pct": 100.0,
+    "bpm_exact_pct": 0.0,
+    "bpm_octave_pct": 100.0,
+    "bpm_scored": 1,
+    "confusion": {
+      "correct": 1
+    }
+  },
+  "by_genre": {
+    "!pop/rock; rock & soul": {
+      "n": 1,
+      "exact_pct": 100.0,
+      "tonic_only_pct": 100.0,
+      "mirex_mean": 1.0,
+      "compatible_pct": 100.0,
+      "bpm_exact_pct": 0.0,
+      "bpm_octave_pct": 100.0,
+      "bpm_scored": 1,
+      "confusion": {
+        "correct": 1
+      }
+    }
+  },
+  "by_extension": {
+    "mp3": {
+      "n": 1,
+      "exact_pct": 100.0,
+      "tonic_only_pct": 100.0,
+      "mirex_mean": 1.0,
+      "compatible_pct": 100.0,
+      "bpm_exact_pct": 0.0,
+      "bpm_octave_pct": 100.0,
+      "bpm_scored": 1,
+      "confusion": {
+        "correct": 1
+      }
+    }
+  },
+  "bpm_ratio_median": 2.021051914090589,
+  "avg_total_ms": 1171.0,
+  "records": [
+    {
+      "path": "C:\\iTunes\\Music\\Lionel X. Love\\Lionel X. Love Presents Pop_Rock! Hits & Misses\\Somebody Please.mp3",
+      "title": "Somebody Please",
+      "artist": "The Vanguards",
+      "genre": "!Pop/Rock; Rock & Soul",
+      "extension": "mp3",
+      "truth_camelot": "1A",
+      "truth_bpm": 80.7,
+      "truth_energy": 4,
+      "pred_camelot": "1A",
+      "pred_standard": "G# minor",
+      "pred_confidence": 0.8729226514437561,
+      "pred_agreement": 0.875,
+      "pred_bpm": 163.09888946711052,
+      "candidates": [
+        {
+          "camelot": "1A",
+          "standard": "G# minor",
+          "confidence": 0.8729226514437561,
+          "agreement": 0.875,
+          "segment_count": 7
+        },
+        {
+          "camelot": "12A",
+          "standard": "C# minor",
+          "confidence": 0.4277444333443409,
+          "agreement": 0.125,
+          "segment_count": 1
+        }
+      ],
+      "mirex": 1.0,
+      "error_type": "correct",
+      "tonic_correct": true,
+      "bpm_error": 82.39888946711052,
+      "bpm_error_octave": 0.8494447335552593,
+      "total_ms": 1171,
+      "decode_ms": 434,
+      "failure": null
+    }
+  ]
+}
