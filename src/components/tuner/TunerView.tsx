@@ -22,7 +22,7 @@ import {
   camelotToStandardKey,
   getKeyAmbiguityRelationship,
   type ScaleNote,
-} from '../../lib/camelot';
+} from '../../lib/harmony';
 import { playNote } from '../../lib/audio';
 import CamelotWheel from '../camelot/CamelotWheel';
 import PianoRoll from '../piano/PianoRoll';
@@ -131,12 +131,18 @@ export default function TunerView() {
   }, []);
 
   // Tauri 2 webview drag-drop event.
+  // Guard against React StrictMode double-mounting: the async unlisten
+  // may not have resolved when cleanup runs, so we track a cancelled flag
+  // and dispose the listener once it resolves if the effect was already
+  // cleaned up. This prevents the duplicate `[tuner] DONE` logs.
   useEffect(() => {
+    let cancelled = false;
     let unlisten: (() => void) | null = null;
     (async () => {
       try {
         const webview = getCurrentWebview();
         unlisten = await webview.onDragDropEvent((event) => {
+          if (cancelled) return;
           if (event.payload.type === 'enter' || event.payload.type === 'over') {
             setIsDragging(true);
           } else if (event.payload.type === 'leave') {
@@ -151,11 +157,17 @@ export default function TunerView() {
             }
           }
         });
+        // If cleanup ran while we were awaiting, tear down immediately.
+        if (cancelled && unlisten) {
+          unlisten();
+          unlisten = null;
+        }
       } catch (err) {
         console.warn('Tauri drag-drop unavailable (running outside Tauri?):', err);
       }
     })();
     return () => {
+      cancelled = true;
       if (unlisten) unlisten();
     };
   }, [handleAnalyzePath]);

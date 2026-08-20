@@ -5,7 +5,7 @@ import {
   getRelationship,
   RELATIONSHIP_INFO,
   type CamelotRelationship,
-} from '../../lib/camelot';
+} from '../../lib/harmony';
 import TrackArtwork from '../artwork/TrackArtwork';
 
 /**

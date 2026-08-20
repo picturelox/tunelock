@@ -55,15 +55,21 @@ impl Database {
     }
     
     pub fn insert_track(&self, path: &str, filename: &str, file_size: i64) -> Result<i64> {
-        self.conn.execute(
-            "INSERT INTO tracks (file_path, filename, file_size, status) 
+        // Use RETURNING id to get the correct row ID on both insert and
+        // conflict paths. The previous version used last_insert_rowid(),
+        // which returns a stale ID on the ON CONFLICT DO UPDATE path
+        // (nothing was inserted, so the rowid belongs to a prior insert).
+        let id: i64 = self.conn.query_row(
+            "INSERT INTO tracks (file_path, filename, file_size, status)
              VALUES (?1, ?2, ?3, 'pending')
-             ON CONFLICT(file_path) DO UPDATE SET 
+             ON CONFLICT(file_path) DO UPDATE SET
              file_size = excluded.file_size,
-             updated_at = datetime('now')",
+             updated_at = datetime('now')
+             RETURNING id",
             params![path, filename, file_size],
+            |row| row.get(0),
         )?;
-        Ok(self.conn.last_insert_rowid())
+        Ok(id)
     }
     
     pub fn update_track_metadata(

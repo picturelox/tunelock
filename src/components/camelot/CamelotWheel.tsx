@@ -6,7 +6,7 @@ import {
   RELATIONSHIP_INFO,
   parseCamelot,
   type CamelotRelationship,
-} from '../../lib/camelot';
+} from '../../lib/harmony';
 import type { CamelotPosition } from '../../types';
 
 /**

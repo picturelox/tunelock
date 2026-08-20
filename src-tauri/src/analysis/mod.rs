@@ -7,6 +7,10 @@ pub mod hpss;
 pub mod key_detector;
 pub mod tempo_detector;
 
+// Re-export harmony functions for backward compatibility.
+// The canonical home is now `crate::harmony`.
+pub use crate::harmony::{key_to_camelot, pitch_class_to_name};
+
 // =============================================================================
 // Audio-processing constants
 //
@@ -145,111 +149,8 @@ pub fn shaath_minor_72() -> [f64; 72] {
     profile
 }
 
-/// Convert semitone to pitch class name
-pub fn pitch_class_to_name(pitch_class: usize) -> &'static str {
-    match pitch_class {
-        0 => "C",
-        1 => "C#",
-        2 => "D",
-        3 => "D#",
-        4 => "E",
-        5 => "F",
-        6 => "F#",
-        7 => "G",
-        8 => "G#",
-        9 => "A",
-        10 => "A#",
-        11 => "B",
-        _ => "?",
-    }
-}
-
-/// Convert a key `(tonic_pitch_class, is_major)` to its Camelot wheel code.
-///
-/// On the Camelot wheel, a minor key shares its number with its **relative
-/// major** (3 semitones higher), e.g. A minor and C major both sit at
-/// position 8 (A minor = 8A, C major = 8B). The previous implementation
-/// used the major-key table for both modes, which produced wrong codes for
-/// every minor key — e.g. A minor came out as 11A instead of 8A.
-///
-/// Implementation: a single table maps **major tonic -> wheel number**.
-/// For minor keys we look up the relative-major tonic which is
-/// `(tonic + 3) mod 12`.
-pub fn key_to_camelot(tonic: usize, is_major: bool) -> String {
-    // tonic_pitch_class -> Camelot number, for MAJOR keys.
-    // (Anchored by the circle of fifths starting at C = 8.)
-    let major_number = |t: usize| -> u8 {
-        match t % 12 {
-            0  => 8,  // C
-            1  => 3,  // C#  / Db
-            2  => 10, // D
-            3  => 5,  // D#  / Eb
-            4  => 12, // E
-            5  => 7,  // F
-            6  => 2,  // F#  / Gb
-            7  => 9,  // G
-            8  => 4,  // G#  / Ab
-            9  => 11, // A
-            10 => 6,  // A#  / Bb
-            11 => 1,  // B
-            _  => 1,  // unreachable
-        }
-    };
-
-    let (number, letter) = if is_major {
-        (major_number(tonic), 'B')
-    } else {
-        // Minor key: borrow the wheel number from the relative major,
-        // which is 3 semitones above the minor tonic.
-        (major_number((tonic + 3) % 12), 'A')
-    };
-    format!("{}{}", number, letter)
-}
-
-#[cfg(test)]
-mod camelot_tests {
-    use super::key_to_camelot;
-
-    /// Reference table from the standard Camelot wheel.
-    /// (tonic_pitch_class, is_major) -> expected camelot code.
-    const EXPECTED: &[(usize, bool, &str)] = &[
-        // Major keys
-        (0,  true,  "8B"),  // C
-        (7,  true,  "9B"),  // G
-        (2,  true,  "10B"), // D
-        (9,  true,  "11B"), // A
-        (4,  true,  "12B"), // E
-        (11, true,  "1B"),  // B
-        (6,  true,  "2B"),  // F#
-        (1,  true,  "3B"),  // C#
-        (8,  true,  "4B"),  // Ab
-        (3,  true,  "5B"),  // Eb
-        (10, true,  "6B"),  // Bb
-        (5,  true,  "7B"),  // F
-        // Minor keys
-        (9,  false, "8A"),  // A  minor   (relative to C  major)
-        (4,  false, "9A"),  // E  minor   (relative to G  major)
-        (11, false, "10A"), // B  minor   (relative to D  major)
-        (6,  false, "11A"), // F# minor   (relative to A  major)
-        (1,  false, "12A"), // C# minor   (relative to E  major)
-        (8,  false, "1A"),  // G# minor   (relative to B  major)
-        (3,  false, "2A"),  // D# minor   (relative to F# major)
-        (10, false, "3A"),  // A# minor   (relative to C# major)
-        (5,  false, "4A"),  // F  minor   (relative to Ab major)
-        (0,  false, "5A"),  // C  minor   (relative to Eb major)
-        (7,  false, "6A"),  // G  minor   (relative to Bb major)
-        (2,  false, "7A"),  // D  minor   (relative to F  major)
-    ];
-
-    #[test]
-    fn all_24_keys_map_correctly() {
-        for (tonic, is_major, expected) in EXPECTED {
-            let got = key_to_camelot(*tonic, *is_major);
-            assert_eq!(
-                &got, expected,
-                "tonic={} is_major={} -> got {} expected {}",
-                tonic, is_major, got, expected
-            );
-        }
-    }
-}
+// `pitch_class_to_name` and `key_to_camelot` have moved to `crate::harmony`.
+// The `pub use` re-export at the top of this file keeps existing callers
+// working. The Camelot test vectors now live in `harmony/mod.rs`.
+// Camelot tests have moved to `harmony/mod.rs` — the canonical home for
+// all key/Camelot/relationship logic and test vectors.

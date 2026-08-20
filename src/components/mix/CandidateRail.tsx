@@ -1,7 +1,7 @@
 import { useMixStore } from '../../stores/mixStore';
 import { useLibraryStore } from '../../stores/libraryStore';
-import { getCamelotRelationship, relationshipColor } from '../../lib/relationships';
-import { formatCamelotBadge } from '../../lib/camelot';
+import { getCamelotRelationship, relationshipColor } from '../../lib/harmony';
+import { formatCamelotBadge } from '../../lib/harmony';
 
 export default function CandidateRail() {
   const { project, addTrack } = useMixStore();

@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Play, Pause, SkipBack, SkipForward } from 'lucide-react';
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { useMixStore } from '../../stores/mixStore';
@@ -16,16 +16,21 @@ export default function DualAuditionPanel() {
   const audioARef = useRef<HTMLAudioElement>(null);
   const audioBRef = useRef<HTMLAudioElement>(null);
 
-  // Auto-populate decks from selected transition
+  // Auto-populate decks from selected transition. Moved into an effect to
+  // avoid setState-during-render, which breaks under concurrent rendering.
   const selectedTrans = project.transitions.find((t) => t.id === project.selectedTransitionId);
-  if (selectedTrans) {
-    const fromClip = project.clips.find((c) => c.id === selectedTrans.fromClipId);
-    const toClip = project.clips.find((c) => c.id === selectedTrans.toClipId);
-    const fromId = fromClip?.trackId ?? null;
-    const toId = toClip?.trackId ?? null;
-    if (deckA !== fromId) setDeckA(fromId);
-    if (deckB !== toId) setDeckB(toId);
-  }
+  const fromId = selectedTrans
+    ? project.clips.find((c) => c.id === selectedTrans.fromClipId)?.trackId ?? null
+    : null;
+  const toId = selectedTrans
+    ? project.clips.find((c) => c.id === selectedTrans.toClipId)?.trackId ?? null
+    : null;
+  useEffect(() => {
+    setDeckA(fromId);
+  }, [fromId]);
+  useEffect(() => {
+    setDeckB(toId);
+  }, [toId]);
 
   const trackA = deckA ? tracks.get(deckA) : null;
   const trackB = deckB ? tracks.get(deckB) : null;

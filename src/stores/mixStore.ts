@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import type { MixClip, MixTransition, MixProject } from '../types/mix';
-import { getCamelotRelationship } from '../lib/relationships';
+import { getCamelotRelationship } from '../lib/harmony';
 import type { Track } from '../types';
 
 interface MixStore {

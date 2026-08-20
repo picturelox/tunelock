@@ -6,6 +6,7 @@ pub mod analysis;
 pub mod commands;
 pub mod db;
 pub mod export;
+pub mod harmony;
 pub mod media;
 pub mod models;
 pub mod proof;

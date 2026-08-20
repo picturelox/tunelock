@@ -1,6 +1,6 @@
 import { convertFileSrc } from '@tauri-apps/api/core';
 import { useState } from 'react';
-import { formatCamelotBadge, PITCH_NAMES_SHARP } from '../../lib/camelot';
+import { formatCamelotBadge, PITCH_NAMES_SHARP } from '../../lib/harmony';
 
 /**
  * Visual identity tile for a single track.

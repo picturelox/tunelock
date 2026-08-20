@@ -1,4 +1,4 @@
-import type { RelationshipType } from '../lib/relationships';
+import type { RelationshipType } from '../lib/harmony';
 
 export interface MixClip {
   id: string;

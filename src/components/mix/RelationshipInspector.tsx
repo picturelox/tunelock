@@ -1,6 +1,6 @@
 import { useMixStore } from '../../stores/mixStore';
 import { useLibraryStore } from '../../stores/libraryStore';
-import { relationshipColor } from '../../lib/relationships';
+import { relationshipColor } from '../../lib/harmony';
 
 export default function RelationshipInspector() {
   const { project } = useMixStore();

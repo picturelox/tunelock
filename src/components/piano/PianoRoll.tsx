@@ -1,8 +1,8 @@
 import { useMemo } from 'react';
 import { Play } from 'lucide-react';
 import { playNote, playSequence } from '../../lib/audio';
-import { midiToFrequency, PITCH_NAMES_SHARP } from '../../lib/camelot';
-import type { ScaleNote } from '../../lib/camelot';
+import { midiToFrequency, PITCH_NAMES_SHARP } from '../../lib/harmony';
+import type { ScaleNote } from '../../lib/harmony';
 
 interface PianoRollProps {
   /** MIDI of the lowest key (default C4 = 60). */

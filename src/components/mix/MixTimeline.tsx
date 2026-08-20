@@ -1,7 +1,7 @@
 import { useMixStore } from '../../stores/mixStore';
 import { useLibraryStore } from '../../stores/libraryStore';
-import { formatCamelotBadge } from '../../lib/camelot';
-import { relationshipColor } from '../../lib/relationships';
+import { formatCamelotBadge } from '../../lib/harmony';
+import { relationshipColor } from '../../lib/harmony';
 
 export default function MixTimeline() {
   const { project, selectClip } = useMixStore();

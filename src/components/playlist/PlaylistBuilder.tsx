@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useLibraryStore } from '../../stores/libraryStore';
 import { Save, Download, X } from 'lucide-react';
 import type { PlaylistRules, Track } from '../../types';
-import { parseCamelot, getRelationshipInfo } from '../../lib/camelot';
+import { parseCamelot, getRelationshipInfo } from '../../lib/harmony';
 
 export default function PlaylistBuilder() {
   const { tracks } = useLibraryStore();

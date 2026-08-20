@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useMixStore } from '../../stores/mixStore';
 import { useLibraryStore } from '../../stores/libraryStore';
 import MixTimeline from './MixTimeline';
@@ -12,12 +12,15 @@ export default function MixWorkspace() {
   const { project, selectClip, selectTransition } = useMixStore();
   const { tracks } = useLibraryStore();
 
-  // Inject library tracks into the mix store's track map whenever they change
-  // This is a sync read on render; the store holds its own copy.
-  const trackMap = useMixStore.getState().trackMap;
-  if (trackMap.size !== tracks.size) {
-    useMixStore.getState().setTrackMap(new Map(tracks));
-  }
+  // Sync library tracks into the mix store's track map. Moved into an effect
+  // to avoid setState-during-render, which breaks under concurrent rendering.
+  const setTrackMap = useMixStore((s) => s.setTrackMap);
+  const trackMapSize = useMixStore((s) => s.trackMap.size);
+  useEffect(() => {
+    if (trackMapSize !== tracks.size) {
+      setTrackMap(new Map(tracks));
+    }
+  }, [tracks, trackMapSize, setTrackMap]);
 
   return (
     <div className="flex flex-col h-full">

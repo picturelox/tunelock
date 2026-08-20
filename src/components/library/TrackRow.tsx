@@ -1,7 +1,7 @@
 import type { Track } from '../../types';
 import { Music2 } from 'lucide-react';
 import { convertFileSrc } from '@tauri-apps/api/core';
-import { formatCamelotBadge } from '../../lib/camelot';
+import { formatCamelotBadge } from '../../lib/harmony';
 
 interface TrackRowProps {
   track: Track;
