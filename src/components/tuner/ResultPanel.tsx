@@ -1,3 +1,4 @@
+import { useState, useEffect } from 'react';
 import type { TrackAnalysis, KeyCandidate, Track } from '../../types';
 import type { ScaleNote } from '../../lib/harmony';
 import CamelotWheel from '../camelot/CamelotWheel';
@@ -8,6 +9,8 @@ import AudioPlayer from './AudioPlayer';
 import CandidatesPanel from './CandidatesPanel';
 import ChromaPanel from './ChromaPanel';
 import TimingsPanel from './TimingsPanel';
+import WaveformDisplay from '../waveform/WaveformDisplay';
+import { getWaveformData, type WaveformData } from '../../lib/tauri';
 
 export interface ResultPanelProps {
   result: TrackAnalysis;
@@ -55,12 +58,35 @@ export default function ResultPanel({
     chroma: result.chroma ?? null,
   };
 
+  // Fetch waveform data for this track (async, non-blocking — the readout
+  // renders first, the waveform appears when ready).
+  const [waveform, setWaveform] = useState<WaveformData | null>(null);
+  useEffect(() => {
+    setWaveform(null);
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await getWaveformData(result.track_id);
+        if (!cancelled) setWaveform(data);
+      } catch (err) {
+        console.warn('[tuner] waveform fetch failed:', err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [result.track_id]);
+
   return (
     <div className="flex flex-col gap-6">
       {filename && <div className="text-sm text-text-secondary truncate">{filename}</div>}
 
       {/* Player */}
       {result.file_path && <AudioPlayer filePath={result.file_path} />}
+
+      {/* Three-band waveform */}
+      <div className="bg-surface/40 rounded-xl p-3">
+        <div className="text-xs text-text-secondary mb-2">Waveform</div>
+        <WaveformDisplay data={waveform} height={80} />
+      </div>
 
       {/* Top row: readout + wheel */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

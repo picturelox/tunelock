@@ -6,6 +6,7 @@ pub mod ensemble;
 pub mod hpss;
 pub mod key_detector;
 pub mod tempo_detector;
+pub mod waveform;
 
 // Re-export harmony functions for backward compatibility.
 // The canonical home is now `crate::harmony`.

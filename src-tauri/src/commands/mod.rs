@@ -4,6 +4,7 @@ use walkdir::WalkDir;
 
 use crate::analysis::key_detector::detect_key;
 use crate::analysis::tempo_detector::detect_tempo;
+use crate::analysis::waveform::{generate_waveform, WaveformData};
 use crate::consensus::{compute_consensus, ConsensusResult, OpinionSource};
 use crate::models::*;
 use crate::{AppState, AnalysisQueue};
@@ -1135,4 +1136,36 @@ mod tests {
         assert_eq!(extract_attr(xml, "TEMPO", "BPM"), Some("128.5".to_string()));
         assert_eq!(extract_attr(xml, "MUSICAL_KEY", "VALUE"), Some("0".to_string()));
     }
+}
+
+// ============================================================================
+// Waveform generation
+// ============================================================================
+
+/// Generate a three-band waveform for a track. The waveform is computed
+/// from the decoded audio and returned immediately (not cached yet —
+/// caching to disk will be added in a future pass).
+#[command]
+pub async fn get_waveform_data(
+    state: State<'_, AppState>,
+    track_id: i64,
+) -> Result<WaveformData, String> {
+    let db = state.db.lock().await;
+    let track = db.get_track_by_id(track_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Track not found")?;
+    drop(db);
+
+    // Decode the audio file
+    let samples = crate::media::decode_media(&track.file_path)
+        .map_err(|e| format!("Decode failed: {}", e))?;
+
+    // Generate the waveform (CPU-heavy, run in spawn_blocking)
+    let waveform = tokio::task::spawn_blocking(move || {
+        generate_waveform(&samples)
+    })
+    .await
+    .map_err(|e| format!("Waveform generation failed: {}", e))?;
+
+    Ok(waveform)
 }

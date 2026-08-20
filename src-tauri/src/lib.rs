@@ -90,6 +90,7 @@ pub fn run() {
             commands::get_contested_tracks,
             commands::set_track_opinion,
             commands::import_traktor_nml,
+            commands::get_waveform_data,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -189,6 +189,23 @@ export async function importTraktorNml(nmlPath: string): Promise<NmlImportResult
   return invoke('import_traktor_nml', { nmlPath });
 }
 
+// === Waveform Commands ===
+export interface WaveformColumn {
+  low: number;
+  mid: number;
+  high: number;
+}
+
+export interface WaveformData {
+  columns: WaveformColumn[];
+  sampleRate: number;
+  durationMs: number;
+}
+
+export async function getWaveformData(trackId: number): Promise<WaveformData> {
+  return invoke('get_waveform_data', { trackId });
+}
+
 // === Export Commands ===
 export async function exportTracks(
   trackIds: number[],
