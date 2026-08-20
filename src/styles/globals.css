@@ -3,9 +3,132 @@
 @tailwind utilities;
 
 @layer base {
+  :root {
+    /* Data plane (charcoal) */
+    --data-bg: #1a1a1e;
+    --data-surface: #222226;
+    --data-text: #e8e8ec;
+    --data-text-dim: #888892;
+    --data-border: #333338;
+    --data-grid: #2a2a2e;
+
+    /* Walnut Console frame */
+    --walnut-base: #3d2b1f;
+    --walnut-dark: #2a1e15;
+    --walnut-light: #4a3829;
+    --bronze-face: #8b7355;
+    --bronze-dark: #5c4a35;
+    --brass-accent: #c9a96e;
+    --brass-bright: #e8c87a;
+    --cream-label: #f0e6d2;
+
+    /* Semantic state */
+    --lamp-amber: #d4a04c;
+    --lamp-green: #5c9c5c;
+    --lamp-red: #c45c5c;
+  }
+
   body {
     @apply bg-background text-text-primary;
     font-family: 'Inter', system-ui, sans-serif;
+  }
+}
+
+@layer components {
+  /* Walnut Console panel frame — surrounds modules with wood/bronze texture */
+  .walnut-frame {
+    background: linear-gradient(135deg, var(--walnut-base) 0%, var(--walnut-dark) 100%);
+    border: 1px solid var(--walnut-light);
+    border-radius: 8px;
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.5), 0 2px 4px rgba(0,0,0,0.3);
+  }
+
+  /* Bronze faceplate — for control modules */
+  .bronze-plate {
+    background: linear-gradient(180deg, var(--bronze-face) 0%, var(--bronze-dark) 100%);
+    border: 1px solid var(--bronze-dark);
+    border-radius: 6px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.1);
+  }
+
+  /* Engraved label — cream text on bronze/walnut */
+  .engraved-label {
+    color: var(--cream-label);
+    text-shadow: 0 1px 1px rgba(0,0,0,0.5);
+    font-size: 0.625rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 600;
+  }
+
+  /* Data plane surface — charcoal, crisp, no texture */
+  .data-plane {
+    background: var(--data-bg);
+    border: 1px solid var(--data-border);
+    border-radius: 4px;
+  }
+
+  /* Illuminated launch pad button */
+  .launch-pad {
+    background: var(--walnut-dark);
+    border: 1px solid var(--bronze-dark);
+    border-radius: 6px;
+    box-shadow: inset 0 2px 4px rgba(0,0,0,0.6);
+    transition: all 0.1s ease;
+  }
+  .launch-pad:active {
+    box-shadow: inset 0 1px 2px rgba(0,0,0,0.4);
+    transform: translateY(1px);
+  }
+  .launch-pad.active {
+    background: var(--bronze-dark);
+    box-shadow: inset 0 2px 4px rgba(0,0,0,0.4), 0 0 8px rgba(201,169,110,0.3);
+  }
+
+  /* Lamp button — positive-state indicator */
+  .lamp-btn {
+    border: 1px solid var(--bronze-dark);
+    border-radius: 4px;
+    background: var(--walnut-dark);
+    transition: all 0.15s ease;
+  }
+  .lamp-btn.lamp-on-amber {
+    background: var(--lamp-amber);
+    box-shadow: 0 0 6px rgba(212,160,76,0.5);
+  }
+  .lamp-btn.lamp-on-green {
+    background: var(--lamp-green);
+    box-shadow: 0 0 6px rgba(92,156,92,0.5);
+  }
+  .lamp-btn.lamp-on-red {
+    background: var(--lamp-red);
+    box-shadow: 0 0 6px rgba(196,92,92,0.5);
+  }
+
+  /* Brass-rimmed focus ring — for the Camelot wheel and selected slots */
+  .brass-focus {
+    border: 2px solid var(--brass-accent);
+    box-shadow: 0 0 12px rgba(201,169,110,0.4);
+  }
+
+  /* Slot card — compact Layer Lab slot */
+  .slot-card {
+    background: var(--data-surface);
+    border: 1px solid var(--data-border);
+    border-radius: 6px;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  .slot-card:hover {
+    border-color: var(--bronze-face);
+  }
+  .slot-card.selected {
+    border-color: var(--brass-accent);
+    box-shadow: 0 0 12px rgba(201,169,110,0.3);
+  }
+  .slot-card.empty {
+    border-style: dashed;
+    border-color: var(--data-border);
+    opacity: 0.5;
   }
 }
 
