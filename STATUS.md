@@ -30,8 +30,8 @@ The ultimate mix planner. Accurate key + BPM + energy analysis with honest confi
 - ~~Two competing harmony vocabularies~~ **Fixed (Phase 5)** — unified `lib/harmony.ts` + Rust `harmony/mod.rs` mirror.
 - ~~HPSS kernel footprint is ~1.7 s (hop=4096), not the 210 ms the comments claim.~~ **Fixed (Phase 5)** — comments corrected to match actual parameters.
 - ~~setState-during-render in `MixWorkspace` and `DualAuditionPanel`.~~ **Fixed (Phase 5)** — moved to useEffect.
-- `bundle.active = false` — no installer can be produced.
-- ~~No test infrastructure beyond one Camelot unit test.~~ **Improved** — 46 tests (harmony, metrics, tempo, consensus, waveform, energy, genre profiles, key timeline, CNN stub, NML parsing).
+- ~~`bundle.active = false` — no installer can be produced.~~ **Fixed** — bundle enabled with NSIS target for Windows installer.
+- ~~No test infrastructure beyond one Camelot unit test.~~ **Improved** — 52 tests (harmony, metrics, tempo, consensus, waveform, energy, genre profiles, key timeline, CNN stub, NML parsing, gold annotations).
 
 ## Ground truth
 - `ground-truth/MIKCompleteLibrary.csv` — 20,221 rows, 19,563 present on disk. Key (Camelot), Tempo, Energy, CuePoints, Genre, per track.
