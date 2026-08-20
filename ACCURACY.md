@@ -1,421 +1,274 @@
 # TuneLock Accuracy Report
 
-Key + BPM detection accuracy against a labelled ground-truth corpus.
-Updated after each tuning phase.
+Key + BPM detection accuracy against labelled corpora.
+
+**Important framing:**
+- The MIK corpus is **Mixed In Key's opinion**, not ground truth. Results
+  against it are "MIK agreement," not accuracy.
+- The GiantSteps-key corpus (604 Beatport previews, independently
+  annotated) is the primary **accuracy benchmark**.
+- The 500-track MIK sample is not meaningfully stratified — see
+  "Stratification issue" below.
+- The CNN experiment was **invalid** (implementation bugs), not fairly
+  evaluated. See "CNN experiment status" below.
+
+Updated after each measured change.
 
 ## Method
 
-- **Corpus:** MIK personal library export (20,221 rows, 18,909 ready).
-- **Sample:** 500 tracks, stratified by genre (round-robin across all genres
-  for diversity, not a head-cut).
+- **MIK corpus:** Personal library export (20,221 rows, 18,909 ready).
+  Labels are Mixed In Key's predictions, not human annotations. Used as
+  a secondary agreement metric, never as a calibration target.
+- **GiantSteps corpus:** 604 Beatport previews (~2 min each), independently
+  annotated with standard key names. This is the primary accuracy
+  benchmark. All 604 tracks scored (0 failures).
+- **MIK sample:** 500 tracks, selected by round-robin across raw genre
+  strings. This is **not** meaningful stratification — see below.
 - **Build:** `cargo build --release` (optimised).
 - **Parallelism:** Rayon across all available cores.
-- **Report files:** `ground-truth/baseline-500.json`, `ground-truth/tuned-final-500.json`
-  (gitignored — contain personal file paths).
 
-## Corpus classification
+## Stratification issue
 
-| Status | Before Phase 2 | After Phase 2 | Notes |
+The 500-track MIK sample uses `row.genre.to_lowercase()` as the bucket key
+for round-robin selection (`corpus.rs:280`). The corpus contains 439
+distinct raw genre strings, including typos, website names, combined tags,
+emojis, and arbitrary metadata. 378 buckets contain one track; 61 contain
+two. The resulting sample is neither representative of the library nor a
+clean macro-average across meaningful genres. Tracks within each bucket
+are sorted by path, not randomly sampled.
+
+**Consequence:** The MIK 500-sample score is a convenience number, not a
+stratified estimate. It should not be used for parameter tuning. Step 2
+of the remediation plan will replace it with frozen, seeded, normalized
+sampling.
+
+## Results — current release binary
+
+### GiantSteps-key (primary accuracy benchmark)
+
+| Metric | Value |
+|---|---|
+| **Scored** | 604 (0 failed) |
+| **Key exact match** | **62.4%** (377/604) |
+| Tonic correct (mode-agnostic) | 66.2% |
+| MIREX weighted score | 0.704 |
+| **Camelot compatible** | **82.3%** |
+| Avg time per track | 5,519 ms |
+
+**Historical context** (from the GiantSteps ISMIR 2015 paper):
+
+| System | Exact match on GiantSteps |
+|---|---|
+| Mixed In Key (commercial) | 67.22% |
+| Rekordbox (commercial) | 71.85% |
+| **TuneLock (current)** | **62.4%** |
+
+TuneLock is respectable but behind both historical commercial results on
+this independently annotated dataset. The dataset is intentionally biased
+toward difficult Beatport mistakes, though its authors manually checked
+a random 15% of annotations and found them correct.
+
+### MIK 500 sample (MIK agreement — not ground truth)
+
+| Metric | Value |
+|---|---|
+| **Scored** | 497 (3 failed) |
+| **Key exact match (MIK agreement)** | **68.8%** (342/497) |
+| Tonic correct (mode-agnostic) | 70.6% |
+| MIREX weighted score | 0.759 |
+| **Camelot compatible** | **85.9%** |
+| **BPM ±1 BPM (raw)** | 59.0% |
+| **BPM ±1 BPM (octave-corrected)** | 60.8% |
+| BPM ratio median | 1.000 |
+
+Note: 3 WAV files fail decoding intermittently due to non-standard fmt
+chunks. When they fail, the score drops to 68.6% (341/497). This decode
+instability should not affect the accuracy assessment.
+
+## Error taxonomy
+
+### GiantSteps-key (604 tracks)
+
+| Error type | Count | % | Meaning |
 |---|---|---|---|
-| ready | 18,909 | **19,531** | Decodable format, has key label, file exists |
-| missing_file | 658 | 658 | Path in CSV not found on disk |
-| unsupported_format | 624 | **0** | Phase 2 added AAC/ALAC/MP4/AIFF codecs + ffmpeg sidecar |
-| atonal | 30 | 32 | MIK "All" — no stable key, excluded from scoring |
+| correct | 377 | 62.4% | Exact key match |
+| fifth | 73 | 12.1% | Perfect-fifth substitution |
+| other | 91 | 15.1% | No simple relationship |
+| relative | 24 | 4.0% | Relative major/minor |
+| parallel | 23 | 3.8% | Same tonic, wrong mode |
+| semitone | 16 | 2.6% | Off by one semitone |
 
-## Results comparison
+### MIK 500 sample (497 scored)
 
-| Metric | Baseline | Key Tuned | Tempo Rewritten | Phase 2 Media | Phase 5 Log Gain | Total Change |
-|---|---|---|---|---|---|---|
-| **Scored** | 497 (3 failed) | 497 (3 failed) | 497 (3 failed) | **500 (0 failed)** | 497 (3 failed) | +3 |
-| **Key exact match** | **61.4%** | **67.8%** | 67.8% | **68.2%** | **68.8%** | **+7.4%** |
-| Tonic correct (mode-agnostic) | 64.2% | 70.4% | 70.4% | 70.8% | 70.6% | +6.4% |
-| MIREX weighted score | 0.708 | 0.754 | 0.754 | 0.755 | 0.759 | +0.051 |
-| **Camelot compatible** | **83.7%** | **86.3%** | 86.3% | 86.0% | 85.9% | **+2.2%** |
-| **BPM ±1 BPM (raw)** | **19.7%** | 19.7% | **59.4%** | 58.6% | 59.0% | **+39.3%** |
-| **BPM ±1 BPM (octave-corrected)** | **34.2%** | 34.2% | **61.2%** | 60.4% | 60.8% | **+26.6%** |
-| BPM ratio median | 0.987 | 0.987 | 1.000 | 1.000 | 1.000 | +0.013 |
-| Avg time per track | 4,012 ms | 4,044 ms | 3,952 ms | 4,104 ms | ~4,100 ms | +88 ms |
+| Error type | Count | % | Meaning |
+|---|---|---|---|
+| correct | 342 | 68.8% | Exact key match (MIK agreement) |
+| fifth | 54 | 10.9% | Perfect-fifth substitution |
+| other | 54 | 10.9% | No simple relationship |
+| relative | 22 | 4.4% | Relative major/minor |
+| parallel | 9 | 1.8% | Same tonic, wrong mode |
+| semitone | 16 | 3.2% | Off by one semitone |
 
-## Error taxonomy comparison
-
-| Error type | Baseline | Tuned | Phase 2 | Phase 5 | Change | Meaning |
-|---|---|---|---|---|---|---|
-| correct | 305 | 337 | 341 | 344 | +39 | Exact key match |
-| fifth | 76 | 58 | 55 | 54 | -22 | Perfect-fifth substitution |
-| other | 67 | 52 | 54 | 53 | -14 | No simple relationship |
-| relative | 21 | 21 | 21 | 22 | +1 | Relative major/minor |
-| parallel | 14 | 13 | 13 | 9 | -5 | Same tonic, wrong mode |
-| semitone | 14 | 16 | 16 | 16 | +2 | Off by one semitone |
-
-## By format (Phase 2)
+## By format (MIK sample)
 
 | Format | n | Exact % | MIREX | Notes |
 |---|---|---|---|---|
-| mp3 | 469 | 68.2% | 0.757 | Primary format |
-| m4a | 9 | 88.9% | 0.889 | New — AAC/ALAC via Symphonia isomp4 |
+| mp3 | 469 | 68.7% | 0.759 | Primary format |
+| m4a | 9 | 88.9% | 0.889 | AAC/ALAC via Symphonia isomp4 |
 | flac | 13 | 69.2% | 0.792 | |
-| wav | 9 | 44.4% | 0.467 | 3 via ffmpeg fallback (non-standard fmt chunk) |
+| wav | 6 | 50.0% | 0.500 | Intermittent decode failures (non-standard fmt) |
 
-## Tuning changes (Phase 4: key profile tuning)
+## By genre (GiantSteps — primary benchmark)
 
-Three changes, each measured independently on the same 500-track sample:
+| Genre | n | Exact % | MIREX |
+|---|---|---|---|
+| indie-dance nu-disco | 14 | 85.7% | 0.893 |
+| pop rock | 7 | 85.7% | 0.900 |
+| glitch-hop | 6 | 83.3% | 0.867 |
+| psy-trance | 5 | 80.0% | 0.800 |
+| deep-house | 77 | 72.7% | 0.805 |
+| electro-house | 51 | 70.6% | 0.786 |
+| house | 47 | 68.1% | 0.732 |
+| electronica | 20 | 65.0% | 0.725 |
+| dubstep | 22 | 63.6% | 0.750 |
+| breaks | 14 | 57.1% | 0.607 |
+| techno | 34 | 55.9% | 0.638 |
+| trance | 58 | 56.9% | 0.691 |
+| drum-and-bass | 38 | 55.3% | 0.597 |
+| chill-out | 11 | 54.5% | 0.645 |
+| minimal | 11 | 54.5% | 0.545 |
+| progressive-house | 88 | 53.4% | 0.650 |
+| tech-house | 81 | 53.1% | 0.607 |
 
-### 1. Profile weight rebalancing: +2.0% exact
+Progressive house and tech house are the weakest genres (53.4% and 53.1%).
+These genres often use sustained pad chords and arpeggios that create
+ambiguous chroma distributions — a known limitation of template methods
+on electronic music.
+
+## CNN experiment status: INVALID, deferred
+
+The CNN experiment (commit c9bb494, "Phase 11 verdict: CNN trained,
+evaluated, and CUT — 29.6% vs 68.2% classical") reported 29.6% ± 2.3%
+five-fold cross-validation accuracy. This result does **not** constitute
+a fair evaluation. The experiment had multiple implementation bugs:
+
+1. **Windowing bug** (`extract_features.py:68-74`): `load_audio` loads
+   only the first 30 seconds (`duration=30.0`), making the centering
+   branch unreachable. Features are then truncated to 252 frames (~5.85
+   seconds at hop 512). The model effectively learns from the beginning
+   of each track, not a representative sample.
+
+2. **Augmentation is a no-op** (`train_cv.py:64-73,141`): After adding
+   the channel dimension (`data[:, np.newaxis, :, :]`), `np.roll(d, s,
+   axis=0)` rolls the channel dimension (length 1). Every "augmented"
+   sample is identical to its original.
+
+3. **Model selection bias** (`train_cv.py:109-111`): Each fold selects
+   and reports its best epoch on the same validation fold, introducing
+   optimistic bias.
+
+4. **Missing pitch-shift augmentation**: The reference CNN work
+   (Korzeniowski & Widmer, 2017) uses pitch shifts from −4 to +7
+   semitones. Our experiment omits this entirely.
+
+5. **Insufficient training data**: The experiment used only 604
+   GiantSteps tracks. The published CNN work trained on 1,077
+   high-confidence GiantSteps-MTG tracks and achieved 67.9% exact on the
+   held-out 604-track GiantSteps set.
+
+**Verdict:** The CNN was not fairly evaluated. "CNN cut" should be
+changed to "experiment invalid; deferred." A corrected experiment
+requires: (a) the GiantSteps-MTG training audio (1,486 tracks, Zenodo
+DOI 10.5281/zenodo.1101082), (b) fixed windowing/augmentation/epoch
+selection, and (c) the Korzeniowski pitch-shift protocol. The local
+classical result can still render first while an optional model upgrades
+it asynchronously.
+
+## Engine issues identified
+
+The following issues were identified during the accuracy review and are
+prioritized for remediation:
+
+1. **Ranked alternatives are not global runner-ups.** The ensemble
+   discards 23 scores per segment and retains only that segment's winner
+   (`ensemble.rs:298-329`). A key that comes second in every segment is
+   omitted completely. On the stored GiantSteps report, the truth
+   appeared among the returned candidates for only 49.8% of wrong
+   predictions.
+
+2. **Confidence is not calibrated.** The formula `0.6 × agreement + 0.4
+   × cosine_score` is invented, not measured. With one segment,
+   agreement is always 1.0, giving confidence a 0.6 floor. Even
+   predictions above 0.90 confidence were only 78.2% accurate on
+   GiantSteps.
+
+3. **Abstention cannot trigger.** The timeline abstention threshold is
+   0.35 (`key_timeline.rs:21`), but confidence has a 0.6 floor, so
+   per-segment abstention never fires. On the stored GiantSteps run, a
+   0.35 threshold retained all 604 tracks.
+
+4. **Timeline modulation detection is naive.** Any disagreement among
+   eight independently classified chunks is called a "modulation"
+   (`key_timeline.rs`). There is no smoothing, persistence requirement,
+   or boundary detection.
+
+5. **Genre profiles are guessed and backwards.** `genre_profiles.rs:31-43`
+   comments claim Krumhansl was designed for classical and Temperley for
+   rock/pop, but Essentia documentation says the reverse. The weights
+   are guesses, not measurements, and the module is not wired into the
+   main ensemble path.
+
+6. **MIK used as calibration target.** The plan's own rule says MIK must
+   be an opinion and disagreement source, never a calibration target
+   (`plan-dfdfe6627c43db0f.md:238`). The log-gain and ensemble weights
+   were selected on MIK agreement, violating this rule.
+
+## Tuning history
+
+### Phase 4: Profile weight rebalancing + log compression
 
 Changed `ProfileWeights::default()` from `{0.4, 0.5, 0.5}` to
-`{0.15, 0.25, 1.0}` (krumhansl, temperley, shaath).
+`{0.15, 0.25, 1.0}` (krumhansl, temperley, shaath). Applied
+`log(1 + gain * chroma[i])` before cosine similarity. These changes
+were calibrated on the MIK 500-sample, which violates the plan's
+calibration rule. They need re-evaluation against GiantSteps with
+frozen validation/test splits.
 
-The Sha'ath 72-band Direct Spectral Kernel profile is the strongest single
-method — it uses a CQT approximation with cosine windowing and octave
-weighting. Krumhansl and Temperley are kept at low weights because they
-provide critical mode (major/minor) discrimination that Sha'ath alone
-lacks: Sha'ath-only scores 61.4% exact with parallel-mode errors spiking
-from 13 to 30.
+### Phase 5: Log compression gain tuning
 
-### 2. Log compression of chroma: +4.4% exact (cumulative +6.4%)
+Increased 12-bin `LOG_GAIN` from 2.0 to 5.0. On the MIK sample this
+changed 11 predictions (fixed 4, broke 2, net +2 after WAV decode
+instability). On GiantSteps it changed 20 predictions (fixed 10, broke
+5, net +5). The paired exact-test p-value is approximately 0.30, so
+this is a provisional improvement, not a demonstrated optimum.
 
-Applied `log(1 + gain * chroma[i])` to the chroma vector before cosine
-similarity scoring. This compresses the dynamic range so the tonic and
-fifth (the two strongest bins) don't dominate the score. Weaker bins —
-the 3rd, 4th, 6th, and 7th scale degrees — become more influential.
+### Approaches that did NOT work
 
-These weaker bins are the notes that **differ between a key and its
-fifth-neighbour** (e.g. C major has F natural, G major has F#). Amplifying
-their contribution directly combats fifth-substitution errors, which were
-the largest error category in the baseline (76/192 errors = 15.3%).
-
-Optimal gains, calibrated on the 500-track sample:
-- 12-bin chroma (Krumhansl/Temperley): gain = 2.0
-- 72-band chroma (Sha'ath): gain = 3.0
-
-The 72-band path benefits from stronger compression because it has more
-bins (72 vs 12), so the dynamic range is wider.
-
-### 3. Approaches that did NOT work
-
-- **Pearson correlation instead of cosine similarity**: Caused a major
-  regression (61.4% → 43.9%). Parallel-mode errors exploded from 14 to 69.
-  Cosine similarity's sensitivity to absolute magnitudes helps distinguish
-  major from minor profiles.
-
-- **Tonic prominence boost** (multiplying score by `1 + alpha * chroma[tonic]/max`):
-  Consistently hurt accuracy at all tested alpha values (0.15, 0.35). The
-  boost helps the correct key's tonic but also helps the fifth-neighbour's
-  "tonic" (which is the fifth of the true key and thus also strong).
-
-- **Folding 72-band chroma to 12-bin for K/T paths**: The 72-band octave
-  weights distort the 12-bin profile matching (61.4% → 57.5%).
-
-- **16 segments instead of 8**: No improvement; slightly increased relative
-  errors due to noisier per-segment votes.
-
-## Key findings
-
-1. **67.8% exact key accuracy** across a wildly diverse 500-track sample
-   (rock, classical, soundtrack, world, a cappella, electronic). Electronic
-   genres (house, techno, trance) score near 100%.
-
-2. **86.3% Camelot compatibility** — the more DJ-relevant number. A
-   fifth-related "error" is still harmonically mixable.
-
-3. **Fifth-substitution errors reduced from 76 to 58** (-24%). Log
-   compression was the key insight: by compressing the dynamic range, the
-   discriminative scale degrees (3rd, 4th, 7th) that differ between
-   fifth-neighbours get more influence in the cosine similarity.
-
-4. **BPM accuracy is unchanged** (19.7% raw, 34.2% octave-corrected). This
-   is the next target — Phase 3: tempo rewrite.
-
-5. **WAV format underperforms** (33.3% vs 68.3% for mp3). Small sample (6
-   tracks, 3 failed to decode). Needs investigation with a larger WAV
-   subset once the Phase 2 codec work is done.
-
-## Next steps
-
-- **Phase 3: Tempo rewrite** — ✅ Complete. See below.
-- **Phase 2:** Fix WAV decode issue and add `.m4a`/`.aiff` codec support to
-  recover the 624 unsupported-format tracks.
-- **Phase 1.5:** Download GiantSteps audio and run cross-corpus validation.
-- **Future key tuning:** Consider harmonic summation in the chroma to
-  reduce 3rd-harmonic interference (the 3rd harmonic of the tonic lands on
-  the fifth, artificially boosting the fifth bin).
-
-## Phase 3: Tempo rewrite
-
-### Problem
-
-The original tempo detector had three critical issues:
-
-1. **60–180 BPM range restriction** — clipped at 180, missing tracks up to
-   190 BPM in the MIK corpus.
-2. **No octave resolution** — picked the single strongest autocorrelation
-   peak, which is often at half-time (64 BPM for a 128 BPM track) because
-   onsets are more consistent at every-other-beat.
-3. **Global maximum only** — didn't evaluate multiple peaks.
-
-Result: 19.7% ±1 BPM accuracy (raw), 34.2% octave-corrected. The BPM ratio
-median was 0.987, indicating a slight systematic half-tempo bias.
-
-### Solution
-
-Complete rewrite of `tempo_detector.rs`:
-
-1. **Wider search range**: 40–220 BPM (was 60–180).
-2. **Multiple peak evaluation**: Finds the top 10 local maxima in the
-   autocorrelation, deduplicated to avoid near-duplicate lags.
-3. **Octave correction**: For each autocorrelation peak at base BPM B,
-   evaluates candidates at ×0.5, ×1, and ×2. This covers the three common
-   octave errors (half-time, correct, double-time).
-4. **Tempo preference function**: Gaussian on a log-BPM scale centered at
-   ~120 BPM (σ ≈ 1 octave). Mildly favours the 80–170 BPM range where most
-   popular and electronic music lives. The preference is multiplicative on
-   the autocorrelation strength, so a very strong peak at 64 BPM can still
-   win if the 128 BPM peak is weak — the preference just breaks ties.
-5. **Parabolic interpolation**: Sub-frame precision for peak locations,
-   giving more precise BPM estimates.
-6. **Confidence scoring**: Based on the ratio of the top candidate's score
-   to the second candidate's score (available via `detect_tempo_diagnostic`).
-7. **Synthetic beat test**: Unit test generates a 128 BPM kick drum pattern
-   and verifies the detector returns ~128 BPM (within ±3 BPM).
-
-### Result
-
-| Metric | Before | After | Change |
-|---|---|---|---|
-| **BPM ±1 (raw)** | 19.7% | 59.4% | **+39.7%** (3× improvement) |
-| **BPM ±1 (octave-corrected)** | 34.2% | 61.2% | +27.0% |
-| BPM ratio median | 0.987 | 1.000 | No systematic bias |
-
-The raw accuracy improvement (19.7% → 59.4%) is larger than the
-octave-corrected improvement (34.2% → 61.2%) because the detector now
-picks the correct octave on its own — the bench's octave correction has
-less work to do.
-
-## Phase 2: Media foundation
-
-### Changes
-
-1. **Symphonia codecs added:** `aac`, `alac`, `isomp4`, `aiff` features
-   enabled in `Cargo.toml`. Unlocks 557 `.m4a` + 114 `.aif/.aiff` files
-   natively (no external tools needed).
-
-2. **Hint fix:** File extension is now passed to Symphonia's `Hint`,
-   helping the probe select the correct demuxer for unusual files.
-
-3. **ffmpeg sidecar fallback:** New `media/` module with tool detection
-   (`media/tools.rs`) and ffmpeg pipe decode (`media/ffmpeg.rs`). When
-   Symphonia fails to probe a file, the decode chain falls back to:
-   ```
-   ffmpeg -i <input> -f f32le -acodec pcm_f32le -ac 1 -ar 22050 -
-   ```
-   This handles:
-   - 3 WAV files with non-standard 20-byte fmt chunks (Symphonia bug)
-   - All video containers (.mp4, .mov, .webm, .mkv, .m4v, etc.)
-   - Any other format Symphonia doesn't support
-
-4. **Video file support:** `scan_folder` and the bench now recognize
-   video extensions. Audio is extracted via the ffmpeg sidecar.
-
-5. **Corpus classification updated:** `DECODABLE_EXTS` in `corpus.rs`
-   expanded to include all new formats. 624 previously "unsupported"
-   files are now classified as "ready".
-
-### Impact
-
-| Metric | Before | After | Change |
-|---|---|---|---|
-| Decode failures | 3 | **0** | -3 |
-| Corpus ready | 18,909 | **19,531** | +622 |
-| Corpus unsupported | 624 | **0** | -624 |
-| Key exact (500 sample) | 67.8% | **68.2%** | +0.4% |
-| Fifth errors | 58 | **55** | -3 |
-
-The m4a format scored 88.9% exact (n=9) — the highest of any format,
-suggesting AAC/ALAC files in the corpus have clearer harmonic content
-(many are from deadmau5 and other electronic artists with well-defined
-keys).
-
-### ffmpeg availability
-
-ffmpeg is detected on PATH at runtime. If absent, the app degrades
-gracefully — Symphonia-only formats work, but the 3 broken WAV files
-and all video files report an unsupported error. Install via:
-```powershell
-winget install Gyan.FFmpeg
-```
-
-## Phase 5: Log compression gain tuning
-
-### Problem
-
-After Phase 4, the error taxonomy showed:
-- **55 fifth errors** (34.8% of all errors) — the largest single category.
-- **13 parallel errors** — same tonic, wrong mode.
-- **21 relative errors** — relative major/minor confusion.
-- **16 semitone errors** — off by one semitone.
-
-The fifth errors are caused by spectral harmonics: the 3rd harmonic of the
-tonic lands on the fifth, artificially boosting the fifth bin in the chroma.
-Log compression amplifies the weaker distinguishing pitch classes (e.g. F
-natural in C major vs F# in G major) relative to the strong shared ones.
-
-### Solution
-
-Increased the 12-bin log compression gain from 2.0 to 5.0. The 72-band gain
-remains at 3.0 (unchanged).
-
-The gain controls how aggressively the dynamic range is compressed before
-cosine similarity scoring. Higher gain = weaker bins (3rd, 4th, 6th, 7th
-scale degrees) contribute more to the score. These are exactly the notes
-that differ between a key and its fifth-neighbour.
-
-### Ablation results
-
-| LOG_GAIN (12-bin) | LOG_GAIN_72 | Exact | Fifth | Parallel | Relative | Semitone |
-|---|---|---|---|---|---|---|
-| 2.0 (baseline) | 3.0 | 68.2% | 55 | 13 | 21 | 16 |
-| 4.0 | 3.0 | 68.6% | 54 | 10 | 23 | 16 |
-| **5.0 (chosen)** | **3.0** | **68.8%** | **54** | **9** | **22** | **16** |
-| 8.0 | 3.0 | 68.4% | 53 | 9 | 24 | 16 |
-| 5.0 | 2.0 | 68.6% | 53 | 10 | 22 | 16 |
-| 5.0 | 5.0 | 68.2% | 53 | 9 | 26 | 18 |
-
-The 12-bin gain has a clear optimum at 5.0. The 72-band gain is more
-sensitive — both increasing (5.0) and decreasing (2.0) it hurt accuracy.
-The 72-band Sha'ath path already has octave weighting built into the Direct
-Spectral Kernel, so additional compression is less helpful.
-
-### Approaches that did NOT work (Phase 5)
-
-- **HPCP-style subharmonic summation**: Folded spectral energy at harmonic
-  frequencies back toward candidate fundamentals. Result: 66.2% exact (−2.0
-  points). Fifth errors increased from 55 to 62. The Krumhansl/Temperley/
-  Sha'ath profiles were designed for plain chroma, not HPCP — the modified
-  chroma distribution no longer matches the profile templates.
-
-- **Tuning estimation before chroma binning**: Estimated a global tuning
-  offset from spectral magnitudes and adjusted the semitone grid. Result:
-  67.8% exact (−0.4 points). The MIK corpus is predominantly A=440
-  electronic music, so tuning correction created more untyped errors than
-  it fixed semitone errors.
-
-- **Mode-flip heuristic (3rd/6th/7th degree evidence)**: Flipped the mode
-  when the opposite mode's scale degrees were 1.5× more prominent. At the
-  per-segment level, temporal voting overrode the correction (no effect).
-  At the track level with a 1.2× threshold, it triggered but made things
-  worse (parallel errors 13→16). Electronic music often has both major and
-  minor 3rds coexisting (Faraldo 2017), so the 3rd-degree ratio is not a
-  reliable mode indicator.
-
-- **Fifth-disambiguation via tonic prominence**: When the winner and
-  runner-up were a fifth apart, picked the one whose tonic had higher
-  chroma energy relative to the mean. Result: 66.4% exact (−1.8 points).
-  Fifth errors increased from 55 to 65. In electronic music, the bass
-  often plays the chord root (which may be the dominant), not the key
-  tonic, so tonic prominence is unreliable.
-
-- **Power-law magnitude compression + band restriction (100–5000 Hz)**:
-  Applied `mag^0.3` compression and restricted chroma to the 100–5000 Hz
-  band. Combined with the other changes, this was part of the 66.2%
-  regression. Not tested in isolation because the HPCP change it was
-  paired with was clearly harmful.
-
-### Key insight
-
-The only successful change was the simplest: increasing the log compression
-gain on the 12-bin path. This confirms that the engine is already well-tuned
-for this corpus, and that naive post-hoc chroma heuristics (mode-flip,
-fifth-disambiguation, HPCP, tuning estimation) create more errors than they
-fix. The profiles and temporal voting are doing their job; the improvement
-comes from giving the discriminative scale degrees more weight in the
-cosine similarity.
+- **HPCP subharmonic summation**: 66.2% MIK (−2.0). Profiles expect
+  plain chroma, not HPCP.
+- **Tuning estimation**: 67.8% MIK (−0.4). MIK corpus is A=440.
+- **Mode-flip heuristic**: No effect at 1.5× threshold; harmful at 1.2×.
+  EDM has both thirds coexisting (Faraldo 2017).
+- **Fifth-disambiguation via tonic prominence**: 66.4% MIK (−1.8). Bass
+  plays chord root, not key tonic in electronic music.
+- **Pearson correlation**: 43.9% MIK (−24.3%). Parallel-mode errors
+  exploded from 14 to 69.
 
 ## Reproducing
 
 ```powershell
 cd src-tauri
-cargo build --release --bin tunelock-bench
-.\target\release\tunelock-bench.exe --corpus ..\ground-truth\MIKCompleteLibrary.csv --limit 500 --out ..\ground-truth\phase2c-500.json
+$env:PATH = "C:\Users\louis.media\.cargo\bin;" + $env:PATH
+cargo run --release --bin tunelock-bench -- --giantsteps ..\ground-truth\giantsteps-key
+cargo run --release --bin tunelock-bench -- --corpus ..\ground-truth\MIKCompleteLibrary.csv --limit 500
 ```
 
-The stratified sample is deterministic for a given corpus + code revision, so
-results are reproducible. To score the full 19,531 ready tracks, omit `--limit`.
+## Remediation plan
 
-## GiantSteps cross-corpus validation
-
-### Method
-
-- **Corpus:** GiantSteps key dataset (604 Beatport previews, ~2 min each).
-- **Audio:** 604/604 downloaded (831 MB). Beatport preview URLs are
-  partially deprecated; ~200 required the JKU backup mirror.
-- **Annotations:** Standard key names (e.g. "C minor", "Eb minor").
-- **BPM:** Not annotated in GiantSteps — BPM metrics are N/A.
-- **All tracks scored** (0 failures, 0 missing).
-
-### Results
-
-| Metric | GiantSteps (604) | MIK (500 stratified) |
-|---|---|---|
-| **Key exact** | **60.8%** | **67.8%** |
-| Tonic correct | 65.1% | 70.4% |
-| MIREX weighted | 0.694 | 0.754 |
-| Camelot compatible | 82.3% | 86.3% |
-| Avg time/track | 3,395 ms | 3,952 ms |
-
-### Error taxonomy
-
-| Error type | Count | % | MIK comparison |
-|---|---|---|---|
-| correct | 367 | 60.8% | 67.8% |
-| fifth | 78 | 12.9% | 11.7% |
-| other | 92 | 15.2% | 10.5% |
-| parallel | 26 | 4.3% | 2.6% |
-| relative | 26 | 4.3% | 4.2% |
-| semitone | 15 | 2.5% | 3.2% |
-
-### Per-genre highlights
-
-| Genre | n | Exact % | MIREX |
-|---|---|---|---|
-| glitch-hop | 6 | 83.3% | 0.867 |
-| indie-dance nu-disco | 14 | 78.6% | 0.836 |
-| deep-house | 77 | 72.7% | 0.805 |
-| electro-house | 51 | 70.6% | 0.796 |
-| house | 47 | 68.1% | 0.732 |
-| progressive-house | 88 | 50.0% | 0.628 |
-| tech-house | 81 | 50.6% | 0.588 |
-| trance | 58 | 53.4% | 0.667 |
-| drum-and-bass | 38 | 52.6% | 0.563 |
-| minimal | 11 | 45.5% | 0.455 |
-
-### Analysis
-
-1. **60.8% exact on GiantSteps** is consistent with published results for
-   template/profile methods (60-72% exact). The literature reports CNN
-   state-of-the-art at 70-75% on this dataset.
-
-2. **Lower than MIK (60.8% vs 67.8%)** — expected. GiantSteps is entirely
-   electronic (EDM), where the dominant is often emphasised harder than the
-   tonic in the mix, making fifth-substitution more likely. The MIK corpus
-   is more genre-diverse, with many rock/pop/soundtrack tracks where the
-   tonic is clearer.
-
-3. **"Other" errors are higher** (15.2% vs 10.5%) — electronic music has
-   more ambiguous tonal centres (loop-based, modal, atonal sections).
-
-4. **Progressive house and tech house are the weakest** (50.0% and 50.6%).
-   These genres often use sustained pad chords and arpeggios that create
-   ambiguous chroma distributions. This is a known limitation of template
-   methods on electronic music.
-
-5. **Deep house and electro-house are the strongest** electronic genres
-   (72.7% and 70.6%) — clearer harmonic content with distinct basslines.
-
-6. **BPM is N/A** — GiantSteps annotations don't include tempo labels.
-
-### Reproducing
-
-```powershell
-cd src-tauri
-.\target\release\tunelock-bench.exe --giantsteps ..\ground-truth\giantsteps-key --out ..\ground-truth\giantsteps-full.json
-```
+1. ✅ Repair benchmark and documentation (this file)
+2. Freeze train/validation/test manifests with seeded, normalized sampling
+3. Return and aggregate all 24 key scores per segment; calibrate confidence
+4. Run clean ablations: 12/72 paths, no-HPSS, kernel sweep, multiple windows
+5. Implement braw/bgate HPCP experiment on a separate chroma path
+6. Build gold set infrastructure + key-identification tooling
+7. Download MTG dataset, fix CNN bugs, re-run corrected experiment

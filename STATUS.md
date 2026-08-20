@@ -19,7 +19,7 @@ The ultimate mix planner. Accurate key + BPM + energy analysis with honest confi
 - **Playlist generation:** real harmonic compatibility scoring + BPM similarity. `generate_playlist` and `get_compatible_tracks` are functional.
 - **Mix Canvas:** clip timeline + transition scoring — in-memory only, nothing persists.
 - **Delivery:** CSV/M3U8 as browser downloads only; real export unreachable from UI.
-- **CNN (Phase 11):** Python ML project scaffolded and **trained, but cut**. Cross-validated accuracy on GiantSteps-key (604 tracks) was 29.6% ± 2.3% — less than half the classical engine's 68.2%. Root cause: insufficient training data (GiantSteps-MTG's Beatport URLs are dead). The `ml/` scaffolding remains for future reactivation with more data or pretraining. The Rust `key_cnn.rs` stub returns `None` and is not wired into the ensemble.
+- **CNN (Phase 11):** Python ML project scaffolded and **trained, but the experiment was invalid** (not fairly evaluated). Multiple implementation bugs: windowing loaded only first 30s, augmentation was a no-op (rolled channel axis of length 1), best-epoch selection bias, no pitch-shift augmentation, insufficient training data (604 tracks vs 1,077 in the reference work). The 29.6% result diagnoses implementation problems, not CNN viability. Status: **experiment invalid; deferred.** The `ml/` scaffolding remains for a corrected re-run with MTG training data and the Korzeniowski protocol. The Rust `key_cnn.rs` stub returns `None` and is not wired into the ensemble.
 
 ## Known defects (see plan, `C:\Users\louis.media\.devin\plans\plan-dfdfe6627c43db0f.md`)
 - ~~`insert_track` returns a wrong id on re-import~~ **Fixed (Phase 5)** — uses `RETURNING id`.
