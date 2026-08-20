@@ -21,6 +21,10 @@ src-tauri/test*.txt
 
 # ML / benchmark data (large, downloaded)
 ml/data/
+ml/models/
+ml/__pycache__/
+ml/*.h5
+ml/venv/
 ground-truth/giantsteps-key/audio/
 ground-truth/giantsteps-mtg-key/audio/
 
