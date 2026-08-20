@@ -5,6 +5,8 @@
 ## What the app is
 The ultimate mix planner. Accurate key + BPM + energy analysis with honest confidence and ranked alternatives, exploration of harmonic relationships across a whole collection, set planning, and non-destructive DJ-ready delivery. Multimedia: video files are in scope. Target: **elite, all-genre accuracy that surpasses Mixed In Key.**
 
+**Design language:** Walnut Console — a modern musical instrument housed in a vintage shell. Principle: *character in the frame; precision in the display.* Three-level workspace: Set Map (strategic trajectory) → Layer Lab (eight-slot exploratory grid, 2-4 active) → Transition Workbench (precision editing). Semantic color system: Camelot hues highest saturation, waveform RGB darker, amber = queued, green = active, red = failure only. See `PREP/design-language.md`.
+
 ## What actually works today
 - **Analyze (Tuner):** drop a file → live per-stage progress → key, Camelot, BPM, energy, confidence, ranked runner-ups with musical reasons, Camelot wheel, Harmonic Mosaic, piano roll, metronome, chroma, timings, three-band waveform.
 - **Key engine:** HPSS → dual 12-bin + 72-band chroma → Krumhansl/Temperley/Sha'ath → 8-segment ranked vote. ~4 s/track in release (500-track sample).

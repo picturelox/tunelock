@@ -1,31 +1,88 @@
 # TuneLock Transition Workbench — Product Feature Specification
 
-**Status:** Product direction approved; implementation not started  
-**Version:** 0.1  
+**Status:** Product direction approved; design language updated; implementation in progress  
+**Version:** 0.2  
 **Date:** 2026-08-20  
 **Owner:** TuneLock  
-**Primary surface:** Mix Canvas  
-**Related roadmap:** Phase 7, Waveforms and the mix-planning workbench
+**Primary surface:** Mix Canvas (three-level workspace)  
+**Related roadmap:** Phase 7, Waveforms and the mix-planning workbench  
+**Related documents:** `PREP/design-language.md`, `PREP/slice-a-architecture-decision.md`, plan file Part 7
 
 ## 1. Executive decision
 
-TuneLock should make a synchronized, waveform-led **Transition Workbench** the standard detailed view for every transition in Mix Canvas.
+TuneLock should make a synchronized, waveform-led **Transition Workbench** the standard detailed view for every transition in Mix Canvas. Mix Canvas itself is a **three-level workspace** — Set Map, Layer Lab, and Transition Workbench — that are three views of the same saved mix state, not disconnected modes.
 
 The workbench combines:
 
-- two aligned tracks on one musical timeline;
+- two or more aligned tracks on one musical timeline;
 - beat and phrase grids;
 - quantized loops and cue points;
 - synchronized transport and pitch-preserving tempo matching;
-- deck and master meters;
-- crossfader and three-band EQ kills;
+- per-player and bus meters;
+- A/B bus crossfader and three-band EQ kills;
 - full-mix and, when prepared, four-stem waveforms;
 - per-stem gain, mute, and solo;
-- a saved, non-destructive transition plan.
+- a saved, non-destructive transition plan;
+- multi-layer musical intelligence (bass ownership, vocal overlap, spectral crowding, headroom).
+
+The engine supports up to **eight player slots** (MAX_PLAYERS=8), with 2-4 typically audible. The two-track Transition Workbench uses Players 0 and 1 on Buses A and B. The Layer Lab exposes all eight slots for exploratory composition.
 
 This is a planning and audition environment, not a live-performance deck and not a general-purpose DAW. It should help a DJ answer: **where should these tracks overlap, which musical elements should be present, and will the transition remain danceable?**
 
 Stem separation is optional enrichment. The standard workbench must remain useful immediately with the original files and TuneLock's cached three-band waveforms. No model load or separation job may delay normal key, BPM, energy, library, or Mix Canvas results.
+
+## 1.1 The three-level workspace
+
+Mix Canvas is one continuous workspace with three levels of magnification. These are not disconnected modes — they are three views of the same saved mix state. See `PREP/design-language.md` for the full design specification.
+
+### Set Map (strategic)
+
+Shows only information that helps answer "Where is this mix going?":
+- Energy trajectory
+- Key journey
+- Tempo changes
+- Active-layer density
+- Vocal-presence regions
+- Bass ownership
+- Saved scenes and transitions
+- Warnings (overcrowding, insufficient headroom)
+
+This is TuneLock's clearest distinction from live DJ software.
+
+### Layer Lab (exploratory)
+
+Eight available source slots, 2-4 typically audible. Each compact slot shows:
+- Track, sample, loop, or stem-group name
+- Musical role: foundation, drums, bass, vocal, harmony, texture, or FX
+- Miniature waveform
+- Playback position and beat phase
+- Camelot key and source BPM
+- Gain meter
+- Mute, solo, loop, and launch state
+- A/B/Master bus assignment
+- Prepared-stems indicator
+- Ready, queued, playing, or stopped state
+
+Only the selected slot expands. Stems nest inside source slots. One or two slots may be pinned for comparison.
+
+### Transition Workbench (precision)
+
+The existing detailed workbench surface for the selected transition. Uses Players 0/1 on Buses A/B by default; advanced transitions can include 3-4 sources.
+
+### Navigation
+
+Selecting a transition expands the Workbench in place. Selecting a scene reveals its layers. Zooming out shows those decisions as part of the set's larger story.
+
+## 1.2 Engine vocabulary
+
+The audio engine uses a generalized vocabulary, not deck-specific types:
+- `PlayerId(u8)` — eight player slots (MAX_PLAYERS=8)
+- `BusId::A`, `BusId::B`, `BusId::Master` — two crossfader buses plus direct-to-master
+- `SourceHandle` — lightweight reference to decoded audio in the engine's source registry
+- Frame-addressed commands with real scheduling (not block-boundary)
+- Quantized launch: Immediate, NextBeat, NextBar, NextPhrase
+
+The two-track Transition Workbench uses Players 0 and 1. The Layer Lab exposes all eight slots. See `PREP/slice-a-architecture-decision.md` for the engine architecture.
 
 ## 2. Product rationale
 

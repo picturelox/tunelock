@@ -1,15 +1,15 @@
 # Transition Workbench Slice A — Architecture Decision (Revised)
 
-**Status:** Revised after technical review  
+**Status:** Revised after technical review; engine vocabulary generalized  
 **Date:** 2026-08-20  
 **Owner:** TuneLock  
-**Related:** `PREP/transition-workbench-feature-spec.md` §8, §16 Slice A
+**Related:** `PREP/transition-workbench-feature-spec.md` §1.2, §8, §16 Slice A, `PREP/design-language.md`
 
 ## Revision summary
 
-The initial decision (Web Audio API as primary engine) was based on flawed analysis. A technical review identified critical errors in both prototypes. This document corrects the decision.
+The initial decision (Web Audio API as primary engine) was based on flawed analysis. A technical review identified critical errors in both prototypes. This document corrects the decision and generalizes the engine vocabulary for the eight-player Layer Grid.
 
-**Revised decision: Native Rust engine on CPAL is the authoritative audio engine. Web Audio API is demoted to a UI interaction prototype/fallback only.**
+**Revised decision: Native Rust engine on CPAL is the authoritative audio engine. Web Audio API is demoted to a UI interaction prototype/fallback only. The engine uses a generalized player/bus vocabulary, not deck-specific types.**
 
 ## Flaws identified in the Web Audio API prototype
 
@@ -33,21 +33,65 @@ The initial decision (Web Audio API as primary engine) was based on flawed analy
 ```
                     BACKGROUND / WORKER THREADS
  Source files ──► Symphonia decode ──► Rubato sample-rate conversion
- Stems       ──► alignment check  ──► per-deck source buffers
+ Stems       ──► alignment check  ──► per-player source buffers
                                           │
                                  stem gain/mute/solo
                                           │
-                                      deck sum
+                                     player sum
                                           │
                               Signalsmith time stretch
                                           │
                                   bounded ring buffer
                                           ▼
                          REAL-TIME CPAL OUTPUT CALLBACK
-       Deck A buffer ──► EQ/gain ──┐
-                                   ├─► crossfader ─► master meter/limiter ─► output
-       Deck B buffer ──► EQ/gain ──┘
+
+  Players 0,2,4 ──► Bus A ──► EQ/gain ──┐
+                                         ├─► crossfader ─► master ─► output
+  Players 1,3,5 ──► Bus B ──► EQ/gain ──┘
+  Players 6,7   ──► Master direct ──────────────────────────────►
+
+  MAX_PLAYERS = 8 (available slots)
+  Recommended active: 2-4 layers
+  Buses: A, B (crossfader) + Master (direct)
 ```
+
+### Generalized engine vocabulary
+
+The engine uses player IDs and buses, not deck-specific types:
+
+```rust
+struct PlayerId(u8);
+const MAX_PLAYERS: usize = 8;
+
+enum BusId { A, B, Master }
+
+enum EngineCommand {
+    Launch { player: PlayerId, at_frame: u64, source: SourceHandle, start_beat: f64, quantize: Quantize },
+    Stop { player: PlayerId, at_frame: u64 },
+    Seek { player: PlayerId, at_frame: u64, source_beat: f64 },
+    SetTempo { player: PlayerId, at_frame: u64, rate: f32 },
+    SetGain { player: PlayerId, at_frame: u64, gain: f32, ramp_frames: u32 },
+    SetPan { player: PlayerId, at_frame: u64, pan: f32 },
+    SetMute { player: PlayerId, at_frame: u64, muted: bool },
+    SetSolo { player: PlayerId, at_frame: u64, soloed: bool },
+    SetBus { player: PlayerId, at_frame: u64, bus: BusId },
+    SetEqGain { player: PlayerId, at_frame: u64, band: EqBand, gain_db: f32 },
+    SetLoop { player: PlayerId, at_frame: u64, loop_region: Option<LoopRegion> },
+    SetCrossfade { at_frame: u64, position: f32 },
+    SetBusGain { bus: BusId, at_frame: u64, gain: f32 },
+    SetBusEq { bus: BusId, at_frame: u64, band: EqBand, gain_db: f32 },
+    SetMasterGain { at_frame: u64, gain: f32 },
+    RegisterSource { handle: SourceHandle, buffer: DecodedBuffer },
+    UnregisterSource { handle: SourceHandle },
+    Shutdown,
+}
+```
+
+The two-track Transition Workbench uses Players 0 and 1 on Buses A and B. The Layer Lab exposes all eight slots. Multiple players can be assigned to the same bus.
+
+### Frame scheduling
+
+Commands carry an `at_frame` field. The callback processes commands at the start of each block but defers application until the requested frame is reached within the block. This provides sample-accurate scheduling rather than block-boundary scheduling. Quantized launch (NextBeat, NextBar, NextPhrase) depends on this.
 
 ### Real-time constraints (non-negotiable)
 

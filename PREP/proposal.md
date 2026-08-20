@@ -1,7 +1,8 @@
-# Project Proposal: NotMixedInKey
+# Project Proposal: TuneLock
 
-> A fast, accurate, cross-platform DJ music analysis and set-building tool  
-> Codename: **NotMixedInKey**
+> The ultimate mix planner — a planning desk where a DJ can see an entire set,  
+> experiment like a sampler performer, and inspect a transition like an audio engineer.  
+> Housed in a Walnut Console: character in the frame, precision in the display.
 
 ---
 
@@ -13,13 +14,13 @@ DJs need to analyze their music libraries for **key** and **BPM** to perform har
 - **beaTunes** is feature-rich but slow (Java-based), with mid-tier key accuracy and a dated UI.
 - **Built-in DJ software detection** (Traktor, Rekordbox, Serato) varies wildly in accuracy (41–70%).
 - **KeyFinder** is free and open-source but abandoned as a standalone app (mid-tier accuracy, no playlist features).
-- **No tool exists** that combines accurate analysis with visual harmonic relationship mapping and a lightweight DJ preview mixer in one app.
+- **No tool exists** that combines accurate analysis with visual harmonic relationship mapping, multi-layer mix planning, and non-destructive DJ-ready delivery in one app.
 
 ---
 
 ## 2. Value Proposition
 
-NotMixedInKey will be:
+TuneLock will be:
 
 | Quality | How |
 |---|---|
@@ -27,8 +28,9 @@ NotMixedInKey will be:
 | **Stable** | Rust's memory safety guarantees; no Electron bloat, no Java runtime |
 | **Highly Accurate** | Multi-stage ensemble key detection (HPSS + multi-profile classical + multi-model CNN + MIK-validated self-tuning). Targeting ≥90% exact match — surpassing Mixed In Key |
 | **Visual** | Interactive Camelot wheel visualization showing harmonic relationships between songs |
-| **Set Builder** | Automated playlist suggestions based on Camelot wheel rules (+1, +2, A↔B, etc.) |
-| **DJ Preview** | Built-in dual-deck player with crossfader, EQ, volume, and waveform display |
+| **Set Planner** | Three-level workspace: Set Map (strategic trajectory), Layer Lab (eight-slot exploratory grid), Transition Workbench (precision editing) |
+| **Multi-Layer** | Up to eight player slots with A/B buses, crossfader, EQ, and scene capture. 2-4 active layers typical |
+| **Intelligent** | Multi-source musical diagnostics: bass ownership, vocal overlap, spectral crowding, headroom, beat-grid confidence |
 | **Scalable** | 3-pass streaming import: 50k files visible in <2s, results stream in real-time, smart priority queue analyzes what you're looking at first |
 | **Cross-Platform** | Windows + macOS from a single codebase (Tauri 2) |
 | **Free / Open** | Open-source core. No internet requirement. Your music stays local. |
