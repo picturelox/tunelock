@@ -331,6 +331,15 @@ impl Database {
         )?;
         Ok(())
     }
+
+    /// Update a track's detected energy level (1–10).
+    pub fn update_track_energy(&self, track_id: i64, energy_level: i32) -> Result<()> {
+        self.conn.execute(
+            "UPDATE tracks SET energy_level = ?2, updated_at = datetime('now') WHERE id = ?1",
+            params![track_id, energy_level],
+        )?;
+        Ok(())
+    }
     
     pub fn get_tracks_pending_analysis(&self, limit: usize) -> Result<Vec<(i64, String)>> {
         let mut stmt = self.conn.prepare(

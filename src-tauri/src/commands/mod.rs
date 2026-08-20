@@ -2,6 +2,7 @@ use anyhow::Result;
 use tauri::{command, Emitter, Manager, State, Window};
 use walkdir::WalkDir;
 
+use crate::analysis::energy_detector::detect_energy;
 use crate::analysis::key_detector::detect_key;
 use crate::analysis::tempo_detector::detect_tempo;
 use crate::analysis::waveform::{generate_waveform, WaveformData};
@@ -167,15 +168,18 @@ pub async fn get_analysis_status(state: State<'_, AppState>) -> Result<AnalysisP
 struct TrackAnalysisRaw {
     track_id: i64,
     file_path: String,
-    outcome: Result<(String, String, f64, f64)>, // (key_standard, key_camelot, confidence, bpm)
+    outcome: Result<(String, String, f64, f64, Option<i32>)>, // (key_standard, key_camelot, confidence, bpm, energy)
 }
 
 fn analyze_cpu(track_id: i64, file_path: String) -> TrackAnalysisRaw {
-    let outcome: Result<(String, String, f64, f64)> = (|| {
+    let outcome: Result<(String, String, f64, f64, Option<i32>)> = (|| {
         let samples = crate::media::decode_media(&file_path)?;
         let key = detect_key(&samples)?;
         let bpm = detect_tempo(&samples)?;
-        Ok((key.key_standard, key.key_camelot, key.confidence, bpm))
+        // Detect energy if the track doesn't already have one from MIK.
+        // We detect it regardless — the caller can choose which to keep.
+        let energy = detect_energy(&samples, crate::analysis::SAMPLE_RATE);
+        Ok((key.key_standard, key.key_camelot, key.confidence, bpm, Some(energy.energy_level)))
     })();
     TrackAnalysisRaw { track_id, file_path, outcome }
 }
@@ -237,10 +241,14 @@ async fn analyze_batch(
         let mut completed_this_batch = 0;
         for r in results {
             match r.outcome {
-                Ok((key_std, key_cam, conf, bpm)) => {
+                Ok((key_std, key_cam, conf, bpm, energy)) => {
                     if let Err(e) = db_guard.update_track_analysis(r.track_id, &key_std, &key_cam, conf, bpm) {
                         eprintln!("[analyze] DB write failed for {}: {}", r.track_id, e);
                         continue;
+                    }
+                    // Update energy level if we detected one
+                    if let Some(energy_level) = energy {
+                        let _ = db_guard.update_track_energy(r.track_id, energy_level);
                     }
                     // Also store as a TuneLock opinion for consensus
                     let _ = db_guard.upsert_opinion(
@@ -249,7 +257,7 @@ async fn analyze_batch(
                         Some(&key_cam),
                         Some(&key_std),
                         Some(bpm),
-                        None,
+                        energy,
                         conf,
                         "TuneLock engine",
                     );
@@ -697,23 +705,152 @@ pub struct FileMetadata {
 
 #[command]
 pub async fn generate_playlist(
-    _state: State<'_, AppState>,
-    _start_track_id: i64,
-    _rules: PlaylistRules,
-    _max_length: usize,
+    state: State<'_, AppState>,
+    start_track_id: i64,
+    rules: PlaylistRules,
+    max_length: usize,
 ) -> Result<Vec<Track>, String> {
-    // TODO: Implement harmonic playlist generation
-    Ok(vec![])
+    let db = state.db.lock().await;
+
+    // Get the seed track
+    let seed = db.get_track_by_id(start_track_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Seed track not found")?;
+
+    let seed_key = match &seed.key_camelot {
+        Some(k) => k.clone(),
+        None => return Ok(vec![seed]), // No key → can't find compatible tracks
+    };
+
+    // Get all analyzed tracks from the library
+    let page = db.get_library_page(0, 5000, "bpm", "asc", None)
+        .map_err(|e| e.to_string())?;
+
+    // Filter to tracks with a key and that aren't the seed
+    let candidates: Vec<Track> = page.tracks.into_iter()
+        .filter(|t| t.id != seed.id && t.key_camelot.is_some())
+        .collect();
+
+    // Score each candidate by harmonic compatibility and BPM similarity
+    let seed_bpm = seed.bpm.unwrap_or(128.0);
+    let mut scored: Vec<(f64, Track)> = candidates.into_iter()
+        .map(|t| {
+            let compat = harmony_compatibility_score(&seed_key, t.key_camelot.as_ref().unwrap(), &rules);
+            let bpm_diff = ((t.bpm.unwrap_or(seed_bpm) - seed_bpm).abs()).min(20.0);
+            let bpm_score = 1.0 - (bpm_diff / 20.0);
+            let score = compat * 0.7 + bpm_score * 0.3;
+            (score, t)
+        })
+        .filter(|(s, _)| *s > 0.0)
+        .collect();
+
+    // Sort by score descending
+    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Build the playlist: seed + top candidates
+    let mut playlist = vec![seed];
+    for (_, track) in scored.into_iter().take(max_length.saturating_sub(1)) {
+        playlist.push(track);
+    }
+
+    Ok(playlist)
 }
 
 #[command]
 pub async fn get_compatible_tracks(
-    _state: State<'_, AppState>,
-    _track_id: i64,
-    _rules: PlaylistRules,
+    state: State<'_, AppState>,
+    track_id: i64,
+    rules: PlaylistRules,
 ) -> Result<Vec<Track>, String> {
-    // TODO: Implement compatible track finding
-    Ok(vec![])
+    let db = state.db.lock().await;
+
+    // Get the focal track
+    let focal = db.get_track_by_id(track_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Track not found")?;
+
+    let focal_key = match &focal.key_camelot {
+        Some(k) => k.clone(),
+        None => return Ok(vec![]),
+    };
+
+    // Get analyzed tracks
+    let page = db.get_library_page(0, 5000, "key_camelot", "asc", None)
+        .map_err(|e| e.to_string())?;
+
+    // Filter and score
+    let candidates: Vec<Track> = page.tracks.into_iter()
+        .filter(|t| t.id != focal.id && t.key_camelot.is_some())
+        .filter(|t| {
+            harmony_compatibility_score(&focal_key, t.key_camelot.as_ref().unwrap(), &rules) > 0.0
+        })
+        .collect();
+
+    Ok(candidates)
+}
+
+/// Compute a harmonic compatibility score (0.0–1.0) between two Camelot keys
+/// based on the selected playlist rules.
+fn harmony_compatibility_score(seed: &str, candidate: &str, rules: &PlaylistRules) -> f64 {
+    if seed == candidate {
+        return if rules.same_key { 1.0 } else { 0.0 };
+    }
+
+    // Parse Camelot positions
+    let (seed_num, seed_letter) = parse_camelot(seed);
+    let (cand_num, cand_letter) = parse_camelot(candidate);
+
+    if seed_num == 0 || cand_num == 0 {
+        return 0.0;
+    }
+
+    let diff = ((cand_num - seed_num + 12) % 12) as i32;
+    let same_mode = seed_letter == cand_letter;
+
+    // +1 or -1 (same mode, adjacent on the wheel)
+    if same_mode && (diff == 1 || diff == 11) {
+        return if rules.plus_one || rules.minus_one { 0.9 } else { 0.0 };
+    }
+
+    // +2 or -2 (energy boost)
+    if same_mode && (diff == 2 || diff == 10) {
+        return if rules.plus_two || rules.minus_two { 0.7 } else { 0.0 };
+    }
+
+    // Major → Minor (dominant to subdominant: same number, A→B)
+    if !same_mode && seed_num == cand_num {
+        if seed_letter == 'A' && cand_letter == 'B' {
+            return if rules.dominant_to_subdominant { 0.8 } else { 0.0 };
+        }
+        if seed_letter == 'B' && cand_letter == 'A' {
+            return if rules.subdominant_to_dominant { 0.8 } else { 0.0 };
+        }
+    }
+
+    // Relative major/minor (9A → 10B, 10B → 9A, etc.)
+    if !same_mode {
+        let relative_diff = if seed_letter == 'A' {
+            ((cand_num - seed_num + 1 + 12) % 12) as i32
+        } else {
+            ((cand_num - seed_num - 1 + 12) % 12) as i32
+        };
+        if relative_diff == 0 {
+            return 0.6; // Relative major/minor — always compatible
+        }
+    }
+
+    0.0
+}
+
+/// Parse a Camelot key like "5A" into (number, letter).
+fn parse_camelot(key: &str) -> (i32, char) {
+    let key = key.trim();
+    if key.len() < 2 {
+        return (0, ' ');
+    }
+    let letter = key.chars().last().unwrap();
+    let num: i32 = key[..key.len() - 1].parse().unwrap_or(0);
+    (num, letter)
 }
 
 #[derive(serde::Serialize)]

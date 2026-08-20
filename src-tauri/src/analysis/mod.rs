@@ -2,6 +2,7 @@ pub mod art;
 pub mod chroma_transform;
 pub mod chromagram;
 pub mod decoder;
+pub mod energy_detector;
 pub mod ensemble;
 pub mod hpss;
 pub mod key_detector;
