@@ -60,7 +60,27 @@ weight is not justified by a marginal improvement.
 
 ## Status
 
-**Phase 1: Structure + feature extraction** — in progress
-**Phase 2: Training** — requires GiantSteps audio download
-**Phase 3: ONNX export + quantization** — after training
-**Phase 4: Rust integration** — after ONNX models are ready
+**TRAINED AND EVALUATED — CUT per plan's decision criterion.**
+
+Cross-validated results on GiantSteps-key (604 tracks, 5-fold CV):
+
+| Model | Parameters | Accuracy | Notes |
+|---|---|---|---|
+| Full KeyCNN (424K) | 424,792 | 26.4% | Massive overfitting (96% train, 20% val) |
+| SmallKeyCNN (26K) | 26,392 | 29.6% ± 2.3% | Honest 5-fold CV result |
+| Classical engine | N/A | 68.2% | TuneLock's Krumhansl/Temperley/Sha'ath ensemble |
+
+The CNN scored less than half the classical engine's accuracy. Per the plan:
+> "If it doesn't beat the classical path on your corpus, cut it."
+
+**Root cause: insufficient training data.**
+- GiantSteps-key: 604 tracks (downloaded successfully)
+- GiantSteps-MTG: 1,486 tracks (download FAILED — Beatport preview URLs from 2015 are dead)
+- Academic papers achieving 70-75% use ~2,100 tracks plus pretraining
+
+**Reactivation path:**
+1. Find an alternative mirror for GiantSteps-MTG audio
+2. Or: use pretraining (e.g., transfer from a larger audio classification model)
+3. Or: use the user's adjudicated gold labels (Phase 9 adjudication queue) as training data
+4. Re-run `train_cv.py` with the larger dataset
+5. If accuracy exceeds 68.2% + 3 points, proceed with ONNX export and Rust integration

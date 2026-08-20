@@ -19,7 +19,7 @@ The ultimate mix planner. Accurate key + BPM + energy analysis with honest confi
 - **Playlist generation:** real harmonic compatibility scoring + BPM similarity. `generate_playlist` and `get_compatible_tracks` are functional.
 - **Mix Canvas:** clip timeline + transition scoring — in-memory only, nothing persists.
 - **Delivery:** CSV/M3U8 as browser downloads only; real export unreachable from UI.
-- **CNN (Phase 11):** Python ML project scaffolded (feature extraction, training, quantization, evaluation). Rust integration stub ready for ONNX models. Not yet trained.
+- **CNN (Phase 11):** Python ML project scaffolded and **trained, but cut**. Cross-validated accuracy on GiantSteps-key (604 tracks) was 29.6% ± 2.3% — less than half the classical engine's 68.2%. Root cause: insufficient training data (GiantSteps-MTG's Beatport URLs are dead). The `ml/` scaffolding remains for future reactivation with more data or pretraining. The Rust `key_cnn.rs` stub returns `None` and is not wired into the ensemble.
 
 ## Known defects (see plan, `C:\Users\louis.media\.devin\plans\plan-dfdfe6627c43db0f.md`)
 - ~~`insert_track` returns a wrong id on re-import~~ **Fixed (Phase 5)** — uses `RETURNING id`.
