@@ -2037,13 +2037,31 @@ pub async fn audio_engine_get_meters(state: State<'_, AppState>) -> Result<Audio
 // ============================================================================
 
 #[derive(serde::Serialize)]
+pub struct BeatMarkerResult {
+    pub source_frame: u64,
+    pub beat_number: u32,
+    pub is_downbeat: bool,
+    pub confidence: f64,
+}
+
+#[derive(serde::Serialize)]
+pub struct TempoSegmentResult {
+    pub start_source_frame: u64,
+    pub start_beat: f64,
+    pub bpm: f64,
+}
+
+#[derive(serde::Serialize)]
 pub struct BeatGridDetectionResult {
     pub bpm: f64,
     pub first_beat_ms: i64,
     pub beat_times_ms: Vec<i64>,
+    pub beat_markers: Vec<BeatMarkerResult>,
     pub downbeat_offset: usize,
+    pub downbeat_confidence: f64,
     pub meter_numerator: i32,
     pub confidence: f64,
+    pub tempo_segments: Vec<TempoSegmentResult>,
 }
 
 #[command]
@@ -2065,9 +2083,21 @@ pub async fn detect_beat_grid(state: State<'_, AppState>, track_id: i64) -> Resu
             bpm: grid.bpm,
             first_beat_ms: (grid.first_beat_sec * 1000.0) as i64,
             beat_times_ms: grid.beat_times.iter().map(|t| (t * 1000.0) as i64).collect(),
+            beat_markers: grid.beat_markers.iter().map(|m| BeatMarkerResult {
+                source_frame: m.source_frame,
+                beat_number: m.beat_number,
+                is_downbeat: m.is_downbeat,
+                confidence: m.confidence,
+            }).collect(),
             downbeat_offset: grid.downbeat_offset,
+            downbeat_confidence: grid.downbeat_confidence,
             meter_numerator: grid.meter_numerator,
             confidence: grid.confidence,
+            tempo_segments: grid.tempo_segments.iter().map(|s| TempoSegmentResult {
+                start_source_frame: s.start_source_frame,
+                start_beat: s.start_beat,
+                bpm: s.bpm,
+            }).collect(),
         })
     })
     .await

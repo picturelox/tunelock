@@ -519,13 +519,29 @@ export async function audioEngineGetMeters(): Promise<AudioMeterReadout> {
 
 // === Beat-Grid DSP Commands ===
 
+export interface BeatMarker {
+  sourceFrame: number;
+  beatNumber: number;
+  isDownbeat: boolean;
+  confidence: number;
+}
+
+export interface TempoSegment {
+  startSourceFrame: number;
+  startBeat: number;
+  bpm: number;
+}
+
 export interface BeatGridDetectionResult {
   bpm: number;
   firstBeatMs: number;
   beatTimesMs: number[];
+  beatMarkers: BeatMarker[];
   downbeatOffset: number;
+  downbeatConfidence: number;
   meterNumerator: number;
   confidence: number;
+  tempoSegments: TempoSegment[];
 }
 
 export async function detectBeatGrid(trackId: number): Promise<BeatGridDetectionResult> {
