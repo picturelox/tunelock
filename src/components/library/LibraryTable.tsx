@@ -1,77 +1,98 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { FolderPlus, Search, ArrowUpDown, RefreshCw, Filter } from 'lucide-react';
+import { FolderPlus, Search, ArrowUpDown, RefreshCw, Filter, Loader2 } from 'lucide-react';
 import { useLibraryStore } from '../../stores/libraryStore';
 import { useMixStore } from '../../stores/mixStore';
 import ImportDialog from './ImportDialog';
 import TrackRow from './TrackRow';
-import { scanFolder, getLibraryPage, startAnalysis } from '../../lib/tauri';
+import { scanFolder, getLibraryPage, startAnalysis, importMikCsv } from '../../lib/tauri';
+import { open } from '@tauri-apps/plugin-dialog';
+
+const PAGE_SIZE = 500;
+const LOAD_MORE_THRESHOLD = 50; // rows from bottom to trigger next page
 
 export default function LibraryTable() {
   const [showImport, setShowImport] = useState(false);
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState('filename');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
-  
+  const [activeFilter, setActiveFilter] = useState<string>('all');
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
+  const [mikStatus, setMikStatus] = useState<string | null>(null);
+
   const {
     tracks,
-    pageSize,
-    isAnalyzing,
     setTracks,
     setTotalCount,
     setIsAnalyzing,
+    isAnalyzing,
   } = useLibraryStore();
 
-  // Smart view filters
-  const [activeFilter, setActiveFilter] = useState<string>('all');
   const { project } = useMixStore();
   const usedTrackIds = new Set(project.clips.map((c) => c.trackId));
 
+  // Track list from the store Map
   const trackList = Array.from(tracks.values());
-  let filteredTracks = search
-    ? trackList.filter(
-        (t) =>
-          t.filename.toLowerCase().includes(search.toLowerCase()) ||
-          (t.title?.toLowerCase() ?? '').includes(search.toLowerCase()) ||
-          (t.artist?.toLowerCase() ?? '').includes(search.toLowerCase())
-      )
-    : trackList;
 
-  // Apply smart view filter
-  switch (activeFilter) {
-    case 'unanalyzed':
-      filteredTracks = filteredTracks.filter((t) => !t.key_camelot);
-      break;
-    case 'low-confidence':
-      filteredTracks = filteredTracks.filter((t) => (t.key_confidence ?? 0) < 0.7);
-      break;
-    case 'in-mix':
-      filteredTracks = filteredTracks.filter((t) => usedTrackIds.has(t.id));
-      break;
-    case 'not-in-mix':
-      filteredTracks = filteredTracks.filter((t) => !usedTrackIds.has(t.id));
-      break;
-    case 'high-confidence':
-      filteredTracks = filteredTracks.filter((t) => (t.key_confidence ?? 0) >= 0.85);
-      break;
+  // "In-mix" / "not-in-mix" filters are client-side because they depend on
+  // the current mix project state, not just track properties.
+  // All other smart filters are server-side.
+  const isMixFilter = activeFilter === 'in-mix' || activeFilter === 'not-in-mix';
+  const serverSmartFilter =
+    activeFilter === 'unanalyzed' || activeFilter === 'low-confidence' || activeFilter === 'high-confidence'
+      ? activeFilter
+      : undefined;
+
+  let filteredTracks = trackList;
+  if (isMixFilter) {
+    filteredTracks = activeFilter === 'in-mix'
+      ? trackList.filter((t) => usedTrackIds.has(t.id))
+      : trackList.filter((t) => !usedTrackIds.has(t.id));
   }
 
-  const parentRef = useCallback((_node: HTMLDivElement | null) => {
-    // ref callback
-  }, []);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
 
   const virtualizer = useVirtualizer({
     count: filteredTracks.length,
-    getScrollElement: () => document.getElementById('library-scroll'),
+    getScrollElement: () => scrollRef.current,
     estimateSize: () => 40,
-    overscan: 5,
+    overscan: 10,
   });
+
+  // Load a page from the server. If append=true, tracks are added to the
+  // existing Map instead of replacing it.
+  const loadPage = useCallback(async (page: number, append: boolean) => {
+    const result = await getLibraryPage(page, PAGE_SIZE, sortBy, sortDir, {
+      search: search || undefined,
+      smart_filter: serverSmartFilter,
+    });
+
+    if (append) {
+      // Merge new tracks into the existing Map
+      const existing = useLibraryStore.getState().tracks;
+      const newMap = new Map(existing);
+      for (const t of result.tracks) {
+        newMap.set(t.id, t);
+      }
+      setTracks(Array.from(newMap.values()));
+    } else {
+      setTracks(result.tracks);
+    }
+    setTotalCount(result.total_count);
+    setHasMore(result.tracks.length === PAGE_SIZE);
+  }, [sortBy, sortDir, search, serverSmartFilter, setTracks, setTotalCount]);
+
+  // Initial load and reload on filter/sort/search change
+  useEffect(() => {
+    loadPage(0, false);
+  }, [loadPage]);
 
   const handleImport = async (path: string) => {
     try {
       const result = await scanFolder(path);
       console.log('Scanned:', result);
-      await loadPage(0);
+      await loadPage(0, false);
       // Auto-start analysis
       await startAnalysis();
       setIsAnalyzing(true);
@@ -80,22 +101,39 @@ export default function LibraryTable() {
     }
   };
 
-  const loadPage = async (page: number) => {
+  // Import a MIK CSV file to populate reference metadata (energy, genre, MIK key)
+  // for consensus scoring. This is a read-only import — it doesn't modify the
+  // original CSV or the audio files.
+  const handleMikImport = async () => {
     try {
-      const result = await getLibraryPage(page, pageSize, sortBy, sortDir, {
-        search: search || undefined,
+      const selected = await open({
+        multiple: false,
+        filters: [{ name: 'CSV', extensions: ['csv'] }],
       });
-      setTracks(result.tracks);
-      setTotalCount(result.total_count);
+      if (typeof selected !== 'string') return;
+      setMikStatus('Importing...');
+      const result = await importMikCsv(selected);
+      setMikStatus(
+        `MIK: ${result.matched.toLocaleString()} matched, ${result.unmatched.toLocaleString()} unmatched of ${result.totalRows.toLocaleString()} rows`
+      );
+      // Reload to show updated genre/energy
+      await loadPage(0, false);
     } catch (err) {
-      console.error('Load page failed:', err);
+      setMikStatus(`MIK import failed: ${err}`);
     }
   };
 
-  useEffect(() => {
-    loadPage(0);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // Infinite scroll: detect when the user is near the bottom and load more
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el || isLoadingMore || !hasMore) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < LOAD_MORE_THRESHOLD * 40;
+    if (nearBottom) {
+      setIsLoadingMore(true);
+      const nextPage = Math.floor(tracks.size / PAGE_SIZE);
+      loadPage(nextPage, true).finally(() => setIsLoadingMore(false));
+    }
+  }, [isLoadingMore, hasMore, tracks.size, loadPage]);
 
   const handleSort = (column: string) => {
     if (sortBy === column) {
@@ -129,7 +167,15 @@ export default function LibraryTable() {
           <FolderPlus className="w-4 h-4" />
           Import
         </button>
-        
+
+        <button
+          onClick={handleMikImport}
+          className="flex items-center gap-2 px-3 py-1.5 bg-surface-light text-text-secondary rounded-md text-sm hover:text-text-primary hover:bg-white/5 transition-colors"
+          title="Import a Mixed In Key CSV to populate reference metadata"
+        >
+          Import MIK CSV
+        </button>
+
         <div className="flex items-center gap-2 flex-1 max-w-md">
           <Search className="w-4 h-4 text-text-secondary" />
           <input
@@ -140,9 +186,10 @@ export default function LibraryTable() {
             className="flex-1 bg-surface-light text-text-primary text-sm rounded-md px-2 py-1.5 outline-none border border-white/5 focus:border-accent-primary/50"
           />
         </div>
-        
+
         <div className="flex items-center gap-2 text-sm text-text-secondary">
-          <span>{filteredTracks.length} tracks</span>
+          {mikStatus && <span className="text-xs">{mikStatus}</span>}
+          <span>{tracks.size.toLocaleString()} loaded</span>
           {isAnalyzing && <RefreshCw className="w-4 h-4 animate-spin text-accent-primary" />}
         </div>
       </div>
@@ -187,10 +234,10 @@ export default function LibraryTable() {
         <div className="w-8"></div>
       </div>
 
-      {/* Virtual Scrolled List */}
+      {/* Virtual Scrolled List with infinite scroll */}
       <div
-        id="library-scroll"
-        ref={parentRef}
+        ref={scrollRef}
+        onScroll={handleScroll}
         className="flex-1 overflow-auto scrollbar-thin"
       >
         <div
@@ -223,6 +270,19 @@ export default function LibraryTable() {
             );
           })}
         </div>
+
+        {/* Loading indicator at bottom */}
+        {isLoadingMore && (
+          <div className="flex items-center justify-center py-4">
+            <Loader2 className="w-5 h-5 text-accent-primary animate-spin" />
+            <span className="ml-2 text-xs text-text-secondary">Loading more...</span>
+          </div>
+        )}
+        {!hasMore && tracks.size > 0 && (
+          <div className="text-center py-3 text-xs text-text-secondary">
+            All {tracks.size.toLocaleString()} tracks loaded
+          </div>
+        )}
       </div>
 
       {showImport && (

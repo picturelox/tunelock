@@ -86,6 +86,8 @@ pub async fn start_analysis(
     queue.pending = pending;
     queue.in_progress = true;
     queue.paused = false;
+    queue.completed_count = 0;
+    queue.elapsed_ms = 0;
     
     // Spawn analysis task
     let db_clone = state.db.clone();
@@ -125,20 +127,35 @@ pub async fn get_analysis_status(state: State<'_, AppState>) -> Result<AnalysisP
     let db = state.db.lock().await;
     let (total, completed) = db.get_analysis_stats().map_err(|e| e.to_string())?;
     drop(db);
-    
+
     let queue = state.analysis_queue.lock().await;
     let in_progress = if queue.in_progress {
         total.saturating_sub(completed).min(queue.pending.len())
     } else {
         0
     };
-    
+
+    // Calculate speed and ETA from elapsed time and completed count.
+    let elapsed_secs = queue.elapsed_ms as f64 / 1000.0;
+    let speed_per_sec = if elapsed_secs > 0.0 && queue.completed_count > 0 {
+        queue.completed_count as f64 / elapsed_secs
+    } else {
+        0.0
+    };
+
+    let remaining = total.saturating_sub(completed);
+    let eta_seconds = if speed_per_sec > 0.0 {
+        remaining as f64 / speed_per_sec
+    } else {
+        0.0
+    };
+
     Ok(AnalysisProgress {
         total,
         completed,
         in_progress,
-        speed_per_sec: 0.0, // TODO: Calculate from timing
-        eta_seconds: 0.0,
+        speed_per_sec,
+        eta_seconds,
     })
 }
 
@@ -170,7 +187,7 @@ async fn analyze_batch(
     let batch_size = std::thread::available_parallelism()
         .map(|n| n.get().saturating_sub(1).max(1))
         .unwrap_or(3);
-    
+
     loop {
         // Respect pause / cancel
         {
@@ -184,19 +201,22 @@ async fn analyze_batch(
                 break;
             }
         }
-        
+
         // Pop a batch from the queue.
         let batch: Vec<(i64, String)> = {
             let mut q = queue.lock().await;
             (0..batch_size).filter_map(|_| q.pending.pop()).collect()
         };
-        
+
         if batch.is_empty() {
             let mut q = queue.lock().await;
             q.in_progress = false;
             break;
         }
-        
+
+        // Track batch timing for speed/ETA calculation.
+        let batch_start = std::time::Instant::now();
+
         // Run the CPU-heavy work in parallel via rayon, off the tokio reactor.
         let results: Vec<TrackAnalysisRaw> = tokio::task::spawn_blocking(move || {
             use rayon::prelude::*;
@@ -207,9 +227,12 @@ async fn analyze_batch(
         })
         .await
         .unwrap_or_default();
-        
+
+        let batch_elapsed_ms = batch_start.elapsed().as_millis();
+
         // Serialise DB writes + event emits.
         let db_guard = db.lock().await;
+        let mut completed_this_batch = 0;
         for r in results {
             match r.outcome {
                 Ok((key_std, key_cam, conf, bpm)) => {
@@ -217,6 +240,7 @@ async fn analyze_batch(
                         eprintln!("[analyze] DB write failed for {}: {}", r.track_id, e);
                         continue;
                     }
+                    completed_this_batch += 1;
                     match db_guard.get_track_by_id(r.track_id) {
                         Ok(Some(track)) => {
                             let _ = window.emit("track-analyzed", &track);
@@ -235,6 +259,13 @@ async fn analyze_batch(
             }
         }
         drop(db_guard);
+
+        // Update queue timing stats.
+        {
+            let mut q = queue.lock().await;
+            q.completed_count += completed_this_batch;
+            q.elapsed_ms += batch_elapsed_ms;
+        }
     }
 }
 
@@ -707,5 +738,130 @@ pub async fn export_tracks(
         copied: report.copied,
         failed: report.failed,
         playlist_path: report.playlist_path.map(|p| p.to_string_lossy().to_string()),
+    })
+}
+
+// ============================================================================
+// Playlist commands
+// ============================================================================
+
+#[command]
+pub async fn save_playlist(
+    state: State<'_, AppState>,
+    name: String,
+    track_ids: Vec<i64>,
+    description: Option<String>,
+) -> Result<Playlist, String> {
+    let db = state.db.lock().await;
+    let playlist = db.create_playlist(&name, description.as_deref())
+        .map_err(|e| e.to_string())?;
+    for (i, track_id) in track_ids.iter().enumerate() {
+        db.add_track_to_playlist(playlist.id, *track_id, i as i64)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(playlist)
+}
+
+#[command]
+pub async fn get_playlists(state: State<'_, AppState>) -> Result<Vec<Playlist>, String> {
+    let db = state.db.lock().await;
+    db.get_playlists().map_err(|e| e.to_string())
+}
+
+#[command]
+pub async fn delete_playlist(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    let db = state.db.lock().await;
+    db.delete_playlist(id).map_err(|e| e.to_string())
+}
+
+#[command]
+pub async fn get_playlist_tracks(
+    state: State<'_, AppState>,
+    playlist_id: i64,
+) -> Result<Vec<Track>, String> {
+    let db = state.db.lock().await;
+    db.get_playlist_tracks(playlist_id).map_err(|e| e.to_string())
+}
+
+// ============================================================================
+// MIK CSV import
+// ============================================================================
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MikImportResult {
+    pub total_rows: usize,
+    pub matched: usize,
+    pub unmatched: usize,
+    pub errors: Vec<String>,
+}
+
+#[command]
+pub async fn import_mik_csv(
+    state: State<'_, AppState>,
+    csv_path: String,
+) -> Result<MikImportResult, String> {
+    let file = std::fs::File::open(&csv_path)
+        .map_err(|e| format!("Failed to open CSV: {}", e))?;
+    let mut rdr = csv::Reader::from_reader(file);
+
+    // MIK CSV columns: Title, Artist, Key, Tempo, Genre, Album, Grouping,
+    // Date Added, Location, Comment, Year, Overall Volume, Energy, CuePoints, ClippedPeaks
+    #[derive(serde::Deserialize, Debug)]
+    struct MikRow {
+        #[serde(rename = "Title")]
+        _title: String,
+        #[serde(rename = "Key")]
+        key: String,
+        #[serde(rename = "Genre")]
+        genre: String,
+        #[serde(rename = "Location")]
+        location: String,
+        #[serde(rename = "Energy")]
+        energy: String,
+    }
+
+    let db = state.db.lock().await;
+    let mut total_rows = 0;
+    let mut matched = 0;
+    let mut unmatched = 0;
+    let mut errors: Vec<String> = Vec::new();
+
+    for result in rdr.deserialize::<MikRow>() {
+        total_rows += 1;
+        match result {
+            Ok(row) => {
+                let energy: Option<i32> = row.energy.trim().parse().ok();
+                let genre = if row.genre.trim().is_empty() {
+                    None
+                } else {
+                    Some(row.genre.trim())
+                };
+                let mik_key = if row.key.trim().is_empty() {
+                    None
+                } else {
+                    Some(row.key.trim())
+                };
+                match db.update_mik_reference(&row.location, mik_key, energy, genre) {
+                    Ok(true) => matched += 1,
+                    Ok(false) => unmatched += 1,
+                    Err(e) => {
+                        errors.push(format!("Row {}: {}", total_rows, e));
+                        unmatched += 1;
+                    }
+                }
+            }
+            Err(e) => {
+                errors.push(format!("Row {}: parse error: {}", total_rows, e));
+                unmatched += 1;
+            }
+        }
+    }
+
+    Ok(MikImportResult {
+        total_rows,
+        matched,
+        unmatched,
+        errors,
     })
 }

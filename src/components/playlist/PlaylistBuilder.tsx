@@ -1,13 +1,16 @@
 import { useState } from 'react';
 import { useLibraryStore } from '../../stores/libraryStore';
-import { Save, Download, X } from 'lucide-react';
+import { Save, Download, X, Loader2 } from 'lucide-react';
 import type { PlaylistRules, Track } from '../../types';
 import { parseCamelot, getRelationshipInfo } from '../../lib/harmony';
+import { savePlaylist } from '../../lib/tauri';
 
 export default function PlaylistBuilder() {
   const { tracks } = useLibraryStore();
   const [playlist, setPlaylist] = useState<Track[]>([]);
   const [seedTrack, setSeedTrack] = useState<Track | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<string | null>(null);
   const [rules, setRules] = useState<PlaylistRules>({
     sameKey: true,
     plusOne: true,
@@ -56,16 +59,37 @@ export default function PlaylistBuilder() {
     setPlaylist(playlist.filter((t) => t.id !== id));
   };
 
+  const handleSave = async () => {
+    if (playlist.length === 0) return;
+    setIsSaving(true);
+    setSaveStatus(null);
+    try {
+      const name = `Set ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}`;
+      const trackIds = playlist.map((t) => t.id);
+      const saved = await savePlaylist(name, trackIds);
+      setSaveStatus(`Saved as "${saved.name}"`);
+    } catch (err) {
+      setSaveStatus(`Save failed: ${err}`);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   return (
     <div className="flex flex-col h-full p-4">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-xl font-semibold">Playlist Builder</h2>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
+          {saveStatus && (
+            <span className="text-xs text-text-secondary">{saveStatus}</span>
+          )}
+          <div className="flex gap-2">
           <button
-            disabled={playlist.length === 0}
+            onClick={handleSave}
+            disabled={playlist.length === 0 || isSaving}
             className="flex items-center gap-2 px-3 py-1.5 bg-surface-light rounded-md text-sm disabled:opacity-50"
           >
-            <Save className="w-4 h-4" />
+            {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
             Save
           </button>
           <button
@@ -76,6 +100,7 @@ export default function PlaylistBuilder() {
             <Download className="w-4 h-4" />
             Deliver
           </button>
+          </div>
         </div>
       </div>
 

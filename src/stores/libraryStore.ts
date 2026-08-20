@@ -52,7 +52,7 @@ export const useLibraryStore = create<LibraryStore>((set) => ({
   searchQuery: '',
   
   currentPage: 0,
-  pageSize: 200,
+  pageSize: 500,
   totalCount: 0,
   
   analysisProgress: null,

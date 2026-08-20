@@ -17,6 +17,7 @@ import type {
   ExportOptions,
   AnalysisProgress,
   TunerProgress,
+  Playlist,
 } from '../types';
 
 // === Analysis Commands ===
@@ -69,7 +70,7 @@ export async function readFileMetadata(path: string): Promise<{
   return invoke('read_file_metadata', { path });
 }
 
-// === Playlist Commands (stubs — return empty until Phase 9) ===
+// === Playlist Commands ===
 export async function generatePlaylist(
   startTrackId: number,
   rules: unknown,
@@ -83,6 +84,38 @@ export async function getCompatibleTracks(
   rules: unknown
 ): Promise<Track[]> {
   return invoke('get_compatible_tracks', { trackId, rules });
+}
+
+export async function savePlaylist(
+  name: string,
+  trackIds: number[],
+  description?: string
+): Promise<Playlist> {
+  return invoke('save_playlist', { name, trackIds, description });
+}
+
+export async function getPlaylists(): Promise<Playlist[]> {
+  return invoke('get_playlists');
+}
+
+export async function deletePlaylist(id: number): Promise<void> {
+  return invoke('delete_playlist', { id });
+}
+
+export async function getPlaylistTracks(playlistId: number): Promise<Track[]> {
+  return invoke('get_playlist_tracks', { playlistId });
+}
+
+// === MIK CSV Import ===
+export interface MikImportResult {
+  totalRows: number;
+  matched: number;
+  unmatched: number;
+  errors: string[];
+}
+
+export async function importMikCsv(csvPath: string): Promise<MikImportResult> {
+  return invoke('import_mik_csv', { csvPath });
 }
 
 // === Export Commands ===

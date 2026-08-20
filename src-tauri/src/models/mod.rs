@@ -130,6 +130,10 @@ pub struct LibraryFilter {
     pub min_bpm: Option<f64>,
     pub max_bpm: Option<f64>,
     pub status: Option<String>,
+    /// Smart filter preset: "unanalyzed", "low-confidence", "high-confidence".
+    /// Applied server-side so it works across all 20k tracks, not just the
+    /// loaded page.
+    pub smart_filter: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

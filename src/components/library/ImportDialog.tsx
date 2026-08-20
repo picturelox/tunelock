@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { X, Folder } from 'lucide-react';
+import { X, Folder, Loader2 } from 'lucide-react';
+import { open } from '@tauri-apps/plugin-dialog';
 
 interface ImportDialogProps {
   onClose: () => void;
@@ -9,6 +10,7 @@ interface ImportDialogProps {
 export default function ImportDialog({ onClose, onImport }: ImportDialogProps) {
   const [path, setPath] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isBrowsing, setIsBrowsing] = useState(false);
 
   const handleImport = async () => {
     if (!path.trim()) return;
@@ -21,11 +23,19 @@ export default function ImportDialog({ onClose, onImport }: ImportDialogProps) {
     }
   };
 
-  // In a real Tauri app, we'd use the file dialog API
-  const handleBrowse = () => {
-    // Placeholder - in real app: open({ directory: true })
-    const demoPath = prompt('Enter folder path to import:');
-    if (demoPath) setPath(demoPath);
+  // Use Tauri's native directory picker — no more prompt() fallback.
+  const handleBrowse = async () => {
+    setIsBrowsing(true);
+    try {
+      const selected = await open({ directory: true, multiple: false });
+      if (typeof selected === 'string') {
+        setPath(selected);
+      }
+    } catch (err) {
+      console.warn('File dialog unavailable:', err);
+    } finally {
+      setIsBrowsing(false);
+    }
   };
 
   return (
@@ -40,7 +50,8 @@ export default function ImportDialog({ onClose, onImport }: ImportDialogProps) {
 
         <div className="p-4 space-y-4">
           <p className="text-sm text-text-secondary">
-            Select a folder containing audio files (.mp3, .wav, .flac, .ogg, .aiff, .m4a)
+            Select a folder containing audio files. Video files (.mp4, .mov, etc.)
+            are also supported — audio is extracted via ffmpeg.
           </p>
 
           <div className="flex gap-2">
@@ -53,14 +64,20 @@ export default function ImportDialog({ onClose, onImport }: ImportDialogProps) {
             />
             <button
               onClick={handleBrowse}
-              className="px-3 py-2 bg-surface-light border border-white/5 rounded-md hover:bg-white/5 transition-colors"
+              disabled={isBrowsing}
+              className="flex items-center gap-2 px-3 py-2 bg-surface-light border border-white/5 rounded-md hover:bg-white/5 transition-colors disabled:opacity-50"
             >
-              <Folder className="w-4 h-4" />
+              {isBrowsing ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Folder className="w-4 h-4" />
+              )}
+              Browse
             </button>
           </div>
 
           <div className="text-xs text-text-secondary">
-            Supported formats: MP3, WAV, FLAC, OGG, AIFF, M4A
+            Supported: MP3, WAV, FLAC, OGG, AIFF, M4A, AAC, MP4, MOV, WEBM, MKV
           </div>
         </div>
 

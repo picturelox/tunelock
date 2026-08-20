@@ -35,6 +35,10 @@ impl Database {
         // so we attempt the ALTER and swallow the specific "duplicate column"
         // error. Any other error still propagates.
         self.add_column_if_missing("tracks", "artwork_path", "TEXT")?;
+        // Phase 6: genre and MIK reference metadata for consensus/import.
+        self.add_column_if_missing("tracks", "genre", "TEXT")?;
+        self.add_column_if_missing("tracks", "mik_key", "TEXT")?;
+        self.add_column_if_missing("tracks", "mik_energy", "INTEGER")?;
 
         Ok(())
     }
@@ -175,6 +179,26 @@ impl Database {
             if let Some(max_bpm) = f.max_bpm {
                 conditions.push("bpm <= ?");
                 param_values.push(rusqlite::types::Value::Real(max_bpm));
+            }
+            if let Some(status) = &f.status {
+                conditions.push("status = ?");
+                param_values.push(rusqlite::types::Value::Text(status.clone()));
+            }
+            // Smart filters — applied server-side so they work across all 20k
+            // tracks, not just the currently loaded page.
+            if let Some(smart) = &f.smart_filter {
+                match smart.as_str() {
+                    "unanalyzed" => {
+                        conditions.push("key_camelot IS NULL");
+                    }
+                    "low-confidence" => {
+                        conditions.push("key_confidence IS NOT NULL AND key_confidence < 0.7");
+                    }
+                    "high-confidence" => {
+                        conditions.push("key_confidence IS NOT NULL AND key_confidence >= 0.85");
+                    }
+                    _ => {}
+                }
             }
         }
         
@@ -339,5 +363,156 @@ impl Database {
         )?;
         
         Ok((total, analyzed))
+    }
+
+    // ========================================================================
+    // Playlist methods
+    // ========================================================================
+
+    pub fn create_playlist(&self, name: &str, description: Option<&str>) -> Result<Playlist> {
+        self.conn.execute(
+            "INSERT INTO playlists (name, description) VALUES (?1, ?2)",
+            params![name, description],
+        )?;
+        let id = self.conn.last_insert_rowid();
+        let created_at: String = self.conn.query_row(
+            "SELECT created_at FROM playlists WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )?;
+        Ok(Playlist {
+            id,
+            name: name.to_string(),
+            description: description.map(|s| s.to_string()),
+            rules: None,
+            created_at,
+        })
+    }
+
+    pub fn get_playlists(&self) -> Result<Vec<Playlist>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, name, description, rules, created_at FROM playlists ORDER BY id DESC"
+        )?;
+        let playlists = stmt
+            .query_map([], |row| {
+                // rules is stored as TEXT (JSON); parse it if present.
+                let rules_text: Option<String> = row.get(3)?;
+                let rules = rules_text
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str(s).ok());
+                Ok(Playlist {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    description: row.get(2)?,
+                    rules,
+                    created_at: row.get(4)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(playlists)
+    }
+
+    pub fn delete_playlist(&self, id: i64) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM playlists WHERE id = ?1",
+            params![id],
+        )?;
+        Ok(())
+    }
+
+    pub fn add_track_to_playlist(&self, playlist_id: i64, track_id: i64, position: i64) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO playlist_tracks (playlist_id, track_id, position) VALUES (?1, ?2, ?3)
+             ON CONFLICT(playlist_id, track_id) DO UPDATE SET position = excluded.position",
+            params![playlist_id, track_id, position],
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_track_from_playlist(&self, playlist_id: i64, track_id: i64) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM playlist_tracks WHERE playlist_id = ?1 AND track_id = ?2",
+            params![playlist_id, track_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_playlist_tracks(&self, playlist_id: i64) -> Result<Vec<Track>> {        let mut stmt = self.conn.prepare(
+            "SELECT t.id, t.file_path, t.filename, t.title, t.artist, t.album,
+             t.duration_ms, t.key_standard, t.key_camelot, t.key_confidence, t.bpm,
+             t.energy_level, t.file_format, t.file_size, t.sample_rate, t.bit_depth,
+             t.analyzed_at, t.status, t.artwork_path, t.created_at, t.updated_at
+             FROM tracks t
+             JOIN playlist_tracks pt ON pt.track_id = t.id
+             WHERE pt.playlist_id = ?1
+             ORDER BY pt.position"
+        )?;
+        let tracks = stmt
+            .query_map(params![playlist_id], |row| {
+                Ok(Track {
+                    id: row.get(0)?,
+                    file_path: row.get(1)?,
+                    filename: row.get(2)?,
+                    title: row.get(3)?,
+                    artist: row.get(4)?,
+                    album: row.get(5)?,
+                    duration_ms: row.get(6)?,
+                    key_standard: row.get(7)?,
+                    key_camelot: row.get(8)?,
+                    key_confidence: row.get(9)?,
+                    bpm: row.get(10)?,
+                    energy_level: row.get(11)?,
+                    file_format: row.get(12)?,
+                    file_size: row.get(13)?,
+                    sample_rate: row.get(14)?,
+                    bit_depth: row.get(15)?,
+                    analyzed_at: row.get(16)?,
+                    status: TrackStatus::from(row.get::<_, String>(17)?),
+                    artwork_path: row.get(18)?,
+                    created_at: row.get(19)?,
+                    updated_at: row.get(20)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(tracks)
+    }
+
+    // ========================================================================
+    // MIK reference metadata import
+    // ========================================================================
+
+    /// Update a track's MIK reference data (key, energy, genre) by file path.
+    /// Used by the MIK CSV importer to populate reference metadata for
+    /// consensus scoring and energy display.
+    /// Returns true if a track was found and updated, false if no match.
+    pub fn update_mik_reference(
+        &self,
+        file_path: &str,
+        mik_key: Option<&str>,
+        mik_energy: Option<i32>,
+        genre: Option<&str>,
+    ) -> Result<bool> {
+        // Try exact path match first, then try a normalized match
+        // (MIK paths may use different drive letters or separators).
+        let normalized = file_path.replace('/', "\\");
+        let affected = self.conn.execute(
+            "UPDATE tracks SET mik_key = ?1, mik_energy = ?2, genre = ?3 WHERE file_path = ?4 OR file_path = ?5",
+            params![mik_key, mik_energy, genre, file_path, normalized],
+        )?;
+        if affected > 0 {
+            return Ok(true);
+        }
+
+        // Try matching by filename only as a last resort.
+        let filename = file_path
+            .rsplit(|c| c == '/' || c == '\\')
+            .next()
+            .unwrap_or(file_path);
+        let pattern = format!("%\\{}", filename);
+        let affected2 = self.conn.execute(
+            "UPDATE tracks SET mik_key = ?1, mik_energy = ?2, genre = ?3 WHERE file_path LIKE ?4",
+            params![mik_key, mik_energy, genre, pattern],
+        )?;
+        Ok(affected2 > 0)
     }
 }

@@ -22,6 +22,12 @@ pub struct AnalysisQueue {
     pub pending: Vec<(i64, String)>, // (track_id, file_path)
     pub in_progress: bool,
     pub paused: bool,
+    /// Timestamp (millis since epoch) when the current batch started.
+    pub batch_start_ms: Option<u128>,
+    /// Total tracks completed since the queue started.
+    pub completed_count: usize,
+    /// Total time spent analyzing (ms) since the queue started.
+    pub elapsed_ms: u128,
 }
 
 impl Default for AnalysisQueue {
@@ -30,6 +36,9 @@ impl Default for AnalysisQueue {
             pending: Vec::new(),
             in_progress: false,
             paused: false,
+            batch_start_ms: None,
+            completed_count: 0,
+            elapsed_ms: 0,
         }
     }
 }
@@ -70,6 +79,11 @@ pub fn run() {
             commands::generate_playlist,
             commands::get_compatible_tracks,
             commands::export_tracks,
+            commands::save_playlist,
+            commands::get_playlists,
+            commands::delete_playlist,
+            commands::get_playlist_tracks,
+            commands::import_mik_csv,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

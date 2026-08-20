@@ -128,6 +128,9 @@ export interface LibraryFilter {
   min_bpm?: number;
   max_bpm?: number;
   status?: TrackStatus;
+  /** Smart filter preset: "unanalyzed", "low-confidence", "high-confidence".
+   *  Applied server-side so it works across all 20k tracks. */
+  smart_filter?: string;
 }
 
 export interface LibraryPage {
