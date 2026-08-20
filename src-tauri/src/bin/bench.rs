@@ -40,10 +40,21 @@ struct Args {
     folder: Option<String>,
     manifest: Option<String>,
     seed: Option<u64>,
+    // Ablation flags
+    no_hpss: bool,
+    chroma12_only: bool,
+    chroma72_only: bool,
+    hpss_kernel: Option<usize>,
+    analysis_seconds: Option<usize>,
 }
 
 fn parse_args() -> Args {
-    let mut a = Args { corpus: None, giantsteps: None, limit: None, out: None, folder: None, manifest: None, seed: None };
+    let mut a = Args {
+        corpus: None, giantsteps: None, limit: None, out: None,
+        folder: None, manifest: None, seed: None,
+        no_hpss: false, chroma12_only: false, chroma72_only: false,
+        hpss_kernel: None, analysis_seconds: None,
+    };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -53,11 +64,23 @@ fn parse_args() -> Args {
             "--out" => a.out = it.next(),
             "--manifest" => a.manifest = it.next(),
             "--seed" => a.seed = it.next().and_then(|s| s.parse().ok()),
+            "--no-hpss" => a.no_hpss = true,
+            "--chroma12-only" => a.chroma12_only = true,
+            "--chroma72-only" => a.chroma72_only = true,
+            "--hpss-kernel" => a.hpss_kernel = it.next().and_then(|s| s.parse().ok()),
+            "--analysis-seconds" => a.analysis_seconds = it.next().and_then(|s| s.parse().ok()),
             "--help" | "-h" => {
                 eprintln!("Usage:");
                 eprintln!("  tunelock-bench --corpus <csv> [--limit N] [--seed S] [--manifest m.json] [--out report.json]");
                 eprintln!("  tunelock-bench --giantsteps <dataset_root> [--limit N] [--out report.json]");
                 eprintln!("  tunelock-bench <folder>            (legacy diagnostic mode)");
+                eprintln!("");
+                eprintln!("  Ablation flags:");
+                eprintln!("    --no-hpss               Skip HPSS, use raw spectrogram");
+                eprintln!("    --chroma12-only          Use only 12-bin path (Krumhansl+Temperley+Sha'ath-12)");
+                eprintln!("    --chroma72-only          Use only 72-band path (Sha'ath-72)");
+                eprintln!("    --hpss-kernel N          HPSS kernel size (default 9)");
+                eprintln!("    --analysis-seconds N     Analysis window in seconds (default 180)");
                 std::process::exit(0);
             }
             other if !other.starts_with("--") => a.folder = Some(other.to_string()),
@@ -69,10 +92,32 @@ fn parse_args() -> Args {
 
 fn main() {
     let args = parse_args();
+
+    // Build ablation config from flags
+    let ablation = tunelock_lib::analysis::key_detector::AblationConfig {
+        no_hpss: args.no_hpss,
+        hpss_kernel: args.hpss_kernel.unwrap_or(tunelock_lib::analysis::HPSS_KERNEL),
+        chroma12_only: args.chroma12_only,
+        chroma72_only: args.chroma72_only,
+        analysis_seconds: args.analysis_seconds,
+    };
+
+    // Print ablation mode if any non-default settings
+    let is_ablation = args.no_hpss || args.chroma12_only || args.chroma72_only
+        || args.hpss_kernel.is_some() || args.analysis_seconds.is_some();
+    if is_ablation {
+        eprintln!("Ablation mode:");
+        if args.no_hpss { eprintln!("  no HPSS (raw spectrogram)"); }
+        if args.chroma12_only { eprintln!("  12-bin only (Krumhansl+Temperley+Sha'ath-12)"); }
+        if args.chroma72_only { eprintln!("  72-band only (Sha'ath-72)"); }
+        if let Some(k) = args.hpss_kernel { eprintln!("  HPSS kernel: {}", k); }
+        if let Some(s) = args.analysis_seconds { eprintln!("  Analysis window: {}s", s); }
+    }
+
     if let Some(corpus) = args.corpus {
-        run_scored_corpus(&corpus, args.limit, args.out.as_deref(), args.manifest.as_deref(), args.seed);
+        run_scored_corpus(&corpus, args.limit, args.out.as_deref(), args.manifest.as_deref(), args.seed, &ablation);
     } else if let Some(gs) = args.giantsteps {
-        run_giantsteps(&gs, args.limit, args.out.as_deref());
+        run_giantsteps(&gs, args.limit, args.out.as_deref(), &ablation);
     } else if let Some(folder) = args.folder {
         legacy_folder_mode(&folder);
     } else {
@@ -84,13 +129,13 @@ fn main() {
     }
 }
 
-fn run_giantsteps(root: &str, limit: Option<usize>, out: Option<&str>) {
+fn run_giantsteps(root: &str, limit: Option<usize>, out: Option<&str>, ablation: &tunelock_lib::analysis::key_detector::AblationConfig) {
     let rows = load_giantsteps(Path::new(root));
     if rows.is_empty() {
         eprintln!("No GiantSteps annotations found under {}", root);
         std::process::exit(1);
     }
-    score_rows(rows, root, limit, out, None, None);
+    score_rows(rows, root, limit, out, None, None, ablation);
 }
 
 // ============================================================================
@@ -216,7 +261,7 @@ struct CorpusReport {
     records: Vec<TrackRecord>,
 }
 
-fn analyse_row(row: &CorpusRow, weights: ProfileWeights) -> TrackRecord {
+fn analyse_row(row: &CorpusRow, weights: ProfileWeights, ablation: &tunelock_lib::analysis::key_detector::AblationConfig) -> TrackRecord {
     let start = Instant::now();
     let mut rec = TrackRecord {
         path: row.location.clone(),
@@ -254,8 +299,8 @@ fn analyse_row(row: &CorpusRow, weights: ProfileWeights) -> TrackRecord {
     };
     rec.decode_ms = decode_start.elapsed().as_millis() as u64;
 
-    let diag = match detect_key_diagnostic(&samples, weights, |_, _| {}) {
-        Ok(d) => d,
+    let candidates = match tunelock_lib::analysis::key_detector::detect_key_ablation(&samples, weights, ablation) {
+        Ok(c) => c,
         Err(e) => {
             rec.failure = Some(format!("key: {}", e));
             rec.total_ms = start.elapsed().as_millis() as u64;
@@ -267,7 +312,7 @@ fn analyse_row(row: &CorpusRow, weights: ProfileWeights) -> TrackRecord {
         rec.pred_bpm = Some(bpm);
     }
 
-    if let Some(w) = diag.candidates.first() {
+    if let Some(w) = candidates.first() {
         rec.pred_camelot = Some(key_to_camelot(w.tonic, w.is_major));
         rec.pred_standard = Some(format!(
             "{} {}",
@@ -277,8 +322,7 @@ fn analyse_row(row: &CorpusRow, weights: ProfileWeights) -> TrackRecord {
         rec.pred_confidence = Some(w.confidence);
         rec.pred_agreement = Some(w.agreement);
 
-        rec.candidates = diag
-            .candidates
+        rec.candidates = candidates
             .iter()
             .take(5)
             .map(|c| CandidateOut {
@@ -317,7 +361,7 @@ fn analyse_row(row: &CorpusRow, weights: ProfileWeights) -> TrackRecord {
     rec
 }
 
-fn run_scored_corpus(corpus_path: &str, limit: Option<usize>, out: Option<&str>, manifest: Option<&str>, seed: Option<u64>) {
+fn run_scored_corpus(corpus_path: &str, limit: Option<usize>, out: Option<&str>, manifest: Option<&str>, seed: Option<u64>, ablation: &tunelock_lib::analysis::key_detector::AblationConfig) {
     println!("Loading corpus: {}", corpus_path);
     let rows = match load_mik_corpus(corpus_path) {
         Ok(r) => r,
@@ -326,10 +370,10 @@ fn run_scored_corpus(corpus_path: &str, limit: Option<usize>, out: Option<&str>,
             std::process::exit(1);
         }
     };
-    score_rows(rows, corpus_path, limit, out, manifest, seed);
+    score_rows(rows, corpus_path, limit, out, manifest, seed, ablation);
 }
 
-fn score_rows(rows: Vec<CorpusRow>, corpus_label: &str, limit: Option<usize>, out: Option<&str>, manifest: Option<&str>, seed: Option<u64>) {
+fn score_rows(rows: Vec<CorpusRow>, corpus_label: &str, limit: Option<usize>, out: Option<&str>, manifest: Option<&str>, seed: Option<u64>, ablation: &tunelock_lib::analysis::key_detector::AblationConfig) {
     // Classification summary
     let mut status_counts: BTreeMap<String, usize> = BTreeMap::new();
     for r in &rows {
@@ -393,7 +437,7 @@ fn score_rows(rows: Vec<CorpusRow>, corpus_label: &str, limit: Option<usize>, ou
     let records: Vec<TrackRecord> = ready
         .par_iter()
         .map(|row| {
-            let rec = analyse_row(row, weights);
+            let rec = analyse_row(row, weights, ablation);
             let n = done.fetch_add(1, Ordering::Relaxed) + 1;
             if n % 50 == 0 || n == total {
                 let elapsed = bench_start.elapsed().as_secs_f64();

@@ -529,3 +529,163 @@ pub fn format_key(vote: KeyVote) -> (String, String, f64) {
         vote.score,
     )
 }
+
+// ============================================================================
+// Soft voting variants for ablation
+// ============================================================================
+
+/// Soft temporal voting on 12-bin chroma only (Krumhansl + Temperley + Sha'ath-12).
+/// Used for ablation: measures the 12-bin path in isolation.
+pub fn temporal_vote_ranked_soft_12(
+    chroma12: &Array2<f64>,
+    segments: usize,
+    w: ProfileWeights,
+) -> Vec<RankedCandidate> {
+    let (_, total_frames) = chroma12.dim();
+    if total_frames == 0 {
+        return vec![];
+    }
+    let segments = segments.max(1);
+    let seg_len = total_frames / segments;
+
+    let mut aggregate = [[0.0f64; 12]; 2];
+    let mut valid_segments = 0usize;
+
+    for s in 0..segments {
+        let start = s * seg_len;
+        let end = if s == segments - 1 { total_frames } else { (s + 1) * seg_len };
+        if start >= end { continue; }
+
+        let mut mean = [0.0f64; 12];
+        for pc in 0..12 {
+            let slice = chroma12.slice(ndarray::s![pc, start..end]);
+            mean[pc] = slice.mean().unwrap_or(0.0);
+        }
+        let norm: f64 = mean.iter().map(|x| x * x).sum::<f64>().sqrt();
+        if norm > 0.0 {
+            for v in &mut mean { *v /= norm; }
+        }
+
+        // Compute all 24 scores for the 12-bin path
+        let krumhansl_ps = vote_with_profile(&mean, &KeyProfiles::KRUMHANSL_MAJOR, &KeyProfiles::KRUMHANSL_MINOR);
+        let temperley_ps = vote_with_profile(&mean, &KeyProfiles::TEMPERLEY_MAJOR, &KeyProfiles::TEMPERLEY_MINOR);
+        let shaath_ps = vote_with_profile(&mean, &KeyProfiles::SHAATH_MAJOR, &KeyProfiles::SHAATH_MINOR);
+
+        let mut combined = [[0.0f64; 12]; 2];
+        let mut weight_sum = 0.0;
+        for (ps, weight) in [(&krumhansl_ps, w.krumhansl), (&temperley_ps, w.temperley), (&shaath_ps, w.shaath)] {
+            weight_sum += weight;
+            for t in 0..12 {
+                combined[0][t] += ps.major_scores[t] * weight;
+                combined[1][t] += ps.minor_scores[t] * weight;
+            }
+        }
+        if weight_sum > 0.0 {
+            for mode in 0..2 {
+                for t in 0..12 {
+                    combined[mode][t] /= weight_sum;
+                }
+            }
+        }
+
+        // Normalise to [0, 1] within this segment
+        let min_score = combined.iter().flat_map(|r| r.iter()).copied().fold(f64::INFINITY, f64::min);
+        let max_score = combined.iter().flat_map(|r| r.iter()).copied().fold(f64::NEG_INFINITY, f64::max);
+        let range = (max_score - min_score).max(1e-10);
+        for mode in 0..2 {
+            for t in 0..12 {
+                aggregate[mode][t] += (combined[mode][t] - min_score) / range;
+            }
+        }
+        valid_segments += 1;
+    }
+
+    build_ranked_from_aggregate(&aggregate, valid_segments)
+}
+
+/// Soft temporal voting on 72-band chroma only (Sha'ath-72).
+/// Used for ablation: measures the 72-band path in isolation.
+pub fn temporal_vote_ranked_soft_72(
+    chroma72: &Array2<f64>,
+    segments: usize,
+    w: ProfileWeights,
+) -> Vec<RankedCandidate> {
+    let (_, total_frames) = chroma72.dim();
+    if total_frames == 0 {
+        return vec![];
+    }
+    let segments = segments.max(1);
+    let seg_len = total_frames / segments;
+
+    let mut aggregate = [[0.0f64; 12]; 2];
+    let mut valid_segments = 0usize;
+
+    for s in 0..segments {
+        let start = s * seg_len;
+        let end = if s == segments - 1 { total_frames } else { (s + 1) * seg_len };
+        if start >= end { continue; }
+
+        let mut mean72 = [0.0f64; 72];
+        for b in 0..72 {
+            let slice = chroma72.slice(ndarray::s![b, start..end]);
+            mean72[b] = slice.mean().unwrap_or(0.0);
+        }
+        let norm72: f64 = mean72.iter().map(|x| x * x).sum::<f64>().sqrt();
+        if norm72 > 0.0 {
+            for v in &mut mean72 { *v /= norm72; }
+        }
+
+        let ps = shaath72_vote(&mean72);
+
+        // Normalise to [0, 1] within this segment
+        let min_score = ps.major_scores.iter().chain(ps.minor_scores.iter()).copied()
+            .fold(f64::INFINITY, f64::min);
+        let max_score = ps.major_scores.iter().chain(ps.minor_scores.iter()).copied()
+            .fold(f64::NEG_INFINITY, f64::max);
+        let range = (max_score - min_score).max(1e-10);
+        for t in 0..12 {
+            aggregate[0][t] += (ps.major_scores[t] - min_score) / range;
+            aggregate[1][t] += (ps.minor_scores[t] - min_score) / range;
+        }
+        valid_segments += 1;
+    }
+
+    // Weight is irrelevant for 72-only, but we pass it for consistency
+    let _ = w;
+    build_ranked_from_aggregate(&aggregate, valid_segments)
+}
+
+/// Build the ranked candidate list from an aggregate score table.
+fn build_ranked_from_aggregate(aggregate: &[[f64; 12]; 2], valid_segments: usize) -> Vec<RankedCandidate> {
+    if valid_segments == 0 {
+        return vec![];
+    }
+    let total_score: f64 = aggregate.iter().flat_map(|row| row.iter()).sum();
+    if total_score <= 0.0 {
+        return vec![];
+    }
+
+    let mut ranked: Vec<RankedCandidate> = Vec::with_capacity(24);
+    for mode in 0..2 {
+        for tonic in 0..12 {
+            let agg_score = aggregate[mode][tonic];
+            let confidence = agg_score / total_score;
+            ranked.push(RankedCandidate {
+                tonic,
+                is_major: mode == 0,
+                confidence,
+                agreement: confidence,
+                avg_score: (agg_score / valid_segments as f64).clamp(0.0, 1.0),
+                segment_count: valid_segments,
+            });
+        }
+    }
+
+    ranked.sort_by(|a, b| {
+        b.confidence
+            .partial_cmp(&a.confidence)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(b.avg_score.partial_cmp(&a.avg_score).unwrap_or(std::cmp::Ordering::Equal))
+    });
+    ranked
+}

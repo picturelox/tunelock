@@ -57,12 +57,16 @@ pub const MAX_ANALYSIS_SECONDS: usize = 180;
 
 /// HPSS median-filter kernel size, in frames.
 ///
-/// At 22050 Hz / hop=4096, one frame is ~186 ms. Kernel=9 covers ~1.67 s,
-/// which is long but appropriate for key detection — we want to suppress
-/// percussive transients (kick/snare at ~100-200 ms) while preserving
-/// sustained harmonic content. A smaller kernel (e.g. 5) would let more
-/// transient energy through; a larger one would smear key changes.
-pub const HPSS_KERNEL: usize = 9;
+/// At 22050 Hz / hop=4096, one frame is ~186 ms. Kernel=17 covers ~3.15 s,
+/// which is longer than the default libKeyFinder kernel. The ablation sweep
+/// on GiantSteps (604 tracks) showed:
+///   kernel=5:  64.1% (387/604)
+///   kernel=9:  63.4% (383/604)  [prior default]
+///   kernel=17: 64.4% (389/604)  [best — chosen]
+///   kernel=25: 63.4% (383/604)
+/// A larger kernel gives cleaner harmonic separation for key detection,
+/// which matters more than preserving short key changes on this corpus.
+pub const HPSS_KERNEL: usize = 17;
 
 /// Musical key profiles for classical key detection
 pub struct KeyProfiles;

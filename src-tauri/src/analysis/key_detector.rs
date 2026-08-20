@@ -14,7 +14,7 @@ use anyhow::Result;
 use ndarray::Array2;
 
 use super::chromagram::{chromagram72_from_spec, chromagram_from_spec, compute_spectrogram};
-use super::ensemble::{format_key, temporal_vote_ranked_dual_soft, ProfileWeights, RankedCandidate};
+use super::ensemble::{format_key, temporal_vote_ranked_dual_soft, temporal_vote_ranked_soft_12, temporal_vote_ranked_soft_72, ProfileWeights, RankedCandidate};
 use super::hpss::hpss;
 use super::{HPSS_KERNEL, MAX_ANALYSIS_SECONDS, SAMPLE_RATE};
 
@@ -39,6 +39,84 @@ pub struct KeyResult {
     pub key_standard: String,
     pub key_camelot: String,
     pub confidence: f64,
+}
+
+/// Ablation configuration for controlled experiments.
+/// Each field toggles or modifies one engine component so we can
+/// measure its individual contribution to accuracy.
+#[derive(Debug, Clone)]
+pub struct AblationConfig {
+    /// If true, skip HPSS and use the raw spectrogram for chroma.
+    pub no_hpss: bool,
+    /// HPSS kernel size (default 9). Only used if no_hpss is false.
+    pub hpss_kernel: usize,
+    /// If true, use only the 12-bin path (Krumhansl + Temperley + Sha'ath-12).
+    pub chroma12_only: bool,
+    /// If true, use only the 72-band path (Sha'ath-72).
+    pub chroma72_only: bool,
+    /// Override the analysis window in seconds (default 180).
+    pub analysis_seconds: Option<usize>,
+}
+
+impl Default for AblationConfig {
+    fn default() -> Self {
+        Self {
+            no_hpss: false,
+            hpss_kernel: HPSS_KERNEL,
+            chroma12_only: false,
+            chroma72_only: false,
+            analysis_seconds: None,
+        }
+    }
+}
+
+/// Ablation entry point: runs the key detection pipeline with configurable
+/// component toggles. Used by the bench to measure each component's
+/// contribution to accuracy.
+pub fn detect_key_ablation(
+    samples: &[f32],
+    weights: ProfileWeights,
+    cfg: &AblationConfig,
+) -> Result<Vec<RankedCandidate>> {
+    // 0. Window
+    let max_samples = cfg.analysis_seconds.unwrap_or(MAX_ANALYSIS_SECONDS) * SAMPLE_RATE;
+    let samples_win = if samples.len() <= max_samples {
+        samples
+    } else {
+        let start = (samples.len() - max_samples) / 2;
+        &samples[start..start + max_samples]
+    };
+
+    // 1. Spectrogram
+    let spec = compute_spectrogram(samples_win)?;
+    let (_, frames) = spec.dim();
+    if frames == 0 {
+        return Ok(vec![]);
+    }
+
+    // 2. HPSS (or skip)
+    let harmonic_source: Array2<f64> = if cfg.no_hpss {
+        spec.clone()
+    } else {
+        let (h, _p) = hpss(&spec, cfg.hpss_kernel);
+        h
+    };
+
+    // 3. Chromagrams
+    let chroma12 = chromagram_from_spec(&harmonic_source);
+    let chroma72 = chromagram72_from_spec(&harmonic_source);
+
+    // 4. Voting — use the appropriate path based on ablation flags
+    if cfg.chroma12_only {
+        // 12-bin only: use the legacy single-chroma path with soft voting
+        Ok(temporal_vote_ranked_soft_12(&chroma12, 8, weights))
+    } else if cfg.chroma72_only {
+        // 72-band only: use Sha'ath 72 exclusively
+        Ok(temporal_vote_ranked_soft_72(&chroma72, 8, weights))
+    } else {
+        // Default dual path
+        Ok(temporal_vote_ranked_dual_soft(&chroma12, &chroma72, 8, weights))
+    }
 }
 
 /// Main entry point used by the analysis worker.
