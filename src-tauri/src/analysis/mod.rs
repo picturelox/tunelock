@@ -32,9 +32,10 @@ pub use crate::harmony::{key_to_camelot, pitch_class_to_name};
 // across (the analysis window of) the audio with the same Krumhansl /
 // Temperley / Sha’ath profiles. We’re cutting compute, not signal.
 //
-// `FFT_SIZE` and `HOP_SIZE` are matched to the new rate so frequency
-// resolution stays around 5.4 Hz/bin (good for chroma) and time resolution
-// stays around 23 ms/hop (fine for slowly-varying key).
+// `FFT_SIZE` and `HOP_SIZE` are matched to the rate so frequency
+// resolution is ~1.35 Hz/bin (excellent for chroma — the CQT bins are
+// narrow enough to resolve individual semitones even at low frequencies)
+// and time resolution is ~186 ms/hop (fine for slowly-varying key).
 // =============================================================================
 pub const SAMPLE_RATE: usize = 22050;
 pub const FFT_SIZE: usize = 16384;
@@ -45,17 +46,17 @@ pub const BANDS_72: usize = 72;
 /// Maximum seconds of audio fed into the spectrogram / HPSS / chroma stages.
 /// Longer tracks get a centered window of this length.
 ///
-/// At 22050 Hz / hop=512, 180 s = ~7720 frames. HPSS on that takes ~2-4 s
-/// in debug builds, under 1 s in release. Tracks shorter than this are
-/// analysed in full.
+/// At 22050 Hz / hop=4096, 180 s = ~969 frames. HPSS on that takes well
+/// under 1 s in release. Tracks shorter than this are analysed in full.
 pub const MAX_ANALYSIS_SECONDS: usize = 180;
 
 /// HPSS median-filter kernel size, in frames.
 ///
-/// At 22050 Hz / hop=512, one frame is ~23 ms. Kernel=9 covers ~210 ms,
-/// which matches the old 44.1 kHz / hop=1024 / kernel=9 pipeline's
-/// temporal footprint and correctly suppresses kick/snare transients without
-/// smearing tonal phrasing.
+/// At 22050 Hz / hop=4096, one frame is ~186 ms. Kernel=9 covers ~1.67 s,
+/// which is long but appropriate for key detection — we want to suppress
+/// percussive transients (kick/snare at ~100-200 ms) while preserving
+/// sustained harmonic content. A smaller kernel (e.g. 5) would let more
+/// transient energy through; a larger one would smear key changes.
 pub const HPSS_KERNEL: usize = 9;
 
 /// Musical key profiles for classical key detection
