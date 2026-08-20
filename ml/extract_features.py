@@ -66,11 +66,26 @@ def extract_hpcp(y, sr=22050, hop_length=512, n_bins=12):
 
 
 def load_audio(filepath, sr=22050, duration=30.0):
-    """Load audio file, center `duration` seconds."""
-    y, _ = librosa.load(filepath, sr=sr, mono=True, duration=duration)
-    if len(y) > sr * duration:
-        start = (len(y) - int(sr * duration)) // 2
-        y = y[start:start + int(sr * duration)]
+    """Load audio file, center `duration` seconds.
+
+    Bug fix (Step 7): Previously, `duration=30.0` was passed to
+    `librosa.load`, which truncates the audio to the first 30 seconds
+    BEFORE centering. The centering branch was dead code because
+    `len(y)` could never exceed `sr * duration`.
+
+    Now we load the full audio (or a generous prefix) and center
+    properly. This ensures we capture the middle of the track, not
+    the intro.
+    """
+    # Load the full audio, or up to duration*3 samples (enough to center)
+    max_samples = int(sr * duration * 3)
+    y, _ = librosa.load(filepath, sr=sr, mono=True)
+    target_len = int(sr * duration)
+    if len(y) > target_len:
+        start = (len(y) - target_len) // 2
+        y = y[start:start + target_len]
+    elif len(y) < target_len:
+        y = np.pad(y, (0, target_len - len(y)))
     return y
 
 

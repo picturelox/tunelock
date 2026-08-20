@@ -306,7 +306,47 @@ cargo run --release --bin tunelock-bench -- --corpus ..\ground-truth\MIKComplete
 4. ✅ Run clean ablations: 12/72 paths, no-HPSS, kernel sweep, multiple windows
 5. ✅ Implement braw/bgate HPCP experiment on a separate chroma path
 6. ✅ Build gold set infrastructure + key-identification tooling
-7. Download MTG dataset, fix CNN bugs, re-run corrected experiment
+7. ✅ Download MTG dataset, fix CNN bugs, prepare corrected experiment
+
+## Step 7: CNN experiment fixes
+
+**Three critical bugs were fixed in the CNN training pipeline:**
+
+1. **Windowing bug** (`extract_features.py`): `librosa.load(duration=30.0)`
+   truncated audio to the first 30 seconds. The centering code was dead
+   because `len(y)` could never exceed `sr * duration`. Fixed: now loads
+   the full audio and centers properly.
+
+2. **Augmentation bug** (`train_cv.py`): `np.roll(d, s, axis=0)` rolled
+   the batch dimension (length N), not the time axis. Augmentation
+   produced identical duplicates instead of time-shifted variants. Fixed:
+   now rolls axis=2 (time frames) and adds pitch-shift augmentation
+   following the Korzeniowski protocol (±4 semitone circular shifts with
+   corresponding label shifts).
+
+3. **Epoch selection bias** (`train_cv.py`): Best epoch was selected on
+   the same validation fold used for reporting final accuracy. This
+   inflates the reported accuracy because the model "peeked" at the test
+   fold during training. Fixed: now splits training data into train +
+   internal validation (90/10), selects the best epoch on internal
+   validation only, and evaluates on the external fold exactly once.
+
+**Download infrastructure:**
+- Added `ground-truth/download-giantsteps-mtg.ps1` to download the
+  GiantSteps-MTG dataset from Zenodo (DOI 10.5281/zenodo.1101082).
+- This provides ~1,486 tracks for training, separate from the 604-track
+  GiantSteps test set.
+
+**Status:** The code fixes are complete. The corrected experiment has
+not yet been run because it requires:
+1. Downloading the MTG dataset (~2 GB).
+2. Extracting features from both MTG and GiantSteps.
+3. Training the CNN with the fixed augmentation and epoch selection.
+4. Evaluating on the untouched GiantSteps test set.
+
+The prior 29.6% CNN result is INVALID — it was produced by a broken
+experiment. No conclusion about CNN viability can be drawn until the
+corrected experiment is run.
 
 ## Step 6: Gold set infrastructure + key-identification tooling
 

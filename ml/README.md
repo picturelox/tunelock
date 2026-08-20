@@ -60,27 +60,47 @@ weight is not justified by a marginal improvement.
 
 ## Status
 
-**TRAINED AND EVALUATED — CUT per plan's decision criterion.**
+**EXPERIMENT INVALID — DEFERRED (Step 7 fixes applied, pending re-run)**
 
-Cross-validated results on GiantSteps-key (604 tracks, 5-fold CV):
+The prior CNN experiment had three critical bugs that invalidated its
+results:
+
+1. **Windowing bug**: `librosa.load(duration=30.0)` truncated audio to
+   the first 30 seconds. The centering code was dead. Fixed: now loads
+   full audio and centers properly.
+
+2. **Augmentation bug**: `np.roll(d, s, axis=0)` rolled the batch
+   dimension (length N), not the time axis. Augmentation produced
+   identical duplicates. Fixed: now rolls axis=2 (time frames) and
+   adds pitch-shift augmentation (Korzeniowski protocol).
+
+3. **Epoch selection bias**: Best epoch was selected on the same
+   validation fold used for reporting. Fixed: now splits training into
+   train + internal validation (90/10), selects epoch on internal
+   validation only, and evaluates on the external fold once.
+
+The prior 29.6% result is NOT a valid negative result — it was produced
+by a broken experiment. The CNN must be re-run with the fixes before
+any conclusion can be drawn.
+
+## Corrected experiment protocol (Step 7)
+
+1. Download GiantSteps-MTG from Zenodo (DOI 10.5281/zenodo.1101082)
+   using `ground-truth/download-giantsteps-mtg.ps1`.
+2. Extract features from MTG (training) and GiantSteps (test) separately.
+3. Train on MTG with corrected augmentation (time-shift + pitch-shift).
+4. Use leakage-safe artist-aware splits for MTG train/val.
+5. Evaluate once on the untouched GiantSteps 604-track test set.
+6. Compare paired predictions against the classical engine.
+7. Keep CNN only if it beats classical by +3 points on GiantSteps.
+
+## Prior (invalid) results — kept for reference only
 
 | Model | Parameters | Accuracy | Notes |
 |---|---|---|---|
-| Full KeyCNN (424K) | 424,792 | 26.4% | Massive overfitting (96% train, 20% val) |
-| SmallKeyCNN (26K) | 26,392 | 29.6% ± 2.3% | Honest 5-fold CV result |
-| Classical engine | N/A | 68.2% | TuneLock's Krumhansl/Temperley/Sha'ath ensemble |
+| Full KeyCNN (424K) | 424,792 | 26.4% | INVALID — overfitting + windowing bug |
+| SmallKeyCNN (26K) | 26,392 | 29.6% ± 2.3% | INVALID — no-op augmentation + epoch bias |
+| Classical engine | N/A | 64.4% | Valid — current TuneLock ensemble |
 
-The CNN scored less than half the classical engine's accuracy. Per the plan:
-> "If it doesn't beat the classical path on your corpus, cut it."
-
-**Root cause: insufficient training data.**
-- GiantSteps-key: 604 tracks (downloaded successfully)
-- GiantSteps-MTG: 1,486 tracks (download FAILED — Beatport preview URLs from 2015 are dead)
-- Academic papers achieving 70-75% use ~2,100 tracks plus pretraining
-
-**Reactivation path:**
-1. Find an alternative mirror for GiantSteps-MTG audio
-2. Or: use pretraining (e.g., transfer from a larger audio classification model)
-3. Or: use the user's adjudicated gold labels (Phase 9 adjudication queue) as training data
-4. Re-run `train_cv.py` with the larger dataset
-5. If accuracy exceeds 68.2% + 3 points, proceed with ONNX export and Rust integration
+**Do not cite the CNN results above. They were produced by a broken
+experiment. The corrected experiment has not yet been run.**

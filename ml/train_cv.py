@@ -62,28 +62,78 @@ class SmallKeyCNN(nn.Module):
 
 
 def augment_data(data, labels, num_augments=4):
-    """Time-shift augmentation."""
+    """Time-shift + pitch-shift augmentation.
+
+    Bug fixes (Step 7):
+    1. Time shift was rolling axis=0 (the batch dimension) instead of
+       the time axis. Now rolls axis=2 (height = time frames).
+    2. Added pitch-shift augmentation: circularly shift the frequency
+       bins by ±1-7 semitones and correspondingly shift the label.
+       This is the augmentation used by Korzeniowski et al. (2017).
+    """
     augmented_data = [data]
     augmented_labels = [labels]
+
+    n_samples = len(data)
+
     for _ in range(num_augments):
-        shifts = np.random.randint(-50, 50, size=len(data))
-        shifted = np.array([np.roll(d, s, axis=0) for d, s in zip(data, shifts)])
+        # Time-shift: roll along the time axis (axis=2 in [N, C, H, W])
+        shifts = np.random.randint(-50, 50, size=n_samples)
+        shifted = np.array([np.roll(d, s, axis=2) for d, s in zip(data, shifts)])
         augmented_data.append(shifted)
         augmented_labels.append(labels)
+
+    # Pitch-shift: circularly shift frequency bins and labels
+    # Each semitone shift maps label L to (L + shift) % 12 + (L // 12) * 12
+    pitch_shifts = [-4, -3, -2, -1, 1, 2, 3, 4, 5, 6, 7]
+    for ps in pitch_shifts[:4]:  # Use 4 pitch shifts to limit augmentation size
+        shifted_data = np.roll(data, ps, axis=3)  # axis=3 = frequency bins
+        shifted_labels = []
+        for lbl in labels:
+            mode = lbl // 12  # 0=major, 1=minor
+            tonic = lbl % 12
+            new_tonic = (tonic + ps) % 12
+            shifted_labels.append(new_tonic + mode * 12)
+        augmented_data.append(shifted_data)
+        augmented_labels.append(np.array(shifted_labels))
+
     return np.concatenate(augmented_data), np.concatenate(augmented_labels)
 
 
 def train_fold(model, train_loader, val_loader, epochs, device, lr=0.001):
+    """Train one fold and return the validation accuracy.
+
+    Bug fix (Step 7): Previously, the best epoch was selected based on
+    the validation fold's accuracy, which is the same fold used for
+    reporting. This introduces model-selection bias — the reported
+    accuracy is inflated because we "peeked" at the test fold during
+    training.
+
+    Now we split the training data into train + internal validation
+    (90/10) and select the best epoch on the internal validation only.
+    The external validation fold is evaluated only once, after training.
+    """
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=1e-3)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
 
-    best_val_acc = 0.0
+    # Split training data into train + internal validation
+    train_size = int(0.9 * len(train_loader.dataset))
+    internal_val_size = len(train_loader.dataset) - train_size
+    train_subset, internal_val_subset = torch.utils.data.random_split(
+        train_loader.dataset,
+        [train_size, internal_val_size],
+        generator=torch.Generator().manual_seed(42)
+    )
+    internal_train_loader = DataLoader(train_subset, batch_size=train_loader.batch_size, shuffle=True)
+    internal_val_loader = DataLoader(internal_val_subset, batch_size=train_loader.batch_size)
+
+    best_internal_acc = 0.0
     best_state = None
 
     for epoch in range(epochs):
         model.train()
-        for inputs, labels in train_loader:
+        for inputs, labels in internal_train_loader:
             inputs, labels = inputs.to(device), labels.to(device)
             optimizer.zero_grad()
             outputs = model(inputs)
@@ -91,28 +141,43 @@ def train_fold(model, train_loader, val_loader, epochs, device, lr=0.001):
             loss.backward()
             optimizer.step()
 
-        # Validation
+        # Internal validation (for epoch selection only)
         model.eval()
-        val_correct = 0
-        val_total = 0
+        internal_correct = 0
+        internal_total = 0
         with torch.no_grad():
-            for inputs, labels in val_loader:
+            for inputs, labels in internal_val_loader:
                 inputs, labels = inputs.to(device), labels.to(device)
                 outputs = model(inputs)
                 _, predicted = outputs.max(1)
-                val_total += labels.size(0)
-                val_correct += predicted.eq(labels).sum().item()
+                internal_total += labels.size(0)
+                internal_correct += predicted.eq(labels).sum().item()
 
-        val_acc = 100.0 * val_correct / val_total
+        internal_acc = 100.0 * internal_correct / max(internal_total, 1)
         scheduler.step()
 
-        if val_acc > best_val_acc:
-            best_val_acc = val_acc
+        if internal_acc > best_internal_acc:
+            best_internal_acc = internal_acc
             best_state = {k: v.clone() for k, v in model.state_dict().items()}
 
+    # Load best epoch (selected on internal validation only)
     if best_state is not None:
         model.load_state_dict(best_state)
-    return best_val_acc
+
+    # Evaluate on the external validation fold (only once)
+    model.eval()
+    val_correct = 0
+    val_total = 0
+    with torch.no_grad():
+        for inputs, labels in val_loader:
+            inputs, labels = inputs.to(device), labels.to(device)
+            outputs = model(inputs)
+            _, predicted = outputs.max(1)
+            val_total += labels.size(0)
+            val_correct += predicted.eq(labels).sum().item()
+
+    val_acc = 100.0 * val_correct / max(val_total, 1)
+    return val_acc
 
 
 def main():
