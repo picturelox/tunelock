@@ -1490,3 +1490,49 @@ pub async fn assist_analyze_setlist(
         .await
         .map_err(|e| e.to_string())
 }
+
+#[command]
+pub async fn assist_repair_metadata(
+    state: State<'_, AppState>,
+) -> Result<crate::assist::MetadataRepairBatch, String> {
+    let enabled = *state.assist_enabled.lock().await;
+    if !enabled {
+        return Err("Assist layer is not enabled".to_string());
+    }
+    let model = state.assist_model.lock().await.clone()
+        .ok_or("No model selected")?;
+
+    // Get library tracks with missing metadata
+    let db = state.db.lock().await;
+    let page = db.get_library_page(0, 5000, "filename", "asc", None)
+        .map_err(|e| e.to_string())?;
+    drop(db);
+
+    let tracks: Vec<(i64, String, Option<String>, Option<String>, Option<String>, Option<String>)> = page.tracks.iter().map(|t| {
+        (t.id, t.filename.clone(), t.title.clone(), t.artist.clone(),
+         t.album.clone(), None) // genre not in Track struct yet
+    }).collect();
+
+    crate::assist::repair_metadata(&state.ollama, &model, &tracks)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[command]
+pub async fn assist_apply_metadata_repair(
+    state: State<'_, AppState>,
+    proposal: crate::assist::MetadataProposal,
+) -> Result<(), String> {
+    // Apply a single metadata proposal to the database
+    let db = state.db.lock().await;
+    db.update_track_metadata(
+        proposal.track_id,
+        proposal.proposed_title.as_deref(),
+        proposal.proposed_artist.as_deref(),
+        proposal.proposed_album.as_deref(),
+        None, // duration_ms — not changed
+        "",   // file_format — not changed
+        None, None, // sample_rate, bit_depth — not changed
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}

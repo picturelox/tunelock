@@ -298,3 +298,24 @@ export interface SetlistAnalysis {
   matchedTracks: MatchedTrack[];
   summary: SetlistSummary;
 }
+
+export interface MetadataProposal {
+  trackId: number;
+  filename: string;
+  currentArtist: string | null;
+  currentTitle: string | null;
+  currentAlbum: string | null;
+  currentGenre: string | null;
+  proposedArtist: string | null;
+  proposedTitle: string | null;
+  proposedAlbum: string | null;
+  proposedGenre: string | null;
+  confidence: number;
+  source: string;
+}
+
+export interface MetadataRepairBatch {
+  proposals: MetadataProposal[];
+  totalScanned: number;
+  totalProposed: number;
+}

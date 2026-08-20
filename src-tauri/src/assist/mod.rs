@@ -14,9 +14,13 @@
 
 pub mod ollama;
 pub mod setlist;
+pub mod metadata;
 
 pub use ollama::{AssistStatus, OllamaClient, OllamaModel, ChatMessage};
 pub use setlist::{
     ParsedSetlist, ParsedTrack, MatchedTrack, LocalMatch,
     SetlistAnalysis, SetlistSummary, analyze_setlist,
+};
+pub use metadata::{
+    MetadataProposal, MetadataRepairBatch, repair_metadata,
 };

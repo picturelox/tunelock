@@ -24,6 +24,8 @@ import type {
   TrainingStats,
   AssistStatus,
   SetlistAnalysis,
+  MetadataProposal,
+  MetadataRepairBatch,
 } from '../types';
 
 // === Analysis Commands ===
@@ -336,4 +338,12 @@ export async function assistSetModel(model: string): Promise<void> {
 
 export async function assistAnalyzeSetlist(rawText: string): Promise<SetlistAnalysis> {
   return invoke('assist_analyze_setlist', { rawText });
+}
+
+export async function assistRepairMetadata(): Promise<MetadataRepairBatch> {
+  return invoke('assist_repair_metadata');
+}
+
+export async function assistApplyMetadataRepair(proposal: MetadataProposal): Promise<void> {
+  return invoke('assist_apply_metadata_repair', { proposal });
 }

@@ -112,6 +112,8 @@ pub fn run() {
             commands::assist_set_enabled,
             commands::assist_set_model,
             commands::assist_analyze_setlist,
+            commands::assist_repair_metadata,
+            commands::assist_apply_metadata_repair,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
