@@ -156,6 +156,12 @@ pub fn detect_key_diagnostic(
     timings.ensemble = t.elapsed().as_millis() as u64;
     on_stage("ensemble", 0.85);
 
+    // Track-level corrections on the top candidate.
+    // (Disabled — fifth-disambiguation and mode-flip both degraded accuracy
+    //  on the 500-track benchmark. The engine is already well-tuned for
+    //  this corpus, and naive post-hoc chroma heuristics create more errors
+    //  than they fix. See ACCURACY.md for the full ablation results.)
+
     let chroma_mean = mean_chroma(&chroma12);
 
     Ok(KeyDiagnostic { candidates, chroma_mean, timings })

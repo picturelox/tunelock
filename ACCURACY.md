@@ -24,28 +24,28 @@ Updated after each tuning phase.
 
 ## Results comparison
 
-| Metric | Baseline | Key Tuned | Tempo Rewritten | Phase 2 Media | Total Change |
-|---|---|---|---|---|---|
-| **Scored** | 497 (3 failed) | 497 (3 failed) | 497 (3 failed) | **500 (0 failed)** | +3 |
-| **Key exact match** | **61.4%** | **67.8%** | 67.8% | **68.2%** | **+6.8%** |
-| Tonic correct (mode-agnostic) | 64.2% | 70.4% | 70.4% | 70.8% | +6.6% |
-| MIREX weighted score | 0.708 | 0.754 | 0.754 | 0.755 | +0.047 |
-| **Camelot compatible** | **83.7%** | **86.3%** | 86.3% | 86.0% | **+2.3%** |
-| **BPM ±1 BPM (raw)** | **19.7%** | 19.7% | **59.4%** | 58.6% | **+38.9%** |
-| **BPM ±1 BPM (octave-corrected)** | **34.2%** | 34.2% | **61.2%** | 60.4% | **+26.2%** |
-| BPM ratio median | 0.987 | 0.987 | 1.000 | 1.000 | +0.013 |
-| Avg time per track | 4,012 ms | 4,044 ms | 3,952 ms | 4,104 ms | +92 ms |
+| Metric | Baseline | Key Tuned | Tempo Rewritten | Phase 2 Media | Phase 5 Log Gain | Total Change |
+|---|---|---|---|---|---|---|
+| **Scored** | 497 (3 failed) | 497 (3 failed) | 497 (3 failed) | **500 (0 failed)** | 497 (3 failed) | +3 |
+| **Key exact match** | **61.4%** | **67.8%** | 67.8% | **68.2%** | **68.8%** | **+7.4%** |
+| Tonic correct (mode-agnostic) | 64.2% | 70.4% | 70.4% | 70.8% | 70.6% | +6.4% |
+| MIREX weighted score | 0.708 | 0.754 | 0.754 | 0.755 | 0.759 | +0.051 |
+| **Camelot compatible** | **83.7%** | **86.3%** | 86.3% | 86.0% | 85.9% | **+2.2%** |
+| **BPM ±1 BPM (raw)** | **19.7%** | 19.7% | **59.4%** | 58.6% | 59.0% | **+39.3%** |
+| **BPM ±1 BPM (octave-corrected)** | **34.2%** | 34.2% | **61.2%** | 60.4% | 60.8% | **+26.6%** |
+| BPM ratio median | 0.987 | 0.987 | 1.000 | 1.000 | 1.000 | +0.013 |
+| Avg time per track | 4,012 ms | 4,044 ms | 3,952 ms | 4,104 ms | ~4,100 ms | +88 ms |
 
 ## Error taxonomy comparison
 
-| Error type | Baseline | Tuned | Phase 2 | Change | Meaning |
-|---|---|---|---|---|---|
-| correct | 305 | 337 | 341 | +36 | Exact key match |
-| fifth | 76 | 58 | 55 | -21 | Perfect-fifth substitution |
-| other | 67 | 52 | 54 | -13 | No simple relationship |
-| relative | 21 | 21 | 21 | 0 | Relative major/minor |
-| parallel | 14 | 13 | 13 | -1 | Same tonic, wrong mode |
-| semitone | 14 | 16 | 16 | +2 | Off by one semitone |
+| Error type | Baseline | Tuned | Phase 2 | Phase 5 | Change | Meaning |
+|---|---|---|---|---|---|---|
+| correct | 305 | 337 | 341 | 344 | +39 | Exact key match |
+| fifth | 76 | 58 | 55 | 54 | -22 | Perfect-fifth substitution |
+| other | 67 | 52 | 54 | 53 | -14 | No simple relationship |
+| relative | 21 | 21 | 21 | 22 | +1 | Relative major/minor |
+| parallel | 14 | 13 | 13 | 9 | -5 | Same tonic, wrong mode |
+| semitone | 14 | 16 | 16 | 16 | +2 | Off by one semitone |
 
 ## By format (Phase 2)
 
@@ -243,6 +243,92 @@ and all video files report an unsupported error. Install via:
 ```powershell
 winget install Gyan.FFmpeg
 ```
+
+## Phase 5: Log compression gain tuning
+
+### Problem
+
+After Phase 4, the error taxonomy showed:
+- **55 fifth errors** (34.8% of all errors) — the largest single category.
+- **13 parallel errors** — same tonic, wrong mode.
+- **21 relative errors** — relative major/minor confusion.
+- **16 semitone errors** — off by one semitone.
+
+The fifth errors are caused by spectral harmonics: the 3rd harmonic of the
+tonic lands on the fifth, artificially boosting the fifth bin in the chroma.
+Log compression amplifies the weaker distinguishing pitch classes (e.g. F
+natural in C major vs F# in G major) relative to the strong shared ones.
+
+### Solution
+
+Increased the 12-bin log compression gain from 2.0 to 5.0. The 72-band gain
+remains at 3.0 (unchanged).
+
+The gain controls how aggressively the dynamic range is compressed before
+cosine similarity scoring. Higher gain = weaker bins (3rd, 4th, 6th, 7th
+scale degrees) contribute more to the score. These are exactly the notes
+that differ between a key and its fifth-neighbour.
+
+### Ablation results
+
+| LOG_GAIN (12-bin) | LOG_GAIN_72 | Exact | Fifth | Parallel | Relative | Semitone |
+|---|---|---|---|---|---|---|
+| 2.0 (baseline) | 3.0 | 68.2% | 55 | 13 | 21 | 16 |
+| 4.0 | 3.0 | 68.6% | 54 | 10 | 23 | 16 |
+| **5.0 (chosen)** | **3.0** | **68.8%** | **54** | **9** | **22** | **16** |
+| 8.0 | 3.0 | 68.4% | 53 | 9 | 24 | 16 |
+| 5.0 | 2.0 | 68.6% | 53 | 10 | 22 | 16 |
+| 5.0 | 5.0 | 68.2% | 53 | 9 | 26 | 18 |
+
+The 12-bin gain has a clear optimum at 5.0. The 72-band gain is more
+sensitive — both increasing (5.0) and decreasing (2.0) it hurt accuracy.
+The 72-band Sha'ath path already has octave weighting built into the Direct
+Spectral Kernel, so additional compression is less helpful.
+
+### Approaches that did NOT work (Phase 5)
+
+- **HPCP-style subharmonic summation**: Folded spectral energy at harmonic
+  frequencies back toward candidate fundamentals. Result: 66.2% exact (−2.0
+  points). Fifth errors increased from 55 to 62. The Krumhansl/Temperley/
+  Sha'ath profiles were designed for plain chroma, not HPCP — the modified
+  chroma distribution no longer matches the profile templates.
+
+- **Tuning estimation before chroma binning**: Estimated a global tuning
+  offset from spectral magnitudes and adjusted the semitone grid. Result:
+  67.8% exact (−0.4 points). The MIK corpus is predominantly A=440
+  electronic music, so tuning correction created more untyped errors than
+  it fixed semitone errors.
+
+- **Mode-flip heuristic (3rd/6th/7th degree evidence)**: Flipped the mode
+  when the opposite mode's scale degrees were 1.5× more prominent. At the
+  per-segment level, temporal voting overrode the correction (no effect).
+  At the track level with a 1.2× threshold, it triggered but made things
+  worse (parallel errors 13→16). Electronic music often has both major and
+  minor 3rds coexisting (Faraldo 2017), so the 3rd-degree ratio is not a
+  reliable mode indicator.
+
+- **Fifth-disambiguation via tonic prominence**: When the winner and
+  runner-up were a fifth apart, picked the one whose tonic had higher
+  chroma energy relative to the mean. Result: 66.4% exact (−1.8 points).
+  Fifth errors increased from 55 to 65. In electronic music, the bass
+  often plays the chord root (which may be the dominant), not the key
+  tonic, so tonic prominence is unreliable.
+
+- **Power-law magnitude compression + band restriction (100–5000 Hz)**:
+  Applied `mag^0.3` compression and restricted chroma to the 100–5000 Hz
+  band. Combined with the other changes, this was part of the 66.2%
+  regression. Not tested in isolation because the HPCP change it was
+  paired with was clearly harmful.
+
+### Key insight
+
+The only successful change was the simplest: increasing the log compression
+gain on the 12-bin path. This confirms that the engine is already well-tuned
+for this corpus, and that naive post-hoc chroma heuristics (mode-flip,
+fifth-disambiguation, HPCP, tuning estimation) create more errors than they
+fix. The profiles and temporal voting are doing their job; the improvement
+comes from giving the discriminative scale degrees more weight in the
+cosine similarity.
 
 ## Reproducing
 

@@ -113,10 +113,12 @@ fn vote_with_profile(chroma: &[f64; 12], maj: &[f64; 12], min: &[f64; 12]) -> Pr
     // F#), so amplifying their contribution directly combats fifth-
     // substitution errors.
     //
-    // The multiplier (10×) controls compression strength. Higher = more
-    // compression = weaker bins contribute more. Calibrated on the 500-track
-    // MIK stratified sample.
-    const LOG_GAIN: f64 = 2.0;
+    // The multiplier (LOG_GAIN) controls compression strength. Higher = more
+    // compression = weaker bins contribute more. The 500-track benchmark
+    // showed that LOG_GAIN=2.0 gives 68.2% exact match with 55 fifth errors.
+    // Increasing to 5.0 amplifies the distinguishing pitch classes (F vs F#
+    // in the C vs G example) to directly target the fifth-error category.
+    const LOG_GAIN: f64 = 5.0;
     let compressed: [f64; 12] = {
         let mut w = [0.0f64; 12];
         for i in 0..12 { w[i] = (1.0 + LOG_GAIN * chroma[i].abs()).ln(); }

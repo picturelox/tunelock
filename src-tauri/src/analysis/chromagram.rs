@@ -13,11 +13,11 @@ pub fn compute_spectrogram(samples: &[f32]) -> Result<Array2<f64>> {
     let num_frames = (samples.len() - FFT_SIZE) / HOP_SIZE + 1;
     let bins = FFT_SIZE / 2;
     let mut spec = Array2::zeros((bins, num_frames));
-    
+
     let mut planner = FftPlanner::new();
     let fft = planner.plan_fft_forward(FFT_SIZE);
     let mut buffer = vec![Complex::new(0.0f32, 0.0); FFT_SIZE];
-    
+
     for frame_idx in 0..num_frames {
         let start = frame_idx * HOP_SIZE;
         for (i, buf_sample) in buffer.iter_mut().enumerate() {
@@ -37,6 +37,10 @@ pub fn compute_spectrogram(samples: &[f32]) -> Result<Array2<f64>> {
 }
 
 /// Convert a magnitude spectrogram into a 12-bin chromagram.
+///
+/// Simple bin-to-pitch-class mapping with A=440 reference. Tuning estimation
+/// was tried and reverted — it caused more untyped errors than it fixed
+/// semitone errors on the MIK corpus (mostly A=440 electronic music).
 pub fn chromagram_from_spec(spec: &Array2<f64>) -> Array2<f64> {
     let (bins, frames) = spec.dim();
     let mut chroma = Array2::zeros((12, frames));
@@ -75,4 +79,26 @@ pub fn chromagram72_from_spec(spec: &Array2<f64>) -> Array2<f64> {
         }
     }
     chroma
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spectrogram_dimensions() {
+        let samples = vec![0.0f32; SAMPLE_RATE * 5];
+        let spec = compute_spectrogram(&samples).unwrap();
+        let (bins, frames) = spec.dim();
+        assert_eq!(bins, FFT_SIZE / 2);
+        assert!(frames > 0);
+    }
+
+    #[test]
+    fn chromagram_is_12_bins() {
+        let samples = vec![0.0f32; SAMPLE_RATE * 5];
+        let spec = compute_spectrogram(&samples).unwrap();
+        let chroma = chromagram_from_spec(&spec);
+        assert_eq!(chroma.dim().0, 12);
+    }
 }
