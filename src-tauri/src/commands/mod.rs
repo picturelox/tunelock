@@ -1344,3 +1344,50 @@ pub async fn get_key_timeline(
 
     Ok(timeline)
 }
+
+// ============================================================================
+// Gold set annotation commands (Step 6)
+// ============================================================================
+
+#[command]
+pub async fn save_gold_annotation(
+    state: State<'_, AppState>,
+    annotation: GoldAnnotation,
+) -> Result<i64, String> {
+    let db = state.db.lock().await;
+    db.save_gold_annotation(&annotation).map_err(|e| e.to_string())
+}
+
+#[command]
+pub async fn get_gold_annotations(
+    state: State<'_, AppState>,
+    track_id: i64,
+) -> Result<Vec<GoldAnnotation>, String> {
+    let db = state.db.lock().await;
+    db.get_gold_annotations(track_id).map_err(|e| e.to_string())
+}
+
+#[command]
+pub async fn get_gold_annotation_summary(
+    state: State<'_, AppState>,
+) -> Result<GoldAnnotationSummary, String> {
+    let db = state.db.lock().await;
+    db.get_gold_annotation_summary().map_err(|e| e.to_string())
+}
+
+#[command]
+pub async fn save_training_session(
+    state: State<'_, AppState>,
+    session: TrainingSession,
+) -> Result<i64, String> {
+    let db = state.db.lock().await;
+    db.save_training_session(&session).map_err(|e| e.to_string())
+}
+
+#[command]
+pub async fn get_training_stats(
+    state: State<'_, AppState>,
+) -> Result<TrainingStats, String> {
+    let db = state.db.lock().await;
+    db.get_training_stats().map_err(|e| e.to_string())
+}

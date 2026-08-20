@@ -305,8 +305,53 @@ cargo run --release --bin tunelock-bench -- --corpus ..\ground-truth\MIKComplete
 3. ✅ Return and aggregate all 24 key scores per segment; calibrate confidence
 4. ✅ Run clean ablations: 12/72 paths, no-HPSS, kernel sweep, multiple windows
 5. ✅ Implement braw/bgate HPCP experiment on a separate chroma path
-6. Build gold set infrastructure + key-identification tooling
+6. ✅ Build gold set infrastructure + key-identification tooling
 7. Download MTG dataset, fix CNN bugs, re-run corrected experiment
+
+## Step 6: Gold set infrastructure + key-identification tooling
+
+**Goal:** Build a 300-500 track gold set with user-adjudicated key labels,
+stored separately from MIK opinions and engine predictions. Train the
+user to identify keys accurately using scientific/musical methods.
+
+**Infrastructure:**
+- `gold_annotations` table: stores user key judgments with tonic, mode
+  (major/minor/ambiguous/atonal), modulation flag, annotator confidence
+  (1-5), evidence notes, annotator ID, and blind flag.
+- `training_sessions` table: tracks ear-training exercise results.
+- Rust commands: `save_gold_annotation`, `get_gold_annotations`,
+  `get_gold_annotation_summary`, `save_training_session`,
+  `get_training_stats`.
+- Frontend "Gold Set" view with 4 tabs: Overview, Ear Training,
+  Annotate, Statistics.
+
+**Key-identification training tools:**
+- **Pitch Identification**: plays a sine wave at a random pitch class;
+  user identifies it. Builds absolute pitch reference.
+- **Major/Minor Identification**: plays a triad (root + third + fifth);
+  user identifies the mode. Builds mode discrimination.
+- Both exercises record accuracy and response time.
+
+**Blind annotation workflow:**
+- User selects a track from the library.
+- The engine's prediction is hidden by default (blind mode).
+- User listens to the track and selects tonic, mode, confidence, and
+  optional evidence notes.
+- User can optionally reveal the engine's prediction after annotating.
+- Annotations are stored with the `blind` flag for later analysis.
+
+**Self-agreement measurement:**
+- The summary tracks how many tracks have 2+ annotations from the same
+  annotator and whether they agree on (tonic, mode).
+- This measures annotation reliability without requiring a second
+  annotator (though a second annotator is supported via `annotator_id`).
+
+**Status:** Infrastructure is complete. The user needs to:
+1. Practice ear training exercises to build key-identification skills.
+2. Annotate tracks blindly, aiming for 300+ tracks.
+3. Re-annotate the same tracks after a delay to measure self-agreement.
+4. Once the gold set is established, engine accuracy can be measured
+   against it instead of MIK agreement.
 
 ## Step 5: HPCP + braw/bgate EDM experiment
 

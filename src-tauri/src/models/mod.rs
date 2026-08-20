@@ -161,3 +161,56 @@ pub struct ScanResult {
     pub new_files: usize,
     pub skipped: usize,
 }
+
+// ============================================================================
+// Gold set annotation models (Step 6)
+// ============================================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoldAnnotation {
+    pub id: Option<i64>,
+    pub track_id: i64,
+    pub key_tonic: String,
+    pub key_mode: String, // "major", "minor", "ambiguous", "atonal"
+    pub modulates: bool,
+    pub modulation_note: Option<String>,
+    pub annotator_confidence: i32, // 1-5
+    pub evidence: Option<String>,
+    pub annotator_id: String,
+    pub blind: bool,
+    pub created_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoldAnnotationSummary {
+    pub total_tracks: usize,
+    pub annotated_tracks: usize,
+    pub total_annotations: usize,
+    pub self_agreement_pct: Option<f64>,
+    pub mode_distribution: std::collections::HashMap<String, usize>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrainingSession {
+    pub id: Option<i64>,
+    pub session_type: String, // "pitch_id", "tonic_id", "mode_id", "full_key"
+    pub track_id: Option<i64>,
+    pub presented_tonic: Option<String>,
+    pub presented_mode: Option<String>,
+    pub user_answer: String,
+    pub correct: bool,
+    pub response_time_s: Option<f64>,
+    pub created_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrainingStats {
+    pub total_sessions: usize,
+    pub correct_count: usize,
+    pub accuracy_pct: f64,
+    pub by_type: std::collections::HashMap<String, (usize, usize)>, // (total, correct)
+}

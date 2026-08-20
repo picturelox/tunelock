@@ -18,6 +18,10 @@ import type {
   AnalysisProgress,
   TunerProgress,
   Playlist,
+  GoldAnnotation,
+  GoldAnnotationSummary,
+  TrainingSession,
+  TrainingStats,
 } from '../types';
 
 // === Analysis Commands ===
@@ -265,4 +269,26 @@ export function onTunerProgress(
   return listen('tuner-progress', (event) =>
     callback(event.payload as TunerProgress)
   );
+}
+
+// === Gold Set Annotation Commands (Step 6) ===
+
+export async function saveGoldAnnotation(annotation: GoldAnnotation): Promise<number> {
+  return invoke('save_gold_annotation', { annotation });
+}
+
+export async function getGoldAnnotations(trackId: number): Promise<GoldAnnotation[]> {
+  return invoke('get_gold_annotations', { trackId });
+}
+
+export async function getGoldAnnotationSummary(): Promise<GoldAnnotationSummary> {
+  return invoke('get_gold_annotation_summary');
+}
+
+export async function saveTrainingSession(session: TrainingSession): Promise<number> {
+  return invoke('save_training_session', { session });
+}
+
+export async function getTrainingStats(): Promise<TrainingStats> {
+  return invoke('get_training_stats');
 }

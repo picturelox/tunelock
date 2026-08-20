@@ -189,3 +189,48 @@ export interface ValidationDisagreement {
   our_key: string;
   our_confidence: number;
 }
+
+// ============================================================================
+// Gold set annotation types (Step 6)
+// ============================================================================
+
+export interface GoldAnnotation {
+  id?: number;
+  trackId: number;
+  keyTonic: string;        // 'C', 'C#', 'D', ... 'B'
+  keyMode: string;         // 'major', 'minor', 'ambiguous', 'atonal'
+  modulates: boolean;
+  modulationNote?: string;
+  annotatorConfidence: number;  // 1-5
+  evidence?: string;
+  annotatorId: string;     // 'self' or named annotator
+  blind: boolean;
+  createdAt?: string;
+}
+
+export interface GoldAnnotationSummary {
+  totalTracks: number;
+  annotatedTracks: number;
+  totalAnnotations: number;
+  selfAgreementPct: number | null;
+  modeDistribution: Record<string, number>;
+}
+
+export interface TrainingSession {
+  id?: number;
+  sessionType: string;     // 'pitch_id', 'tonic_id', 'mode_id', 'full_key'
+  trackId?: number;
+  presentedTonic?: string;
+  presentedMode?: string;
+  userAnswer: string;
+  correct: boolean;
+  responseTimeS?: number;
+  createdAt?: string;
+}
+
+export interface TrainingStats {
+  totalSessions: number;
+  correctCount: number;
+  accuracyPct: number;
+  byType: Record<string, [number, number]>;  // [total, correct]
+}

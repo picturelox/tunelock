@@ -733,4 +733,149 @@ impl Database {
             .collect::<Result<Vec<_>, _>>()?;
         Ok(track_ids)
     }
+
+    // ========================================================================
+    // Gold set annotation methods (Step 6)
+    // ========================================================================
+
+    pub fn save_gold_annotation(&self, ann: &GoldAnnotation) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO gold_annotations
+             (track_id, key_tonic, key_mode, modulates, modulation_note,
+              annotator_confidence, evidence, annotator_id, blind)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                ann.track_id,
+                ann.key_tonic,
+                ann.key_mode,
+                ann.modulates,
+                ann.modulation_note,
+                ann.annotator_confidence,
+                ann.evidence,
+                ann.annotator_id,
+                ann.blind,
+            ],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn get_gold_annotations(&self, track_id: i64) -> Result<Vec<GoldAnnotation>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, track_id, key_tonic, key_mode, modulates, modulation_note,
+                    annotator_confidence, evidence, annotator_id, blind, created_at
+             FROM gold_annotations WHERE track_id = ?1 ORDER BY created_at"
+        )?;
+        let rows = stmt.query_map(params![track_id], |row| {
+            Ok(GoldAnnotation {
+                id: Some(row.get(0)?),
+                track_id: row.get(1)?,
+                key_tonic: row.get(2)?,
+                key_mode: row.get(3)?,
+                modulates: row.get(4)?,
+                modulation_note: row.get(5)?,
+                annotator_confidence: row.get(6)?,
+                evidence: row.get(7)?,
+                annotator_id: row.get(8)?,
+                blind: row.get(9)?,
+                created_at: Some(row.get(10)?),
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    pub fn get_gold_annotation_summary(&self) -> Result<GoldAnnotationSummary> {
+        let total_tracks: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM tracks", [], |row| row.get(0)
+        )?;
+        let annotated_tracks: usize = self.conn.query_row(
+            "SELECT COUNT(DISTINCT track_id) FROM gold_annotations", [], |row| row.get(0)
+        )?;
+        let total_annotations: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM gold_annotations", [], |row| row.get(0)
+        )?;
+
+        // Self-agreement: for tracks with 2+ annotations from 'self',
+        // what fraction have the same (key_tonic, key_mode)?
+        let self_agreement: Option<f64> = self.conn.query_row(
+            "SELECT
+                CASE WHEN COUNT(*) = 0 THEN NULL
+                     ELSE CAST(SUM(CASE WHEN agree = 1 THEN 1 ELSE 0 END) AS REAL) / COUNT(*)
+                END
+             FROM (
+                SELECT track_id,
+                       CASE WHEN COUNT(DISTINCT key_tonic || key_mode) = 1 THEN 1 ELSE 0 END AS agree
+                FROM gold_annotations
+                WHERE annotator_id = 'self'
+                GROUP BY track_id
+                HAVING COUNT(*) >= 2
+             )",
+            [],
+            |row| row.get(0),
+        ).unwrap_or(None);
+
+        // Mode distribution
+        let mut stmt = self.conn.prepare(
+            "SELECT key_mode, COUNT(*) FROM gold_annotations GROUP BY key_mode"
+        )?;
+        let mode_dist: std::collections::HashMap<String, usize> = stmt
+            .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?)))?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        Ok(GoldAnnotationSummary {
+            total_tracks,
+            annotated_tracks,
+            total_annotations,
+            self_agreement_pct: self_agreement,
+            mode_distribution: mode_dist,
+        })
+    }
+
+    pub fn save_training_session(&self, session: &TrainingSession) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO training_sessions
+             (session_type, track_id, presented_tonic, presented_mode,
+              user_answer, correct, response_time_s)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                session.session_type,
+                session.track_id,
+                session.presented_tonic,
+                session.presented_mode,
+                session.user_answer,
+                session.correct,
+                session.response_time_s,
+            ],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn get_training_stats(&self) -> Result<TrainingStats> {
+        let total: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM training_sessions", [], |row| row.get(0)
+        )?;
+        let correct: usize = self.conn.query_row(
+            "SELECT COUNT(*) FROM training_sessions WHERE correct = 1", [], |row| row.get(0)
+        )?;
+
+        let mut stmt = self.conn.prepare(
+            "SELECT session_type, COUNT(*), SUM(CASE WHEN correct = 1 THEN 1 ELSE 0 END)
+             FROM training_sessions GROUP BY session_type"
+        )?;
+        let by_type: std::collections::HashMap<String, (usize, usize)> = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, (row.get::<_, usize>(1)?, row.get::<_, usize>(2)?)))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+
+        let accuracy = if total > 0 { correct as f64 / total as f64 * 100.0 } else { 0.0 };
+
+        Ok(TrainingStats {
+            total_sessions: total,
+            correct_count: correct,
+            accuracy_pct: accuracy,
+            by_type,
+        })
+    }
 }

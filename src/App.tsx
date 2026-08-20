@@ -4,11 +4,12 @@ import TunerView from './components/tuner/TunerView';
 import LibraryView from './components/library/LibraryView';
 import MixWorkspace from './components/mix/MixWorkspace';
 import DeliveryView from './components/delivery/DeliveryView';
+import GoldView from './components/gold/GoldView';
 import { useLibraryStore } from './stores/libraryStore';
 import { onTrackAnalyzed, onMetadataBatchComplete, onAnalysisProgress } from './lib/tauri';
 import { useEffect } from 'react';
 
-export type View = 'analyze' | 'library' | 'mix' | 'delivery';
+export type View = 'analyze' | 'library' | 'mix' | 'delivery' | 'gold';
 
 function App() {
   const [currentView, setCurrentView] = useState<View>('analyze');
@@ -68,6 +69,8 @@ function App() {
         return <MixWorkspace />;
       case 'delivery':
         return <DeliveryView />;
+      case 'gold':
+        return <GoldView />;
       default:
         return <TunerView />;
     }

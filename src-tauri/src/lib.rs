@@ -92,6 +92,12 @@ pub fn run() {
             commands::import_traktor_nml,
             commands::get_waveform_data,
             commands::get_key_timeline,
+            // Step 6: Gold set annotation
+            commands::save_gold_annotation,
+            commands::get_gold_annotations,
+            commands::get_gold_annotation_summary,
+            commands::save_training_session,
+            commands::get_training_stats,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

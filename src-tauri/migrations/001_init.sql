@@ -115,6 +115,51 @@ CREATE TABLE IF NOT EXISTS track_opinions (
 CREATE INDEX IF NOT EXISTS idx_track_opinions_track ON track_opinions(track_id);
 CREATE INDEX IF NOT EXISTS idx_track_opinions_source ON track_opinions(source);
 
+-- gold_annotations: user-adjudicated key labels, stored separately from
+-- MIK opinions and engine predictions. Each track can have multiple
+-- annotations (from different sessions or annotators) to measure
+-- inter-annotator agreement and self-consistency.
+CREATE TABLE IF NOT EXISTS gold_annotations (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    track_id        INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    -- The annotator's key judgment
+    key_tonic       TEXT NOT NULL,          -- 'C', 'C#', 'D', ... 'B'
+    key_mode        TEXT NOT NULL,          -- 'major', 'minor', 'ambiguous', 'atonal'
+    -- If mode is 'ambiguous' or 'atonal', key_tonic may be a best guess
+    -- or empty. The annotator can flag modulation:
+    modulates       BOOLEAN DEFAULT 0,      -- does the track change key?
+    modulation_note TEXT,                   -- free-text description of modulation
+    -- Confidence of the annotator in their own judgment (1-5 scale)
+    annotator_confidence INTEGER NOT NULL,  -- 1=guess, 5=certain
+    -- Evidence the annotator used to reach their judgment
+    evidence        TEXT,                   -- free-text: "bass line on C, melody emphasizes E minor"
+    -- Annotator identity (for multi-annotator agreement)
+    annotator_id    TEXT DEFAULT 'self',    -- 'self', or a named second annotator
+    -- Whether this annotation was made blind (without seeing engine prediction)
+    blind           BOOLEAN DEFAULT 1,
+    created_at      TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_gold_annotations_track ON gold_annotations(track_id);
+CREATE INDEX IF NOT EXISTS idx_gold_annotations_annotator ON gold_annotations(annotator_id);
+
+-- training_sessions: tracks the user's key-identification training progress
+CREATE TABLE IF NOT EXISTS training_sessions (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_type    TEXT NOT NULL,          -- 'pitch_id', 'tonic_id', 'mode_id', 'full_key'
+    track_id        INTEGER REFERENCES tracks(id) ON DELETE SET NULL,
+    -- What was presented
+    presented_tonic TEXT,                   -- for pitch_id exercises
+    presented_mode  TEXT,                   -- for mode_id exercises
+    -- What the user answered
+    user_answer     TEXT NOT NULL,
+    -- Whether the answer was correct
+    correct         BOOLEAN NOT NULL,
+    -- Time taken in seconds
+    response_time_s REAL,
+    created_at      TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_training_sessions_type ON training_sessions(session_type);
+
 -- Performance optimizations
 PRAGMA journal_mode = WAL;
 PRAGMA cache_size = -65536;
