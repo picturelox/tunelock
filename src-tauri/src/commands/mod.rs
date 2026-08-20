@@ -3,7 +3,9 @@ use tauri::{command, Emitter, Manager, State, Window};
 use walkdir::WalkDir;
 
 use crate::analysis::energy_detector::detect_energy;
+use crate::analysis::genre_profiles::weights_for_genre;
 use crate::analysis::key_detector::detect_key;
+use crate::analysis::key_timeline::{compute_key_timeline, KeyTimeline};
 use crate::analysis::tempo_detector::detect_tempo;
 use crate::analysis::waveform::{generate_waveform, WaveformData};
 use crate::consensus::{compute_consensus, ConsensusResult, OpinionSource};
@@ -1305,4 +1307,40 @@ pub async fn get_waveform_data(
     .map_err(|e| format!("Waveform generation failed: {}", e))?;
 
     Ok(waveform)
+}
+
+// ============================================================================
+// Key timeline (modulation detection + abstention)
+// ============================================================================
+
+/// Compute a per-segment key timeline for a track. Shows where the key
+/// changes throughout the track, and whether the track has a stable key
+/// at all (abstention for atonal/noisy material).
+#[command]
+pub async fn get_key_timeline(
+    state: State<'_, AppState>,
+    track_id: i64,
+) -> Result<KeyTimeline, String> {
+    let db = state.db.lock().await;
+    let track = db.get_track_by_id(track_id)
+        .map_err(|e| e.to_string())?
+        .ok_or("Track not found")?;
+
+    // Get genre for adaptive profile weights
+    let genre = db.get_track_genre(track_id).map_err(|e| e.to_string())?;
+    drop(db);
+
+    let samples = crate::media::decode_media(&track.file_path)
+        .map_err(|e| format!("Decode failed: {}", e))?;
+
+    let weights = weights_for_genre(genre.as_deref());
+
+    let timeline = tokio::task::spawn_blocking(move || {
+        compute_key_timeline(&samples, weights)
+    })
+    .await
+    .map_err(|e| format!("Timeline computation failed: {}", e))?
+    .map_err(|e| format!("Timeline computation failed: {}", e))?;
+
+    Ok(timeline)
 }

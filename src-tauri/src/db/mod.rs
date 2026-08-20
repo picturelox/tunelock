@@ -340,6 +340,16 @@ impl Database {
         )?;
         Ok(())
     }
+
+    /// Get a track's genre (from MIK CSV import or manual entry).
+    pub fn get_track_genre(&self, track_id: i64) -> Result<Option<String>> {
+        let genre: Option<String> = self.conn.query_row(
+            "SELECT genre FROM tracks WHERE id = ?1",
+            params![track_id],
+            |row| row.get(0),
+        )?;
+        Ok(genre)
+    }
     
     pub fn get_tracks_pending_analysis(&self, limit: usize) -> Result<Vec<(i64, String)>> {
         let mut stmt = self.conn.prepare(

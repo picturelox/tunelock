@@ -206,6 +206,29 @@ export async function getWaveformData(trackId: number): Promise<WaveformData> {
   return invoke('get_waveform_data', { trackId });
 }
 
+// === Key Timeline Commands ===
+export interface KeySegment {
+  startSec: number;
+  endSec: number;
+  keyStandard: string;
+  keyCamelot: string;
+  confidence: number;
+}
+
+export interface KeyTimeline {
+  segments: KeySegment[];
+  globalKeyStandard: string;
+  globalKeyCamelot: string;
+  globalConfidence: number;
+  abstained: boolean;
+  modulates: boolean;
+  modulationSummary: string;
+}
+
+export async function getKeyTimeline(trackId: number): Promise<KeyTimeline> {
+  return invoke('get_key_timeline', { trackId });
+}
+
 // === Export Commands ===
 export async function exportTracks(
   trackIds: number[],

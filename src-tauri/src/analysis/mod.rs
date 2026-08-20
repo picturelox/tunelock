@@ -4,8 +4,10 @@ pub mod chromagram;
 pub mod decoder;
 pub mod energy_detector;
 pub mod ensemble;
+pub mod genre_profiles;
 pub mod hpss;
 pub mod key_detector;
+pub mod key_timeline;
 pub mod tempo_detector;
 pub mod waveform;
 

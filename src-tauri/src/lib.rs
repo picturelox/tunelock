@@ -91,6 +91,7 @@ pub fn run() {
             commands::set_track_opinion,
             commands::import_traktor_nml,
             commands::get_waveform_data,
+            commands::get_key_timeline,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
