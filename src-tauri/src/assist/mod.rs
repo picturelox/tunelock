@@ -15,6 +15,7 @@
 pub mod ollama;
 pub mod setlist;
 pub mod metadata;
+pub mod features;
 
 pub use ollama::{AssistStatus, OllamaClient, OllamaModel, ChatMessage};
 pub use setlist::{
@@ -23,4 +24,9 @@ pub use setlist::{
 };
 pub use metadata::{
     MetadataProposal, MetadataRepairBatch, repair_metadata,
+};
+pub use features::{
+    GenreInference, infer_genres,
+    TransitionExplanation, explain_transition, template_explanation,
+    SetPlan, plan_set,
 };

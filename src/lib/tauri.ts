@@ -26,6 +26,9 @@ import type {
   SetlistAnalysis,
   MetadataProposal,
   MetadataRepairBatch,
+  GenreInference,
+  TransitionExplanation,
+  SetPlan,
 } from '../types';
 
 // === Analysis Commands ===
@@ -346,4 +349,21 @@ export async function assistRepairMetadata(): Promise<MetadataRepairBatch> {
 
 export async function assistApplyMetadataRepair(proposal: MetadataProposal): Promise<void> {
   return invoke('assist_apply_metadata_repair', { proposal });
+}
+
+export async function assistInferGenres(): Promise<GenreInference[]> {
+  return invoke('assist_infer_genres');
+}
+
+export async function assistExplainTransition(
+  fromKey: string,
+  toKey: string,
+  fromBpm: number | null,
+  toBpm: number | null,
+): Promise<TransitionExplanation> {
+  return invoke('assist_explain_transition', { fromKey, toKey, fromBpm, toBpm });
+}
+
+export async function assistPlanSet(instruction: string): Promise<SetPlan> {
+  return invoke('assist_plan_set', { instruction });
 }

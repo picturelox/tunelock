@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Sparkles, Settings, ListMusic, Wand2, AlertCircle, CheckCircle } from 'lucide-react';
+import { Sparkles, Settings, ListMusic, Wand2, Calendar, AlertCircle, CheckCircle } from 'lucide-react';
 import {
   assistStatus,
   assistSetEnabled,
@@ -8,8 +8,9 @@ import {
 import type { AssistStatus } from '../../types';
 import SetlistAnalyzer from './SetlistAnalyzer';
 import MetadataRepair from './MetadataRepair';
+import SetPlanner from './SetPlanner';
 
-type Tab = 'setlist' | 'metadata' | 'settings';
+type Tab = 'setlist' | 'metadata' | 'planner' | 'settings';
 
 export default function AssistView() {
   const [tab, setTab] = useState<Tab>('setlist');
@@ -128,6 +129,7 @@ export default function AssistView() {
       <div className="flex items-center gap-1 px-4 py-2 border-b border-white/5 bg-surface">
         <TabButton active={(tab as Tab) === 'setlist'} onClick={() => setTab('setlist')} icon={ListMusic} label="Setlist Analysis" />
         <TabButton active={(tab as Tab) === 'metadata'} onClick={() => setTab('metadata')} icon={Wand2} label="Metadata Repair" />
+        <TabButton active={(tab as Tab) === 'planner'} onClick={() => setTab('planner')} icon={Calendar} label="Set Planner" />
         <TabButton active={(tab as Tab) === 'settings'} onClick={() => setTab('settings')} icon={Settings} label="Settings" />
         <div className="flex-1" />
         {enabled && (
@@ -142,6 +144,7 @@ export default function AssistView() {
       <div className="flex-1 overflow-hidden">
         {(tab as Tab) === 'setlist' && <SetlistAnalyzer />}
         {(tab as Tab) === 'metadata' && <MetadataRepair />}
+        {(tab as Tab) === 'planner' && <SetPlanner />}
         {(tab as Tab) === 'settings' && (
           <SettingsTab status={status} onRefresh={refreshStatus} />
         )}

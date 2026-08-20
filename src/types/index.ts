@@ -319,3 +319,25 @@ export interface MetadataRepairBatch {
   totalScanned: number;
   totalProposed: number;
 }
+
+export interface GenreInference {
+  trackId: number;
+  inferredGenre: string;
+  confidence: number;
+  reasoning: string | null;
+}
+
+export interface TransitionExplanation {
+  fromKey: string;
+  toKey: string;
+  fromBpm: number | null;
+  toBpm: number | null;
+  explanation: string;
+  source: string;
+}
+
+export interface SetPlan {
+  description: string;
+  trackIds: number[];
+  reasoning: string;
+}

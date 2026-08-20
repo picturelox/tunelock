@@ -1536,3 +1536,83 @@ pub async fn assist_apply_metadata_repair(
     ).map_err(|e| e.to_string())?;
     Ok(())
 }
+
+#[command]
+pub async fn assist_infer_genres(
+    state: State<'_, AppState>,
+) -> Result<Vec<crate::assist::GenreInference>, String> {
+    let enabled = *state.assist_enabled.lock().await;
+    if !enabled {
+        return Err("Assist layer is not enabled".to_string());
+    }
+    let model = state.assist_model.lock().await.clone()
+        .ok_or("No model selected")?;
+
+    let db = state.db.lock().await;
+    let page = db.get_library_page(0, 5000, "filename", "asc", None)
+        .map_err(|e| e.to_string())?;
+    drop(db);
+
+    let tracks: Vec<(i64, String, Option<String>, Option<String>)> = page.tracks.iter().map(|t| {
+        (t.id, t.filename.clone(), t.title.clone(), t.artist.clone())
+    }).collect();
+
+    crate::assist::infer_genres(&state.ollama, &model, &tracks)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[command]
+pub async fn assist_explain_transition(
+    state: State<'_, AppState>,
+    from_key: String,
+    to_key: String,
+    from_bpm: Option<f64>,
+    to_bpm: Option<f64>,
+) -> Result<crate::assist::TransitionExplanation, String> {
+    let enabled = *state.assist_enabled.lock().await;
+    if !enabled {
+        // Return template fallback if assist is not enabled
+        let explanation = crate::assist::template_explanation(&from_key, &to_key, from_bpm, to_bpm);
+        return Ok(crate::assist::TransitionExplanation {
+            from_key,
+            to_key,
+            from_bpm,
+            to_bpm,
+            explanation,
+            source: "template".to_string(),
+        });
+    }
+    let model = state.assist_model.lock().await.clone()
+        .ok_or("No model selected")?;
+
+    crate::assist::explain_transition(&state.ollama, &model, &from_key, &to_key, from_bpm, to_bpm)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[command]
+pub async fn assist_plan_set(
+    state: State<'_, AppState>,
+    instruction: String,
+) -> Result<crate::assist::SetPlan, String> {
+    let enabled = *state.assist_enabled.lock().await;
+    if !enabled {
+        return Err("Assist layer is not enabled".to_string());
+    }
+    let model = state.assist_model.lock().await.clone()
+        .ok_or("No model selected")?;
+
+    let db = state.db.lock().await;
+    let page = db.get_library_page(0, 5000, "filename", "asc", None)
+        .map_err(|e| e.to_string())?;
+    drop(db);
+
+    let tracks: Vec<(i64, String, Option<String>, Option<String>, Option<f64>, Option<i32>)> = page.tracks.iter().map(|t| {
+        (t.id, t.filename.clone(), t.title.clone(), t.key_camelot.clone(), t.bpm, t.energy_level)
+    }).collect();
+
+    crate::assist::plan_set(&state.ollama, &model, &instruction, &tracks)
+        .await
+        .map_err(|e| e.to_string())
+}
