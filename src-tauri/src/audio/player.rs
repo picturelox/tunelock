@@ -1,16 +1,17 @@
-// Deck — real-time playback state for one deck.
+// Player — real-time playback state for one player slot.
 //
-// The deck reads from an rtrb ring buffer (filled by a worker thread) and
-// applies gain, EQ, and crossfade. All state is preallocated — no allocation
-// in the process path.
+// A player reads from a decoded source buffer and applies gain, pan, mute/solo,
+// EQ, and tempo. All state is preallocated — no allocation in the process path.
 //
-// The deck tracks its position in both source samples and output frames.
+// The player tracks its position in source samples and output frames.
 // Source position is used for seeking and looping; output frame is used
 // for scheduling.
+//
+// Players are assigned to buses (A, B, or Master direct). The bus handles
+// crossfader participation and bus-level EQ.
 
-use super::command::{DeckId, DecodedBuffer, EqBand, LoopRegion};
+use super::command::{PlayerId, BusId, DecodedBuffer, EqBand, LoopRegion, SourceHandle, BeatGridCompact};
 use super::eq::DjIsolator;
-use super::ring_buffer::RingBufferConsumer;
 
 /// Ramped gain to avoid clicks.
 struct RampedGain {
@@ -24,12 +25,24 @@ impl RampedGain {
         Self {
             current: 1.0,
             target: 1.0,
-            ramp_increment: 1.0 / (0.005 * sample_rate), // 5ms ramp
+            ramp_increment: 1.0 / (0.005 * sample_rate), // 5ms default ramp
         }
     }
 
     fn set_target(&mut self, target: f64) {
         self.target = target;
+    }
+
+    fn set_ramp(&mut self, sample_rate: f64, ramp_frames: u32) {
+        if ramp_frames > 0 {
+            self.ramp_increment = (self.target - self.current).abs() / ramp_frames as f64;
+            if self.ramp_increment < 1e-12 {
+                self.ramp_increment = 1e-12;
+            }
+        } else {
+            // Default 5ms ramp
+            self.ramp_increment = 1.0 / (0.005 * sample_rate);
+        }
     }
 
     #[inline]
@@ -43,32 +56,33 @@ impl RampedGain {
         }
         self.current
     }
-
-    fn reset(&mut self) {
-        self.current = 1.0;
-        self.target = 1.0;
-    }
 }
 
-pub struct Deck {
-    pub id: DeckId,
+/// Player state — one per slot in the Layer Grid.
+pub struct Player {
+    pub id: PlayerId,
     pub playing: bool,
+    pub muted: bool,
+    pub soloed: bool,
 
-    // Source buffer (set by LoadDeck command)
+    // Source handle and buffer (set by Launch/RegisterSource)
+    source_handle: Option<SourceHandle>,
     buffer: Option<DecodedBuffer>,
 
     // Position in the source buffer (in samples, per channel)
-    source_position: f64,  // Fractional for resampling
+    source_position: f64, // Fractional for tempo adjustment
 
-    // Ring buffer consumer (for streaming from worker thread)
-    ring_consumer: Option<RingBufferConsumer>,
+    // Bus assignment
+    pub bus: BusId,
 
-    // EQ
+    // EQ (per-player lightweight isolator)
     eq: DjIsolator,
 
     // Gains
-    deck_gain: RampedGain,
-    crossfade_gain: RampedGain,
+    gain: RampedGain,
+
+    // Pan (-1.0 to 1.0)
+    pan: f64,
 
     // Tempo (playback rate — 1.0 = original)
     tempo: f32,
@@ -76,11 +90,12 @@ pub struct Deck {
     // Loop region (in beats, relative to beat grid)
     loop_region: Option<LoopRegion>,
 
-    // Beat grid for this deck
+    // Beat grid for this player's source
     bpm: f64,
-    first_beat_ms: f64,
+    first_beat_sec: f64,
+    meter_numerator: i32,
 
-    // Metering (per-deck, this block)
+    // Metering (per-player, this block)
     block_sum_sq: [f64; 2],
     block_peak: [f64; 2],
     clip: [bool; 2],
@@ -88,21 +103,25 @@ pub struct Deck {
     sample_rate: f64,
 }
 
-impl Deck {
-    pub fn new(id: DeckId, sample_rate: f64) -> Self {
+impl Player {
+    pub fn new(id: PlayerId, sample_rate: f64) -> Self {
         Self {
             id,
             playing: false,
+            muted: false,
+            soloed: false,
+            source_handle: None,
             buffer: None,
             source_position: 0.0,
-            ring_consumer: None,
+            bus: if id.0 == 0 { BusId::A } else { BusId::B },
             eq: DjIsolator::new(sample_rate),
-            deck_gain: RampedGain::new(sample_rate),
-            crossfade_gain: RampedGain::new(0.707), // cos(45°) for center
+            gain: RampedGain::new(sample_rate),
+            pan: 0.0,
             tempo: 1.0,
             loop_region: None,
             bpm: 120.0,
-            first_beat_ms: 0.0,
+            first_beat_sec: 0.0,
+            meter_numerator: 4,
             block_sum_sq: [0.0; 2],
             block_peak: [0.0; 2],
             clip: [false; 2],
@@ -110,15 +129,43 @@ impl Deck {
         }
     }
 
+    pub fn launch(&mut self, handle: SourceHandle, buffer: DecodedBuffer, start_beat: f64) {
+        self.source_handle = Some(handle);
+        if let Some(bg) = &buffer.beat_grid {
+            self.bpm = bg.bpm;
+            self.first_beat_sec = bg.first_beat_sec;
+            self.meter_numerator = bg.meter_numerator;
+        } else {
+            self.bpm = buffer.bpm.unwrap_or(120.0);
+            self.first_beat_sec = 0.0;
+            self.meter_numerator = 4;
+        }
+        // Convert start_beat to source position
+        let beat_duration_sec = 60.0 / self.bpm;
+        let start_sec = self.first_beat_sec + start_beat * beat_duration_sec;
+        let start_sample = start_sec * buffer.sample_rate as f64;
+        let max = (buffer.samples.len() / buffer.channels as usize) as f64;
+        self.source_position = start_sample.min(max).max(0.0);
+        self.buffer = Some(buffer);
+        self.playing = true;
+        self.eq.reset();
+    }
+
     pub fn load_buffer(&mut self, buffer: DecodedBuffer) {
-        self.bpm = buffer.bpm.unwrap_or(120.0);
+        if let Some(bg) = &buffer.beat_grid {
+            self.bpm = bg.bpm;
+            self.first_beat_sec = bg.first_beat_sec;
+            self.meter_numerator = bg.meter_numerator;
+        } else {
+            self.bpm = buffer.bpm.unwrap_or(120.0);
+        }
         self.buffer = Some(buffer);
         self.source_position = 0.0;
         self.eq.reset();
     }
 
-    pub fn set_ring_consumer(&mut self, consumer: RingBufferConsumer) {
-        self.ring_consumer = Some(consumer);
+    pub fn set_source_handle(&mut self, handle: SourceHandle) {
+        self.source_handle = Some(handle);
     }
 
     pub fn play(&mut self) {
@@ -135,7 +182,18 @@ impl Deck {
         self.eq.reset();
     }
 
-    pub fn seek(&mut self, position_sec: f64) {
+    pub fn seek_beats(&mut self, source_beat: f64) {
+        if let Some(buf) = &self.buffer {
+            let beat_duration_sec = 60.0 / self.bpm;
+            let pos_sec = self.first_beat_sec + source_beat * beat_duration_sec;
+            let sample = pos_sec * buf.sample_rate as f64;
+            let max = (buf.samples.len() / buf.channels as usize) as f64;
+            self.source_position = sample.min(max).max(0.0);
+        }
+        self.eq.reset();
+    }
+
+    pub fn seek_sec(&mut self, position_sec: f64) {
         if let Some(buf) = &self.buffer {
             let sample = position_sec * buf.sample_rate as f64;
             let max = (buf.samples.len() / buf.channels as usize) as f64;
@@ -148,12 +206,25 @@ impl Deck {
         self.tempo = rate;
     }
 
-    pub fn set_gain(&mut self, gain: f32) {
-        self.deck_gain.set_target(gain as f64);
+    pub fn set_gain(&mut self, gain: f32, ramp_frames: u32) {
+        self.gain.set_target(gain as f64);
+        self.gain.set_ramp(self.sample_rate, ramp_frames);
     }
 
-    pub fn set_crossfade_gain(&mut self, gain: f32) {
-        self.crossfade_gain.set_target(gain as f64);
+    pub fn set_pan(&mut self, pan: f32) {
+        self.pan = pan as f64;
+    }
+
+    pub fn set_mute(&mut self, muted: bool) {
+        self.muted = muted;
+    }
+
+    pub fn set_solo(&mut self, soloed: bool) {
+        self.soloed = soloed;
+    }
+
+    pub fn set_bus(&mut self, bus: BusId) {
+        self.bus = bus;
     }
 
     pub fn set_eq_gain(&mut self, band: EqBand, gain_db: f32) {
@@ -184,11 +255,14 @@ impl Deck {
         self.buffer.is_some()
     }
 
+    pub fn is_audible(&self, any_soloed: bool) -> bool {
+        self.playing && !self.muted && (!any_soloed || self.soloed)
+    }
+
     /// Reset block metering (called at start of each output block).
     pub fn reset_block_meters(&mut self) {
         self.block_sum_sq = [0.0; 2];
         self.block_peak = [0.0; 2];
-        // Don't reset clip flags — they're cleared by the UI
     }
 
     /// Get block RMS and peak for metering.
@@ -208,11 +282,12 @@ impl Deck {
         self.clip = [false; 2];
     }
 
-    /// Process one stereo sample pair from this deck.
-    /// Returns (left, right) output. If not playing or no buffer, returns (0, 0).
+    /// Process one stereo sample pair from this player.
+    /// Returns (left, right) output. If not playing, muted, or no buffer,
+    /// returns (0, 0). The caller (engine) routes the output to the bus.
     #[inline]
-    pub fn process_sample(&mut self) -> (f64, f64) {
-        if !self.playing {
+    pub fn process_sample(&mut self, any_soloed: bool) -> (f64, f64) {
+        if !self.is_audible(any_soloed) {
             return (0.0, 0.0);
         }
 
@@ -239,16 +314,22 @@ impl Deck {
             src_l
         };
 
-        // Apply EQ
+        // Apply per-player EQ
         let (eq_l, eq_r) = self.eq.process(src_l, src_r);
 
-        // Apply gains (ramped)
-        let deck_g = self.deck_gain.tick();
-        let xf_g = self.crossfade_gain.tick();
-        let total_gain = deck_g * xf_g;
+        // Apply gain (ramped)
+        let g = self.gain.tick();
 
-        let out_l = eq_l * total_gain;
-        let out_r = eq_r * total_gain;
+        // Apply pan (constant power)
+        let (pan_l, pan_r) = if self.pan == 0.0 {
+            (g, g)
+        } else {
+            let angle = (self.pan + 1.0) * std::f64::consts::PI / 4.0;
+            (g * angle.cos(), g * angle.sin())
+        };
+
+        let out_l = eq_l * pan_l;
+        let out_r = eq_r * pan_r;
 
         // Update meters
         self.block_sum_sq[0] += out_l * out_l;
@@ -266,8 +347,7 @@ impl Deck {
         // Handle looping
         if let Some(loop_region) = &self.loop_region {
             let beat_duration_sec = 60.0 / self.bpm;
-            let loop_start_sec = self.first_beat_ms / 1000.0
-                + loop_region.start_beat * beat_duration_sec;
+            let loop_start_sec = self.first_beat_sec + loop_region.start_beat * beat_duration_sec;
             let loop_end_sec = loop_start_sec + loop_region.length_beats * beat_duration_sec;
             let loop_end_sample = loop_end_sec * buf.sample_rate as f64;
 

@@ -1683,6 +1683,14 @@ pub async fn get_stem_manifest(
 
 // ============================================================================
 // Audio engine commands (Transition Workbench — real-time playback)
+//
+// The engine uses a generalized player/bus vocabulary:
+//   - PlayerId(u8): eight player slots (MAX_PLAYERS=8)
+//   - BusId::A, BusId::B, BusId::Master: two crossfader buses + direct-to-master
+//   - SourceHandle: lightweight reference to decoded audio in the engine registry
+//
+// The two-track Transition Workbench uses Players 0 and 1 on Buses A and B.
+// The Layer Lab exposes all eight slots.
 // ============================================================================
 
 #[command]
@@ -1699,41 +1707,54 @@ pub async fn audio_engine_init(state: State<'_, AppState>) -> Result<u32, String
 }
 
 #[command]
-pub async fn audio_engine_play(state: State<'_, AppState>) -> Result<(), String> {
+pub async fn audio_engine_play(state: State<'_, AppState>, player: u8) -> Result<(), String> {
     let engine_slot = state.audio_engine.lock().await;
     if let Some(engine) = engine_slot.as_ref() {
         let frame = engine.current_frame();
-        engine.send_command(crate::audio::EngineCommand::Play { at_frame: frame });
+        engine.send_command(crate::audio::EngineCommand::Resume {
+            player: crate::audio::PlayerId(player),
+            at_frame: frame,
+        });
     }
     Ok(())
 }
 
 #[command]
-pub async fn audio_engine_pause(state: State<'_, AppState>) -> Result<(), String> {
+pub async fn audio_engine_pause(state: State<'_, AppState>, player: u8) -> Result<(), String> {
     let engine_slot = state.audio_engine.lock().await;
     if let Some(engine) = engine_slot.as_ref() {
         let frame = engine.current_frame();
-        engine.send_command(crate::audio::EngineCommand::Pause { at_frame: frame });
+        engine.send_command(crate::audio::EngineCommand::Pause {
+            player: crate::audio::PlayerId(player),
+            at_frame: frame,
+        });
     }
     Ok(())
 }
 
 #[command]
-pub async fn audio_engine_stop(state: State<'_, AppState>) -> Result<(), String> {
+pub async fn audio_engine_stop(state: State<'_, AppState>, player: u8) -> Result<(), String> {
     let engine_slot = state.audio_engine.lock().await;
     if let Some(engine) = engine_slot.as_ref() {
         let frame = engine.current_frame();
-        engine.send_command(crate::audio::EngineCommand::Stop { at_frame: frame });
+        engine.send_command(crate::audio::EngineCommand::Stop {
+            player: crate::audio::PlayerId(player),
+            at_frame: frame,
+        });
     }
     Ok(())
 }
 
 #[command]
-pub async fn audio_engine_seek(state: State<'_, AppState>, position_sec: f64) -> Result<(), String> {
+pub async fn audio_engine_seek(state: State<'_, AppState>, player: u8, source_beat: f64) -> Result<(), String> {
     let engine_slot = state.audio_engine.lock().await;
     if let Some(engine) = engine_slot.as_ref() {
         let frame = engine.current_frame();
-        engine.send_command(crate::audio::EngineCommand::Seek { at_frame: frame, position_sec });
+        engine.send_command(crate::audio::EngineCommand::Seek {
+            player: crate::audio::PlayerId(player),
+            at_frame: frame,
+            source_beat,
+        });
     }
     Ok(())
 }
@@ -1749,47 +1770,99 @@ pub async fn audio_engine_set_crossfade(state: State<'_, AppState>, position: f3
 }
 
 #[command]
-pub async fn audio_engine_set_tempo(state: State<'_, AppState>, deck: String, rate: f32) -> Result<(), String> {
+pub async fn audio_engine_set_tempo(state: State<'_, AppState>, player: u8, rate: f32) -> Result<(), String> {
     let engine_slot = state.audio_engine.lock().await;
     if let Some(engine) = engine_slot.as_ref() {
-        let deck_id = match deck.as_str() {
-            "a" | "A" => crate::audio::DeckId::A,
-            _ => crate::audio::DeckId::B,
-        };
         let frame = engine.current_frame();
-        let cmd = match deck_id {
-            crate::audio::DeckId::A => crate::audio::EngineCommand::SetTempoA { at_frame: frame, rate },
-            crate::audio::DeckId::B => crate::audio::EngineCommand::SetTempoB { at_frame: frame, rate },
-        };
-        engine.send_command(cmd);
-    }
-    Ok(())
-}
-
-#[command]
-pub async fn audio_engine_set_deck_gain(state: State<'_, AppState>, deck: String, gain: f32) -> Result<(), String> {
-    let engine_slot = state.audio_engine.lock().await;
-    if let Some(engine) = engine_slot.as_ref() {
-        let deck_id = match deck.as_str() {
-            "a" | "A" => crate::audio::DeckId::A,
-            _ => crate::audio::DeckId::B,
-        };
-        let frame = engine.current_frame();
-        engine.send_command(crate::audio::EngineCommand::SetDeckGain {
-            at_frame: frame, deck: deck_id, gain,
+        engine.send_command(crate::audio::EngineCommand::SetTempo {
+            player: crate::audio::PlayerId(player),
+            at_frame: frame,
+            rate,
         });
     }
     Ok(())
 }
 
 #[command]
-pub async fn audio_engine_set_eq(state: State<'_, AppState>, deck: String, band: String, gain_db: f32) -> Result<(), String> {
+pub async fn audio_engine_set_player_gain(state: State<'_, AppState>, player: u8, gain: f32) -> Result<(), String> {
     let engine_slot = state.audio_engine.lock().await;
     if let Some(engine) = engine_slot.as_ref() {
-        let deck_id = match deck.as_str() {
-            "a" | "A" => crate::audio::DeckId::A,
-            _ => crate::audio::DeckId::B,
+        let frame = engine.current_frame();
+        engine.send_command(crate::audio::EngineCommand::SetGain {
+            player: crate::audio::PlayerId(player),
+            at_frame: frame,
+            gain,
+            ramp_frames: 220, // ~5ms at 44.1kHz
+        });
+    }
+    Ok(())
+}
+
+#[command]
+pub async fn audio_engine_set_pan(state: State<'_, AppState>, player: u8, pan: f32) -> Result<(), String> {
+    let engine_slot = state.audio_engine.lock().await;
+    if let Some(engine) = engine_slot.as_ref() {
+        let frame = engine.current_frame();
+        engine.send_command(crate::audio::EngineCommand::SetPan {
+            player: crate::audio::PlayerId(player),
+            at_frame: frame,
+            pan,
+        });
+    }
+    Ok(())
+}
+
+#[command]
+pub async fn audio_engine_set_mute(state: State<'_, AppState>, player: u8, muted: bool) -> Result<(), String> {
+    let engine_slot = state.audio_engine.lock().await;
+    if let Some(engine) = engine_slot.as_ref() {
+        let frame = engine.current_frame();
+        engine.send_command(crate::audio::EngineCommand::SetMute {
+            player: crate::audio::PlayerId(player),
+            at_frame: frame,
+            muted,
+        });
+    }
+    Ok(())
+}
+
+#[command]
+pub async fn audio_engine_set_solo(state: State<'_, AppState>, player: u8, soloed: bool) -> Result<(), String> {
+    let engine_slot = state.audio_engine.lock().await;
+    if let Some(engine) = engine_slot.as_ref() {
+        let frame = engine.current_frame();
+        engine.send_command(crate::audio::EngineCommand::SetSolo {
+            player: crate::audio::PlayerId(player),
+            at_frame: frame,
+            soloed,
+        });
+    }
+    Ok(())
+}
+
+#[command]
+pub async fn audio_engine_set_bus(state: State<'_, AppState>, player: u8, bus: String) -> Result<(), String> {
+    let engine_slot = state.audio_engine.lock().await;
+    if let Some(engine) = engine_slot.as_ref() {
+        let bus_id = match bus.as_str() {
+            "a" | "A" => crate::audio::BusId::A,
+            "b" | "B" => crate::audio::BusId::B,
+            _ => crate::audio::BusId::Master,
         };
+        let frame = engine.current_frame();
+        engine.send_command(crate::audio::EngineCommand::SetBus {
+            player: crate::audio::PlayerId(player),
+            at_frame: frame,
+            bus: bus_id,
+        });
+    }
+    Ok(())
+}
+
+#[command]
+pub async fn audio_engine_set_eq(state: State<'_, AppState>, player: u8, band: String, gain_db: f32) -> Result<(), String> {
+    let engine_slot = state.audio_engine.lock().await;
+    if let Some(engine) = engine_slot.as_ref() {
         let band_id = match band.as_str() {
             "low" => crate::audio::EqBand::Low,
             "mid" => crate::audio::EqBand::Mid,
@@ -1797,20 +1870,19 @@ pub async fn audio_engine_set_eq(state: State<'_, AppState>, deck: String, band:
         };
         let frame = engine.current_frame();
         engine.send_command(crate::audio::EngineCommand::SetEqGain {
-            at_frame: frame, deck: deck_id, band: band_id, gain_db,
+            player: crate::audio::PlayerId(player),
+            at_frame: frame,
+            band: band_id,
+            gain_db,
         });
     }
     Ok(())
 }
 
 #[command]
-pub async fn audio_engine_set_eq_kill(state: State<'_, AppState>, deck: String, band: String, killed: bool) -> Result<(), String> {
+pub async fn audio_engine_set_eq_kill(state: State<'_, AppState>, player: u8, band: String, killed: bool) -> Result<(), String> {
     let engine_slot = state.audio_engine.lock().await;
     if let Some(engine) = engine_slot.as_ref() {
-        let deck_id = match deck.as_str() {
-            "a" | "A" => crate::audio::DeckId::A,
-            _ => crate::audio::DeckId::B,
-        };
         let band_id = match band.as_str() {
             "low" => crate::audio::EqBand::Low,
             "mid" => crate::audio::EqBand::Mid,
@@ -1818,14 +1890,17 @@ pub async fn audio_engine_set_eq_kill(state: State<'_, AppState>, deck: String, 
         };
         let frame = engine.current_frame();
         engine.send_command(crate::audio::EngineCommand::SetEqKill {
-            at_frame: frame, deck: deck_id, band: band_id, killed,
+            player: crate::audio::PlayerId(player),
+            at_frame: frame,
+            band: band_id,
+            killed,
         });
     }
     Ok(())
 }
 
 #[command]
-pub async fn audio_engine_set_loop(state: State<'_, AppState>, start_beat: Option<f64>, length_beats: Option<f64>) -> Result<(), String> {
+pub async fn audio_engine_set_loop(state: State<'_, AppState>, player: u8, start_beat: Option<f64>, length_beats: Option<f64>) -> Result<(), String> {
     let engine_slot = state.audio_engine.lock().await;
     if let Some(engine) = engine_slot.as_ref() {
         let loop_region = match (start_beat, length_beats) {
@@ -1833,21 +1908,21 @@ pub async fn audio_engine_set_loop(state: State<'_, AppState>, start_beat: Optio
             _ => None,
         };
         let frame = engine.current_frame();
-        engine.send_command(crate::audio::EngineCommand::SetLoop { at_frame: frame, loop_region });
+        engine.send_command(crate::audio::EngineCommand::SetLoop {
+            player: crate::audio::PlayerId(player),
+            at_frame: frame,
+            loop_region,
+        });
     }
     Ok(())
 }
 
 #[command]
-pub async fn audio_engine_load_deck(state: State<'_, AppState>, deck: String, file_path: String) -> Result<(), String> {
-    let engine_slot = state.audio_engine.lock().await;
-    let engine = engine_slot.as_ref().ok_or("Audio engine not initialized")?;
+pub async fn audio_engine_load_player(state: State<'_, AppState>, player: u8, file_path: String) -> Result<(), String> {
+    let mut engine_slot = state.audio_engine.lock().await;
+    let engine = engine_slot.as_mut().ok_or("Audio engine not initialized")?;
     let target_sr = engine.sample_rate();
-    let deck_id = match deck.as_str() {
-        "a" | "A" => crate::audio::DeckId::A,
-        _ => crate::audio::DeckId::B,
-    };
-    
+
     // Decode on a background thread (not the audio callback)
     let buffer = tokio::task::spawn_blocking(move || {
         crate::audio::worker::decode_file(&file_path, target_sr)
@@ -1855,29 +1930,76 @@ pub async fn audio_engine_load_deck(state: State<'_, AppState>, deck: String, fi
     })
     .await
     .map_err(|e| e.to_string())??;
-    
-    engine.send_command(crate::audio::EngineCommand::LoadDeck { deck: deck_id, buffer });
+
+    // Register the source and launch the player
+    let source = engine.register_source(buffer);
+    let frame = engine.current_frame();
+    engine.send_command(crate::audio::EngineCommand::Launch {
+        player: crate::audio::PlayerId(player),
+        at_frame: frame,
+        source,
+        start_beat: 0.0,
+        quantize: crate::audio::Quantize::Immediate,
+    });
     Ok(())
 }
 
+#[command]
+pub async fn audio_engine_set_master_gain(state: State<'_, AppState>, gain: f32) -> Result<(), String> {
+    let engine_slot = state.audio_engine.lock().await;
+    if let Some(engine) = engine_slot.as_ref() {
+        let frame = engine.current_frame();
+        engine.send_command(crate::audio::EngineCommand::SetMasterGain { at_frame: frame, gain });
+    }
+    Ok(())
+}
+
+#[command]
+pub async fn audio_engine_set_bus_gain(state: State<'_, AppState>, bus: String, gain: f32) -> Result<(), String> {
+    let engine_slot = state.audio_engine.lock().await;
+    if let Some(engine) = engine_slot.as_ref() {
+        let bus_id = match bus.as_str() {
+            "a" | "A" => crate::audio::BusId::A,
+            "b" | "B" => crate::audio::BusId::B,
+            _ => crate::audio::BusId::Master,
+        };
+        let frame = engine.current_frame();
+        engine.send_command(crate::audio::EngineCommand::SetBusGain {
+            bus: bus_id,
+            at_frame: frame,
+            gain,
+        });
+    }
+    Ok(())
+}
+
+/// Meter readout for the UI. Uses the generalized player/bus vocabulary.
+/// Players 0 and 1 correspond to the Transition Workbench's A and B decks.
 #[derive(serde::Serialize)]
 pub struct AudioMeterReadout {
     pub playing: bool,
     pub current_frame: u64,
-    pub deck_a_position_sec: f64,
-    pub deck_b_position_sec: f64,
-    pub deck_a_rms: f64,
-    pub deck_b_rms: f64,
-    pub deck_a_peak: f64,
-    pub deck_b_peak: f64,
+    pub players: [PlayerMeterEntry; 8],
+    pub bus_a_rms: f64,
+    pub bus_a_peak: f64,
+    pub bus_b_rms: f64,
+    pub bus_b_peak: f64,
     pub master_rms: f64,
     pub master_peak: f64,
     pub master_true_peak: f64,
-    pub deck_a_clip: bool,
-    pub deck_b_clip: bool,
     pub master_clip: bool,
+    pub crossfade_position: f64,
     pub underruns: u64,
     pub commands_dropped: u64,
+}
+
+#[derive(serde::Serialize, Default)]
+pub struct PlayerMeterEntry {
+    pub playing: bool,
+    pub position_sec: f64,
+    pub rms: f64,
+    pub peak: f64,
+    pub clip: bool,
 }
 
 #[command]
@@ -1885,21 +2007,26 @@ pub async fn audio_engine_get_meters(state: State<'_, AppState>) -> Result<Audio
     let engine_slot = state.audio_engine.lock().await;
     let engine = engine_slot.as_ref().ok_or("Audio engine not initialized")?;
     let m = engine.get_meters();
+    let players = m.players.iter().map(|p| PlayerMeterEntry {
+        playing: p.playing,
+        position_sec: p.position_sec,
+        rms: p.rms,
+        peak: p.peak,
+        clip: p.clip,
+    }).collect::<Vec<_>>().try_into().unwrap_or_default();
     Ok(AudioMeterReadout {
         playing: m.playing,
         current_frame: m.current_frame,
-        deck_a_position_sec: m.deck_a_position_sec,
-        deck_b_position_sec: m.deck_b_position_sec,
-        deck_a_rms: m.deck_a_rms,
-        deck_b_rms: m.deck_b_rms,
-        deck_a_peak: m.deck_a_peak,
-        deck_b_peak: m.deck_b_peak,
+        players,
+        bus_a_rms: m.bus_a_rms,
+        bus_a_peak: m.bus_a_peak,
+        bus_b_rms: m.bus_b_rms,
+        bus_b_peak: m.bus_b_peak,
         master_rms: m.master_rms,
         master_peak: m.master_peak,
         master_true_peak: m.master_true_peak,
-        deck_a_clip: m.deck_a_clip,
-        deck_b_clip: m.deck_b_clip,
         master_clip: m.master_clip,
+        crossfade_position: m.crossfade_position,
         underruns: m.underruns,
         commands_dropped: m.commands_dropped,
     })

@@ -111,6 +111,7 @@ pub fn decode_file(path: &str, target_sample_rate: u32) -> Result<DecodedBuffer>
         channels,
         duration_sec,
         bpm: None, // BPM is set separately from analysis results
+        beat_grid: None, // Beat grid is set separately from analysis results
     })
 }
 

@@ -128,6 +128,7 @@ pub fn run() {
             commands::save_transition_plan,
             commands::get_stem_manifest,
             // Audio engine (Transition Workbench — real-time playback)
+            // Generalized player/bus vocabulary: PlayerId(u8), BusId, MAX_PLAYERS=8
             commands::audio_engine_init,
             commands::audio_engine_play,
             commands::audio_engine_pause,
@@ -135,11 +136,17 @@ pub fn run() {
             commands::audio_engine_seek,
             commands::audio_engine_set_crossfade,
             commands::audio_engine_set_tempo,
-            commands::audio_engine_set_deck_gain,
+            commands::audio_engine_set_player_gain,
+            commands::audio_engine_set_pan,
+            commands::audio_engine_set_mute,
+            commands::audio_engine_set_solo,
+            commands::audio_engine_set_bus,
             commands::audio_engine_set_eq,
             commands::audio_engine_set_eq_kill,
             commands::audio_engine_set_loop,
-            commands::audio_engine_load_deck,
+            commands::audio_engine_load_player,
+            commands::audio_engine_set_master_gain,
+            commands::audio_engine_set_bus_gain,
             commands::audio_engine_get_meters,
             // Beat-grid DSP
             commands::detect_beat_grid,
