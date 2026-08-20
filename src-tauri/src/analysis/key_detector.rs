@@ -14,7 +14,7 @@ use anyhow::Result;
 use ndarray::Array2;
 
 use super::chromagram::{chromagram72_from_spec, chromagram_from_spec, compute_spectrogram};
-use super::ensemble::{format_key, temporal_vote_ranked_dual, ProfileWeights, RankedCandidate};
+use super::ensemble::{format_key, temporal_vote_ranked_dual_soft, ProfileWeights, RankedCandidate};
 use super::hpss::hpss;
 use super::{HPSS_KERNEL, MAX_ANALYSIS_SECONDS, SAMPLE_RATE};
 
@@ -68,8 +68,8 @@ pub fn detect_key_with_weights(samples: &[f32], weights: ProfileWeights) -> Resu
     let chroma12 = chromagram_from_spec(&harmonic);
     let chroma72 = chromagram72_from_spec(&harmonic);
 
-    // 4. Temporal segment voting — dual path
-    let ranked = temporal_vote_ranked_dual(&chroma12, &chroma72, 8, weights);
+    // 4. Temporal segment voting — dual path (soft aggregation)
+    let ranked = temporal_vote_ranked_dual_soft(&chroma12, &chroma72, 8, weights);
     let vote = match ranked.first() {
         Some(c) => super::ensemble::KeyVote { tonic: c.tonic, is_major: c.is_major, score: c.confidence },
         None => super::ensemble::KeyVote { tonic: 0, is_major: true, score: 0.0 },
@@ -152,7 +152,7 @@ pub fn detect_key_diagnostic(
     on_stage("chromagram", 0.75);
 
     let t = Instant::now();
-    let candidates = temporal_vote_ranked_dual(&chroma12, &chroma72, 8, weights);
+    let candidates = temporal_vote_ranked_dual_soft(&chroma12, &chroma72, 8, weights);
     timings.ensemble = t.elapsed().as_millis() as u64;
     on_stage("ensemble", 0.85);
 

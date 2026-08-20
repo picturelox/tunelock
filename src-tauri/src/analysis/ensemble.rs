@@ -42,12 +42,27 @@ impl Default for ProfileWeights {
 /// Run the three classical profiles on a 12-dim chroma vector (legacy path).
 /// Uses the 12-element Sha'ath profile for backward compatibility.
 pub fn classical_ensemble(chroma: &[f64; 12], w: ProfileWeights) -> KeyVote {
-    let votes = [
-        (vote_with_profile(chroma, &KeyProfiles::KRUMHANSL_MAJOR, &KeyProfiles::KRUMHANSL_MINOR), w.krumhansl),
-        (vote_with_profile(chroma, &KeyProfiles::TEMPERLEY_MAJOR, &KeyProfiles::TEMPERLEY_MINOR), w.temperley),
-        (vote_with_profile(chroma, &KeyProfiles::SHAATH_MAJOR, &KeyProfiles::SHAATH_MINOR), w.shaath),
-    ];
-    pick_winner(&votes)
+    let krumhansl_ps = vote_with_profile(chroma, &KeyProfiles::KRUMHANSL_MAJOR, &KeyProfiles::KRUMHANSL_MINOR);
+    let temperley_ps = vote_with_profile(chroma, &KeyProfiles::TEMPERLEY_MAJOR, &KeyProfiles::TEMPERLEY_MINOR);
+    let shaath_ps = vote_with_profile(chroma, &KeyProfiles::SHAATH_MAJOR, &KeyProfiles::SHAATH_MINOR);
+
+    let mut combined = [[0.0f64; 12]; 2];
+    let mut weight_sum = 0.0;
+    for (ps, weight) in [(&krumhansl_ps, w.krumhansl), (&temperley_ps, w.temperley), (&shaath_ps, w.shaath)] {
+        weight_sum += weight;
+        for t in 0..12 {
+            combined[0][t] += ps.major_scores[t] * weight;
+            combined[1][t] += ps.minor_scores[t] * weight;
+        }
+    }
+    if weight_sum > 0.0 {
+        for mode in 0..2 {
+            for t in 0..12 {
+                combined[mode][t] /= weight_sum;
+            }
+        }
+    }
+    pick_winner_from_scores(&combined)
 }
 
 /// Run the ensemble with Krumhansl + Temperley on 12-dim chroma and
@@ -56,40 +71,48 @@ pub fn classical_ensemble(chroma: &[f64; 12], w: ProfileWeights) -> KeyVote {
 /// This is the primary path — it uses the octave-weighted Sha'ath profiles
 /// from libKeyFinder for improved accuracy.
 pub fn classical_ensemble_dual(chroma12: &[f64; 12], chroma72: &[f64; 72], w: ProfileWeights) -> KeyVote {
-    let votes = [
-        (vote_with_profile(chroma12, &KeyProfiles::KRUMHANSL_MAJOR, &KeyProfiles::KRUMHANSL_MINOR), w.krumhansl),
-        (vote_with_profile(chroma12, &KeyProfiles::TEMPERLEY_MAJOR, &KeyProfiles::TEMPERLEY_MINOR), w.temperley),
-        (shaath72_vote(chroma72), w.shaath),
-    ];
-    pick_winner(&votes)
+    let scores = combined_scores_dual(chroma12, chroma72, w);
+    pick_winner_from_scores(&scores)
 }
 
-/// Weighted average across vote tables, pick the max.
-fn pick_winner(votes: &[(ProfileScores, f64)]) -> KeyVote {
+/// Compute all 24 combined scores (12 major + 12 minor) for the dual path.
+/// Returns `[[f64; 12]; 2]` where index 0 = major, 1 = minor.
+///
+/// This is the core scoring function. It does NOT discard the 23 non-winning
+/// scores — they are all returned so that soft temporal aggregation can use
+/// them. A key that comes second in every segment still contributes its
+/// score to the aggregate, instead of being invisible as in hard voting.
+pub fn combined_scores_dual(chroma12: &[f64; 12], chroma72: &[f64; 72], w: ProfileWeights) -> [[f64; 12]; 2] {
+    let krumhansl_ps = vote_with_profile(chroma12, &KeyProfiles::KRUMHANSL_MAJOR, &KeyProfiles::KRUMHANSL_MINOR);
+    let temperley_ps = vote_with_profile(chroma12, &KeyProfiles::TEMPERLEY_MAJOR, &KeyProfiles::TEMPERLEY_MINOR);
+    let shaath_ps = shaath72_vote(chroma72);
+
     let mut combined = [[0.0f64; 12]; 2];
     let mut weight_sum = 0.0;
-    for (vote_table, weight) in votes {
+    for (ps, weight) in [(&krumhansl_ps, w.krumhansl), (&temperley_ps, w.temperley), (&shaath_ps, w.shaath)] {
         weight_sum += weight;
-        for (tonic, s) in vote_table.major_scores.iter().enumerate() {
-            combined[0][tonic] += s * weight;
-        }
-        for (tonic, s) in vote_table.minor_scores.iter().enumerate() {
-            combined[1][tonic] += s * weight;
+        for t in 0..12 {
+            combined[0][t] += ps.major_scores[t] * weight;
+            combined[1][t] += ps.minor_scores[t] * weight;
         }
     }
     if weight_sum > 0.0 {
         for mode in 0..2 {
-            for tonic in 0..12 {
-                combined[mode][tonic] /= weight_sum;
+            for t in 0..12 {
+                combined[mode][t] /= weight_sum;
             }
         }
     }
+    combined
+}
 
+/// Pick the best key from a 24-score table.
+fn pick_winner_from_scores(scores: &[[f64; 12]; 2]) -> KeyVote {
     let mut best = KeyVote { tonic: 0, is_major: true, score: f64::NEG_INFINITY };
     for mode in 0..2 {
         for tonic in 0..12 {
-            if combined[mode][tonic] > best.score {
-                best = KeyVote { tonic, is_major: mode == 0, score: combined[mode][tonic] };
+            if scores[mode][tonic] > best.score {
+                best = KeyVote { tonic, is_major: mode == 0, score: scores[mode][tonic] };
             }
         }
     }
@@ -327,6 +350,130 @@ pub fn temporal_vote_ranked_dual(
     }
 
     rank_candidates(&votes)
+}
+
+/// **Soft temporal voting** — aggregates all 24 key scores per segment
+/// instead of only keeping each segment's winner.
+///
+/// This fixes the critical issue where a key that comes second in every
+/// segment is completely invisible in hard voting. With soft voting, its
+/// consistently high scores accumulate and it appears in the ranked list.
+///
+/// The aggregation works as follows:
+/// 1. For each segment, compute all 24 combined scores (12 major + 12 minor).
+/// 2. Normalise each segment's scores to [0, 1] so that segments with
+///    inherently higher cosine similarities don't dominate.
+/// 3. Sum the normalised scores across segments.
+/// 4. Rank by the aggregate score.
+///
+/// Confidence is calibrated as the ratio of the winner's aggregate score
+/// to the sum of all aggregate scores. This gives a proper probability-like
+/// measure that can be below 0.5 when the winner is uncertain.
+pub fn temporal_vote_ranked_dual_soft(
+    chroma12: &Array2<f64>,
+    chroma72: &Array2<f64>,
+    segments: usize,
+    w: ProfileWeights,
+) -> Vec<RankedCandidate> {
+    let (_, total_frames) = chroma12.dim();
+    if total_frames == 0 {
+        return vec![];
+    }
+    let segments = segments.max(1);
+    let seg_len = total_frames / segments;
+
+    // Accumulate all 24 scores across segments.
+    let mut aggregate = [[0.0f64; 12]; 2];
+    let mut valid_segments = 0usize;
+
+    for s in 0..segments {
+        let start = s * seg_len;
+        let end = if s == segments - 1 { total_frames } else { (s + 1) * seg_len };
+        if start >= end { continue; }
+
+        // 12-dim mean
+        let mut mean12 = [0.0f64; 12];
+        for pc in 0..12 {
+            let slice = chroma12.slice(ndarray::s![pc, start..end]);
+            mean12[pc] = slice.mean().unwrap_or(0.0);
+        }
+        let norm: f64 = mean12.iter().map(|x| x * x).sum::<f64>().sqrt();
+        if norm > 0.0 {
+            for v in &mut mean12 { *v /= norm; }
+        }
+
+        // 72-band mean
+        let mut mean72 = [0.0f64; 72];
+        for b in 0..72 {
+            let slice = chroma72.slice(ndarray::s![b, start..end]);
+            mean72[b] = slice.mean().unwrap_or(0.0);
+        }
+        let norm72: f64 = mean72.iter().map(|x| x * x).sum::<f64>().sqrt();
+        if norm72 > 0.0 {
+            for v in &mut mean72 { *v /= norm72; }
+        }
+
+        let scores = combined_scores_dual(&mean12, &mean72, w);
+
+        // Normalise this segment's scores to [0, 1] so that segments with
+        // inherently higher cosine similarities don't dominate. We shift
+        // by the min and divide by the range.
+        let min_score = scores.iter().flat_map(|row| row.iter()).copied()
+            .fold(f64::INFINITY, f64::min);
+        let max_score = scores.iter().flat_map(|row| row.iter()).copied()
+            .fold(f64::NEG_INFINITY, f64::max);
+        let range = (max_score - min_score).max(1e-10);
+
+        for mode in 0..2 {
+            for t in 0..12 {
+                aggregate[mode][t] += (scores[mode][t] - min_score) / range;
+            }
+        }
+        valid_segments += 1;
+    }
+
+    if valid_segments == 0 {
+        return vec![];
+    }
+
+    // Build ranked candidates from the aggregate scores.
+    let total_score: f64 = aggregate.iter().flat_map(|row| row.iter()).sum();
+    if total_score <= 0.0 {
+        return vec![];
+    }
+
+    let mut ranked: Vec<RankedCandidate> = Vec::with_capacity(24);
+    for mode in 0..2 {
+        for tonic in 0..12 {
+            let is_major = mode == 0;
+            let agg_score = aggregate[mode][tonic];
+            // Confidence = fraction of total aggregate score. This is
+            // a proper probability-like measure: if all 24 keys are equally
+            // likely, confidence = 1/24 ≈ 0.042. If one key dominates,
+            // confidence approaches 1.0.
+            let confidence = agg_score / total_score;
+            // Agreement is not directly meaningful in soft voting, but we
+            // compute a proxy: the fraction of segments where this key was
+            // the winner. This requires re-checking each segment's winner.
+            // For now, use the score-based confidence as the primary metric.
+            ranked.push(RankedCandidate {
+                tonic,
+                is_major,
+                confidence,
+                agreement: confidence, // soft agreement proxy
+                avg_score: (agg_score / valid_segments as f64).clamp(0.0, 1.0),
+                segment_count: valid_segments,
+            });
+        }
+    }
+
+    ranked.sort_by(|a, b| {
+        b.confidence
+            .partial_cmp(&a.confidence)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then(b.avg_score.partial_cmp(&a.avg_score).unwrap_or(std::cmp::Ordering::Equal))
+    });
+    ranked
 }
 
 fn rank_candidates(votes: &[KeyVote]) -> Vec<RankedCandidate> {

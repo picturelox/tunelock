@@ -53,11 +53,11 @@ was biased toward easier tracks.
 | Metric | Value |
 |---|---|
 | **Scored** | 604 (0 failed) |
-| **Key exact match** | **62.4%** (377/604) |
-| Tonic correct (mode-agnostic) | 66.2% |
-| MIREX weighted score | 0.704 |
-| **Camelot compatible** | **82.3%** |
-| Avg time per track | 5,519 ms |
+| **Key exact match** | **63.4%** (383/604) |
+| Tonic correct (mode-agnostic) | 68.4% |
+| MIREX weighted score | 0.715 |
+| **Camelot compatible** | **84.4%** |
+| Avg time per track | ~5,500 ms |
 
 **Historical context** (from the GiantSteps ISMIR 2015 paper):
 
@@ -65,7 +65,7 @@ was biased toward easier tracks.
 |---|---|
 | Mixed In Key (commercial) | 67.22% |
 | Rekordbox (commercial) | 71.85% |
-| **TuneLock (current)** | **62.4%** |
+| **TuneLock (current)** | **63.4%** |
 
 TuneLock is respectable but behind both historical commercial results on
 this independently annotated dataset. The dataset is intentionally biased
@@ -83,10 +83,10 @@ the prior 68.8%) because the old sample was biased toward easier tracks.
 | Metric | Value |
 |---|---|
 | **Scored** | 490 (10 failed) |
-| **Key exact match (MIK agreement)** | **61.6%** (302/490) |
-| Tonic correct (mode-agnostic) | 65.3% |
-| MIREX weighted score | 0.706 |
-| **Camelot compatible** | **84.3%** |
+| **Key exact match (MIK agreement)** | **64.9%** (318/490) |
+| Tonic correct (mode-agnostic) | 68.0% |
+| MIREX weighted score | 0.725 |
+| **Camelot compatible** | **83.9%** |
 | **BPM ±1 BPM (raw)** | 53.3% |
 | **BPM ±1 BPM (octave-corrected)** | 54.5% |
 | BPM ratio median | 1.001 |
@@ -122,23 +122,23 @@ manifest is frozen at `ground-truth/manifest-mik-500-seed42.json`
 
 | Error type | Count | % | Meaning |
 |---|---|---|---|
-| correct | 377 | 62.4% | Exact key match |
-| fifth | 73 | 12.1% | Perfect-fifth substitution |
-| other | 91 | 15.1% | No simple relationship |
-| relative | 24 | 4.0% | Relative major/minor |
-| parallel | 23 | 3.8% | Same tonic, wrong mode |
-| semitone | 16 | 2.6% | Off by one semitone |
+| correct | 383 | 63.4% | Exact key match |
+| fifth | 70 | 11.6% | Perfect-fifth substitution |
+| other | 77 | 12.7% | No simple relationship |
+| parallel | 30 | 5.0% | Same tonic, wrong mode |
+| relative | 27 | 4.5% | Relative major/minor |
+| semitone | 17 | 2.8% | Off by one semitone |
 
 ### MIK 500 sample (490 scored, normalized stratification, seed=42)
 
 | Error type | Count | % | Meaning |
 |---|---|---|---|
-| correct | 302 | 61.6% | Exact key match (MIK agreement) |
-| fifth | 63 | 12.9% | Perfect-fifth substitution |
-| other | 61 | 12.4% | No simple relationship |
-| relative | 30 | 6.1% | Relative major/minor |
-| parallel | 18 | 3.7% | Same tonic, wrong mode |
-| semitone | 15 | 3.1% | Off by one semitone |
+| correct | 318 | 64.9% | Exact key match (MIK agreement) |
+| fifth | 54 | 11.0% | Perfect-fifth substitution |
+| other | 65 | 13.3% | No simple relationship |
+| relative | 24 | 4.9% | Relative major/minor |
+| parallel | 15 | 3.1% | Same tonic, wrong mode |
+| semitone | 13 | 2.7% | Off by one semitone |
 
 ## By format (MIK sample)
 
@@ -302,8 +302,35 @@ cargo run --release --bin tunelock-bench -- --corpus ..\ground-truth\MIKComplete
 
 1. ✅ Repair benchmark and documentation (this file)
 2. ✅ Freeze train/validation/test manifests with seeded, normalized sampling
-3. Return and aggregate all 24 key scores per segment; calibrate confidence
+3. ✅ Return and aggregate all 24 key scores per segment; calibrate confidence
 4. Run clean ablations: 12/72 paths, no-HPSS, kernel sweep, multiple windows
 5. Implement braw/bgate HPCP experiment on a separate chroma path
 6. Build gold set infrastructure + key-identification tooling
 7. Download MTG dataset, fix CNN bugs, re-run corrected experiment
+
+## Step 3: Soft temporal voting
+
+**Problem:** The ensemble discarded 23 scores per segment and retained only
+that segment's winner. A key that came second in every segment was
+completely invisible. On the stored GiantSteps report, the truth appeared
+among the returned candidates for only 49.8% of wrong predictions.
+
+**Fix:** Added `temporal_vote_ranked_dual_soft()` which:
+1. Computes all 24 combined scores per segment (not just the winner).
+2. Normalises each segment's scores to [0, 1] (min-max within the segment).
+3. Sums the normalised scores across segments (soft aggregation).
+4. Returns all 24 candidates ranked by aggregate score.
+5. Confidence = winner's aggregate / total aggregate (proper probability-
+   like measure, not an invented 0.6×agreement + 0.4×score blend).
+
+**Results:**
+
+| Benchmark | Before (hard) | After (soft) | Change |
+|---|---|---|---|
+| GiantSteps (604) | 62.4% (377) | 63.4% (383) | +1.0 (+6) |
+| MIK 500 (490) | 61.6% (302) | 64.9% (318) | +3.3 (+16) |
+
+The soft voting also fixed the confidence calibration issue: confidence
+is now a proper fraction of total score (ranging from ~0.04 for a uniform
+distribution to ~1.0 for a dominant key), not an invented blend with a
+0.6 floor. Abstention can now trigger when no key dominates.
