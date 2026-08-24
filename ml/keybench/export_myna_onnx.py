@@ -22,6 +22,7 @@ import nnAudio
 import onnx
 import onnxruntime
 import torch
+import torchaudio
 from torch import nn
 from transformers import AutoModel
 
@@ -74,6 +75,11 @@ def main() -> int:
     args = parse_args()
     if nnAudio.__version__ != "0.3.3":
         raise ValueError(f"Expected pinned nnAudio 0.3.3, found {nnAudio.__version__}")
+    torchaudio_version = torchaudio.__version__.split("+", maxsplit=1)[0]
+    if torchaudio_version != "2.7.1":
+        raise ValueError(
+            f"Expected pinned torchaudio 2.7.1, found {torchaudio.__version__}"
+        )
     if args.output_dir.exists():
         raise FileExistsError(f"Refusing to overwrite artifact directory: {args.output_dir}")
     if args.opset < 17:
@@ -183,8 +189,8 @@ def main() -> int:
             )
 
         artifact = {
-            "schema_version": 2,
-            "artifact_kind": "tunelock-neural-key-chunk-v2",
+            "schema_version": 3,
+            "artifact_kind": "tunelock-neural-key-chunk-v3",
             "status": "research candidate; not production-enabled",
             "model_file": onnx_path.name,
             "model_sha256": sha256(onnx_path),
@@ -211,6 +217,16 @@ def main() -> int:
                     "power": 2.0,
                     "mel_scale": "Slaney",
                     "normalization": "area",
+                },
+                "audio_preprocessing": {
+                    "reference_implementation": "torchaudio.load + transforms.Resample",
+                    "reference_version": torchaudio_version,
+                    "production_implementation": "Symphonia 0.5 + native sinc resampler",
+                    "channel_reduction": "arithmetic mean across channels in float32",
+                    "amplitude_handling": "preserve decoded amplitude; no normalization",
+                    "resampling_method": "sinc_interp_hann",
+                    "lowpass_filter_width": 6,
+                    "rolloff": 0.99,
                 },
             },
             "output": {

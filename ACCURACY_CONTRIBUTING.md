@@ -12,8 +12,9 @@ or label hundreds of tracks for the current checkpoint. TuneLock will first:
 
 1. finish the faithful pitch-only training cache and compare it with the fast
    pitch-plus-speed ablation;
-2. reproduce native decode, resampling, mel preprocessing, pitch views, and
-   transposition averaging through the production-shaped runtime;
+2. finish native pitch-preserving views and orchestrate them through the
+   production-shaped runtime (decode, resampling, mel preprocessing, and
+   transposition averaging now have verified native implementations);
 3. improve selector features and calibration only with leakage-safe training
    and validation data already available;
 4. audit public corpora, licenses, duplicates, and recording-family overlap;

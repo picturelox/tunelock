@@ -78,5 +78,10 @@ path = "src/bin/neural_key_probe.rs"
 required-features = ["neural-key"]
 
 [[bin]]
+name = "tunelock-neural-key-parity"
+path = "src/bin/neural_key_parity.rs"
+required-features = ["neural-key"]
+
+[[bin]]
 name = "gen-fixtures"
 path = "src/bin/gen_fixtures.rs"

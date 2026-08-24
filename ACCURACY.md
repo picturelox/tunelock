@@ -106,7 +106,8 @@ The current fast augmentation is explicitly an ablation: linear resampling
 changes pitch and speed together. A cached phase-vocoder implementation was
 verified against `torchaudio.functional.pitch_shift` on controlled tones
 (expected frequencies and approximately 1.0 waveform cosine similarity), but
-the full faithful training cache has not yet been run. Neither Myna candidate
+the full faithful training cache is still incomplete (286/1,340 records are
+checkpointed, 3,432/16,080 shifted embeddings, with zero failures). Neither Myna candidate
 is eligible for the app until it repeats on the sealed final holdout and passes
 latency, calibration, data-rights, packaging, and commercial-license review.
 
@@ -133,9 +134,10 @@ deployment-shaped artifact path (updated 2026-08-24):
 - one combined backbone + key-head ONNX graph, 162,782,585 bytes;
 - ONNX Runtime CPU parity within 1.02e-6 maximum absolute logit error, with
   identical test-batch argmaxes;
-- a schema-2 manifest binding the model SHA-256, exact input/output shapes,
+- a schema-3 manifest binding the model SHA-256, exact input/output shapes,
   Rust-canonical 24-label order, aggregation rule, model revision, explicit
-  research/data-rights status, and machine-readable preprocessing parameters;
+  research/data-rights status, and machine-readable mel plus real-file audio
+  preprocessing parameters;
 - an opt-in Rust `neural-key` feature that validates the manifest, size, hash,
   labels, and finite logits, then loads an externally supplied ONNX Runtime;
 - a native 16 kHz audio-to-mel implementation of the pinned nnAudio 0.3.3
@@ -144,22 +146,28 @@ deployment-shaped artifact path (updated 2026-08-24):
 - deterministic parity against the committed nnAudio reference fixture:
   maximum absolute mel error 0.0002594 and maximum scaled relative error
   0.00000356;
-- a real Rust smoke that loaded the 162,782,585-byte schema-2 graph, ran
-  deterministic 16 kHz audio through native preprocessing, and produced a
-  finite normalized 24-key posterior (sum 1.0);
+- an amplitude-preserving Symphonia decode path, float32 channel mean, and a
+  native implementation of torchaudio 2.7.1's default Hann sinc resampler;
+- a committed deterministic stereo 44.1 kHz PCM16 fixture whose native 16 kHz
+  output is within 4.92e-6 maximum and 4.83e-7 mean absolute sample error of
+  the pinned torchaudio output;
+- a release-mode audit of 20 real GiantSteps MP3s against cached Python
+  posteriors: 20/20 top-1 agreement, zero failures, 0.000632 mean absolute
+  posterior error, 0.0167 maximum posterior error, and 866 ms mean execution;
 - Rust-native major/minor-preserving transposition alignment and the winning
   probability-space view average, with range, duplicate-shift, vocabulary, and
   posterior validation tests.
 
 This is a production boundary, not production promotion. The default build
 still downloads and bundles no model or runtime, and the release analyzer still
-returns the classical result first. Real-file decode/downmix/resampler parity,
-a sealed final holdout, calibration, latency, rights review, artifact
-distribution, and background lifecycle/UI integration remain open gates. The
-graph covers the base acoustic view; Rust now owns the alignment and cross-view
-probability average, but the 70.4% result still requires pitch-preserving view
-generation and orchestration through every view. The measured key scores above
-are unchanged by this infrastructure checkpoint.
+returns the classical result first. A sealed final holdout, calibration, rights
+review, artifact distribution, and background lifecycle/UI integration remain
+open gates. The graph covers the base acoustic view; Rust now owns real-file
+decode through base-view inference, alignment, and cross-view probability
+average, but the 70.4% result still requires pitch-preserving view generation
+and orchestration through every view. The 20-file result above measures
+implementation parity, not ground-truth accuracy, so the key scores are
+unchanged by this infrastructure checkpoint.
 
 The full release-mode GiantSteps benchmark was rerun after this checkpoint:
 604/604 scored with zero failures, 389 exact (64.4%), 0.725 MIREX, 69.0% tonic

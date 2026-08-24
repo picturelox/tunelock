@@ -155,31 +155,52 @@ ml\venv\Scripts\python.exe ml\keybench\export_myna_onnx.py `
   --manifest ml\data\keybench\key-corpus-manifest-v4-all-unambiguous.json `
   --checkpoint ml\data\models\myna-mtg-v6-validation-state.pt `
   --hf-cache ml\data\huggingface-cache `
-  --output-dir ml\data\models\myna-v6-onnx-v1
+  --output-dir ml\data\models\myna-v6-onnx-v3
 ```
 
 The exporter checks ONNX structure and CPU numerical/argmax parity before it
-atomically publishes the directory. Schema 2 also pins the nnAudio 0.3.3 mel
-parameters in machine-readable form. The Rust probe validates the manifest,
-size, SHA-256, harmony and preprocessing contracts, dynamically loads a
-user-supplied ONNX Runtime library, and executes deterministic 16 kHz audio
-through native mel preprocessing and the graph on a dedicated background
-worker:
+atomically publishes the directory. Schema 2 pins the nnAudio 0.3.3 mel
+parameters; schema 3 additionally pins the torchaudio 2.7.1 decode/downmix/
+resample reference contract in machine-readable form. The Rust probe validates
+the manifest, size, SHA-256, harmony and preprocessing contracts, dynamically
+loads a user-supplied ONNX Runtime library, and executes deterministic 16 kHz
+audio or an explicitly supplied real file through the graph on a dedicated
+background worker:
 
 ```powershell
 cd src-tauri
 C:\Users\louis.media\.cargo\bin\cargo.exe run `
   --features neural-key --bin tunelock-neural-key-probe -- `
-  ..\ml\data\models\myna-v6-onnx-v1 `
-  ..\ml\venv\Lib\site-packages\onnxruntime\capi\onnxruntime.dll
+  ..\ml\data\models\myna-v6-onnx-v3 `
+  ..\ml\venv\Lib\site-packages\onnxruntime\capi\onnxruntime.dll `
+  ..\ground-truth\giantsteps-key\audio\1004923.LOFI.mp3
 ```
 
 The default application feature set does not compile the runtime adapter and
 does not download or bundle ONNX Runtime or model weights. Native PCM-to-mel
 parity is now fixture-tested against the pinned Python implementation (maximum
-scaled relative error 3.56e-6). Real-file decode/downmix/resampler parity is
-still required before inference can be product-enabled. The exported graph
-represents one acoustic view; reproducing the 70.4% result also requires
-production pitch views and end-to-end orchestration. Rust now implements and
-tests the exact major/minor-preserving label alignment and probability-space
-average used by the winning evaluator.
+scaled relative error 3.56e-6). A second committed fixture covers stereo PCM16
+decode, float32 channel averaging, amplitude preservation, and 44.1 -> 16 kHz
+Hann sinc resampling; Rust differs from torchaudio by at most 4.92e-6 per
+sample (mean 4.83e-7).
+
+Audit real-file inference against cached Python posteriors without calling it
+an accuracy score:
+
+```powershell
+cd src-tauri
+C:\Users\louis.media\.cargo\bin\cargo.exe run --release `
+  --features neural-key --bin tunelock-neural-key-parity -- `
+  ..\ml\data\models\myna-v6-onnx-v3 `
+  ..\ml\venv\Lib\site-packages\onnxruntime\capi\onnxruntime.dll `
+  ..\ml\data\keybench\key-corpus-manifest-v4-all-unambiguous.json `
+  ..\ml\data\keybench\myna-mtg-v6-validation-state.jsonl .. 20
+```
+
+The pinned 20-file release audit had 20/20 top-1 agreement, no failures,
+0.000632 mean absolute posterior error, 0.0167 maximum posterior error, and
+866 ms mean per-track execution on this development machine. The exported
+graph represents one acoustic view; reproducing the measured 70.4% result also
+requires production pitch views and end-to-end orchestration. Rust already
+implements and tests the exact major/minor-preserving label alignment and
+probability-space average used by the winning evaluator.

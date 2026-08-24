@@ -23,6 +23,7 @@ fn deterministic_audio(samples: usize) -> Vec<f32> {
 fn run_probe(
     artifact_directory: std::path::PathBuf,
     runtime_dylib: std::path::PathBuf,
+    audio_file: Option<std::path::PathBuf>,
 ) -> Result<()> {
     eprintln!("loading neural-key artifact and external runtime...");
     let mut session = NeuralKeySession::load(&artifact_directory, &runtime_dylib)
@@ -31,7 +32,10 @@ fn run_probe(
         .artifact
         .contract
         .supports_native_myna_preprocessing();
-    let (input_mode, posterior) = if native_audio {
+    let (input_mode, posterior) = if let Some(audio_file) = audio_file.as_ref() {
+        eprintln!("running real file through native decode and preprocessing...");
+        ("native-real-file", session.predict_file(audio_file)?)
+    } else if native_audio {
         eprintln!("running deterministic audio through native preprocessing...");
         let samples = deterministic_audio(session.artifact.contract.input.audio_samples_per_chunk);
         ("native-16khz-audio", session.predict_audio_16khz(&samples)?)
@@ -59,9 +63,11 @@ fn run_probe(
             "status": "ok",
             "artifact": artifact_directory,
             "runtime": runtime_dylib,
+            "audio_file": audio_file,
             "mel_bins": session.artifact.mel_bins,
             "mel_frames": session.artifact.mel_frames,
             "input_mode": input_mode,
+            "posterior": posterior,
             "posterior_sum": posterior.iter().sum::<f32>(),
             "synthetic_top_index": top_index,
             "synthetic_top_label": session.artifact.contract.output.posterior_labels[top_index],
@@ -73,16 +79,19 @@ fn run_probe(
 
 fn main() -> Result<()> {
     let arguments: Vec<_> = std::env::args_os().skip(1).collect();
-    if arguments.len() != 2 {
-        bail!("usage: tunelock-neural-key-probe <artifact-directory> <onnx-runtime-dylib>");
+    if !(2..=3).contains(&arguments.len()) {
+        bail!(
+            "usage: tunelock-neural-key-probe <artifact-directory> <onnx-runtime-dylib> [audio-file]"
+        );
     }
     let artifact_directory = std::path::PathBuf::from(&arguments[0]);
     let runtime_dylib = std::path::PathBuf::from(&arguments[1]);
+    let audio_file = arguments.get(2).map(std::path::PathBuf::from);
     // Keep the optional model away from the immediate classical-result path.
     // Production uses the same dedicated-background-worker shape.
     std::thread::Builder::new()
         .name("tunelock-neural-key-probe".to_owned())
-        .spawn(move || run_probe(artifact_directory, runtime_dylib))?
+        .spawn(move || run_probe(artifact_directory, runtime_dylib, audio_file))?
         .join()
         .map_err(|_| anyhow!("neural-key probe worker panicked"))?
 }

@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "generator": "tunelock/myna-real-file-parity-fixture",
+  "source": {
+    "file": "myna-stereo-44100-pcm16.wav",
+    "sha256": "11f007b7a29d8f4ba0005cca4b716ad267552c06f5dc12707764cc8070964239",
+    "format": "WAV PCM signed 16-bit little-endian",
+    "sample_rate_hz": 44100,
+    "channels": 2,
+    "frames": 17640,
+    "channel_generators": {
+      "algorithm": "LCG state = 1664525 * state + 1013904223 mod 2^32; sample = int16(state >> 16)",
+      "left_seed": 2703024129,
+      "right_seed": 2964398082
+    }
+  },
+  "reference": {
+    "decode": "torchaudio.load using soundfile backend",
+    "downmix": "arithmetic mean across channels in float32",
+    "resample": {
+      "implementation": "torchaudio.transforms.Resample",
+      "target_sample_rate_hz": 16000,
+      "lowpass_filter_width": 6,
+      "rolloff": 0.99,
+      "method": "sinc_interp_hann"
+    },
+    "file": "myna-stereo-44100-to-16000-f32le.bin",
+    "dtype": "float32 little-endian",
+    "samples": 6400,
+    "bytes": 25600,
+    "sha256": "5013c1ca7b9e9802ce36e177f59344458f5dfa1c8a5c79595269e27dd09c821e"
+  },
+  "versions": {
+    "numpy": "2.2.6",
+    "torch": "2.7.1+cu128",
+    "torchaudio": "2.7.1+cu128"
+  }
+}

@@ -13,6 +13,7 @@ pub mod harmony;
 pub mod media;
 pub mod models;
 pub mod neural_key;
+pub mod neural_key_audio;
 pub mod neural_key_preprocess;
 pub mod proof;
 

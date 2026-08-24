@@ -4,7 +4,8 @@
 //! module validates a separately supplied model artifact and, only when the
 //! `neural-key` feature is enabled, can execute prepared mel chunks in an
 //! external ONNX Runtime dylib. Schema 2 artifacts additionally pin the native
-//! audio-to-mel contract used by [`crate::neural_key_preprocess`].
+//! audio-to-mel contract used by [`crate::neural_key_preprocess`], while schema
+//! 3 also pins the real-file decode, downmix, and resampling boundary.
 
 use std::collections::HashSet;
 use std::fs::File;
@@ -39,6 +40,8 @@ pub struct NeuralKeyInputContract {
     pub preprocessor: String,
     #[serde(default)]
     pub preprocessing: Option<MynaPreprocessingContract>,
+    #[serde(default)]
+    pub audio_preprocessing: Option<MynaAudioPreprocessingContract>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -54,6 +57,18 @@ pub struct MynaPreprocessingContract {
     pub power: f32,
     pub mel_scale: String,
     pub normalization: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MynaAudioPreprocessingContract {
+    pub reference_implementation: String,
+    pub reference_version: String,
+    pub production_implementation: String,
+    pub channel_reduction: String,
+    pub amplitude_handling: String,
+    pub resampling_method: String,
+    pub lowpass_filter_width: usize,
+    pub rolloff: f32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -124,7 +139,9 @@ impl NeuralKeyArtifact {
     fn validate(&self) -> Result<(usize, usize)> {
         let supported_version = matches!(
             (self.schema_version, self.artifact_kind.as_str()),
-            (1, "tunelock-neural-key-chunk-v1") | (2, "tunelock-neural-key-chunk-v2")
+            (1, "tunelock-neural-key-chunk-v1")
+                | (2, "tunelock-neural-key-chunk-v2")
+                | (3, "tunelock-neural-key-chunk-v3")
         );
         if !supported_version {
             bail!("unsupported neural-key artifact contract");
@@ -160,7 +177,7 @@ impl NeuralKeyArtifact {
         }
         let mel_bins = fixed_dimension(&self.input.shape[2], "mel bins")?;
         let mel_frames = fixed_dimension(&self.input.shape[3], "mel frames")?;
-        if self.schema_version == 2 {
+        if self.schema_version >= 2 {
             let preprocessing = self
                 .input
                 .preprocessing
@@ -181,7 +198,25 @@ impl NeuralKeyArtifact {
                 || mel_bins != MYNA_MEL_BINS
                 || mel_frames != MYNA_FRAMES_PER_CHUNK
             {
-                bail!("unsupported schema-2 Myna preprocessing contract");
+                bail!("unsupported Myna mel preprocessing contract");
+            }
+        }
+        if self.schema_version == 3 {
+            let audio = self
+                .input
+                .audio_preprocessing
+                .as_ref()
+                .context("schema-3 artifact must pin real-file audio preprocessing")?;
+            if audio.reference_implementation != "torchaudio.load + transforms.Resample"
+                || audio.reference_version != "2.7.1"
+                || audio.production_implementation != "Symphonia 0.5 + native sinc resampler"
+                || audio.channel_reduction != "arithmetic mean across channels in float32"
+                || audio.amplitude_handling != "preserve decoded amplitude; no normalization"
+                || audio.resampling_method != "sinc_interp_hann"
+                || audio.lowpass_filter_width != 6
+                || audio.rolloff != 0.99
+            {
+                bail!("unsupported schema-3 Myna real-file preprocessing contract");
             }
         }
         if self.output.name != "chunk_logits"
@@ -204,7 +239,11 @@ impl NeuralKeyArtifact {
     }
 
     pub fn supports_native_myna_preprocessing(&self) -> bool {
-        self.schema_version == 2 && self.input.preprocessing.is_some()
+        self.schema_version >= 2 && self.input.preprocessing.is_some()
+    }
+
+    pub fn supports_native_myna_file_decode(&self) -> bool {
+        self.schema_version == 3 && self.input.audio_preprocessing.is_some()
     }
 }
 
@@ -348,6 +387,7 @@ mod runtime {
     use ort::value::Tensor;
 
     use super::{aggregate_chunk_logits, LoadedNeuralKeyArtifact, KEY_COUNT};
+    use crate::neural_key_audio::decode_myna_audio;
     use crate::neural_key_preprocess::MynaMelPreprocessor;
 
     static ORT_RUNTIME: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
@@ -414,6 +454,19 @@ mod runtime {
                 .mel_preprocessor
                 .prepare(samples, self.artifact.mel_frames)?;
             self.predict_mel_chunks(prepared.values, prepared.chunk_count)
+        }
+
+        /// Decode a real file through the amplitude-preserving, torchaudio-
+        /// compatible 16 kHz path before invoking the schema-3 model.
+        pub fn predict_file(
+            &mut self,
+            path: impl AsRef<std::path::Path>,
+        ) -> Result<[f32; KEY_COUNT]> {
+            if !self.artifact.contract.supports_native_myna_file_decode() {
+                bail!("artifact does not enable pinned native Myna file decoding");
+            }
+            let audio = decode_myna_audio(path)?;
+            self.predict_audio_16khz(&audio.samples)
         }
 
         /// Run prepared Myna mel chunks. Call this from a background task; a
@@ -533,8 +586,8 @@ mod tests {
         let model_path = directory.join("key-model.onnx");
         std::fs::write(&model_path, b"model").unwrap();
         let manifest = serde_json::json!({
-            "schema_version": 2,
-            "artifact_kind": "tunelock-neural-key-chunk-v2",
+            "schema_version": 3,
+            "artifact_kind": "tunelock-neural-key-chunk-v3",
             "status": "test-only",
             "model_file": "key-model.onnx",
             "model_sha256": sha256(&model_path).unwrap(),
@@ -558,6 +611,16 @@ mod tests {
                     "power": 2.0,
                     "mel_scale": "Slaney",
                     "normalization": "area"
+                },
+                "audio_preprocessing": {
+                    "reference_implementation": "torchaudio.load + transforms.Resample",
+                    "reference_version": "2.7.1",
+                    "production_implementation": "Symphonia 0.5 + native sinc resampler",
+                    "channel_reduction": "arithmetic mean across channels in float32",
+                    "amplitude_handling": "preserve decoded amplitude; no normalization",
+                    "resampling_method": "sinc_interp_hann",
+                    "lowpass_filter_width": 6,
+                    "rolloff": 0.99
                 }
             },
             "output": {
@@ -579,8 +642,22 @@ mod tests {
         assert_eq!(artifact.mel_bins, 128);
         assert_eq!(artifact.mel_frames, 196);
         assert!(artifact.contract.supports_native_myna_preprocessing());
+        assert!(artifact.contract.supports_native_myna_file_decode());
 
-        let mut legacy_manifest = manifest.clone();
+        let mut schema_two_manifest = manifest.clone();
+        schema_two_manifest["schema_version"] = serde_json::json!(2);
+        schema_two_manifest["artifact_kind"] = serde_json::json!("tunelock-neural-key-chunk-v2");
+        schema_two_manifest["input"]
+            .as_object_mut()
+            .unwrap()
+            .remove("audio_preprocessing");
+        let schema_two: NeuralKeyArtifact =
+            serde_json::from_value(schema_two_manifest.clone()).unwrap();
+        assert!(schema_two.validate().is_ok());
+        assert!(schema_two.supports_native_myna_preprocessing());
+        assert!(!schema_two.supports_native_myna_file_decode());
+
+        let mut legacy_manifest = schema_two_manifest;
         legacy_manifest["schema_version"] = serde_json::json!(1);
         legacy_manifest["artifact_kind"] = serde_json::json!("tunelock-neural-key-chunk-v1");
         legacy_manifest["input"]
@@ -595,6 +672,12 @@ mod tests {
         invalid_manifest["input"]["preprocessing"]["hop_length"] = serde_json::json!(256);
         let invalid: NeuralKeyArtifact = serde_json::from_value(invalid_manifest).unwrap();
         assert!(invalid.validate().is_err());
+
+        let mut invalid_audio_manifest = manifest.clone();
+        invalid_audio_manifest["input"]["audio_preprocessing"]["rolloff"] = serde_json::json!(0.95);
+        let invalid_audio: NeuralKeyArtifact =
+            serde_json::from_value(invalid_audio_manifest).unwrap();
+        assert!(invalid_audio.validate().is_err());
 
         std::fs::write(&model_path, b"other").unwrap();
         assert!(LoadedNeuralKeyArtifact::load(&directory).is_err());
