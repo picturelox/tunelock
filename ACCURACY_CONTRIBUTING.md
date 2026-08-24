@@ -30,15 +30,23 @@ sourced from existing labeled corpora or paid annotation. TuneLock will first:
 
 Corpus audit results (2026-08-24, verified against primary sources):
 
-- **FMAK / FMAKv2 — primary target.** 5,489 FMA tracks with expert song-level
-  key and mode labels (lead annotator is a concert pianist with perfect
-  pitch; a cross-annotated sample showed high agreement). Annotations are
-  CC BY 4.0; audio is per-track Creative Commons. This would roughly
-  quadruple the adjudicated training corpus and add 17 non-EDM genres.
-  Required before use: filter out per-track CC-NC audio for any commercial
-  path, run artist/recording-family overlap checks against both GiantSteps
-  corpora, and pin the Zenodo revision (FMAK: 10.5281/zenodo.10719860;
-  FMAKv2: 10.5281/zenodo.12759100).
+- **FMAK / FMAKv2 — primary target, audited 2026-08-24.** 5,489 FMA tracks
+  with expert song-level key and mode labels (lead annotator is a concert
+  pianist with perfect pitch; a cross-annotated sample showed high
+  agreement). Annotations are CC BY 4.0 (FMAK: 10.5281/zenodo.10719860;
+  FMAKv2 corrects 218 labels: 10.5281/zenodo.12759100). All 5,489 labels map
+  onto the canonical 24-key vocabulary with zero unmappable or
+  metadata-missing records, and genre coverage is broad (Rock 872,
+  Electronic 634, Folk 274, Pop 153, Hip-Hop 152, and more). Artist-token
+  overlap with both GiantSteps corpora is six tracks across three generic
+  artist names, which fold grouping keeps together conservatively.
+  **Decisive caveat:** 4,903 of 5,489 tracks (89%) carry NonCommercial CC
+  audio licenses. The commercial-usable subset is 565 tracks (372 CC BY,
+  158 CC BY-SA, 35 public domain) plus 21 unknown. Full-corpus training is
+  legitimate research evidence on this branch, but a product model may only
+  train on the rights-cleared subset—so FMAK answers the scientific question
+  "does more adjudicated data unlock selection?" before it can answer the
+  product question.
 - **GiantSteps+ (Zenodo 1095691, CC BY-SA 4.0)** — expanded variant with 500
   key-change/modal tracks; audit as supplementary training and
   modulation-behavior material.
