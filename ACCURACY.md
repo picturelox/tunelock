@@ -98,6 +98,7 @@ candidate was correct; it is a ceiling, not a selectable result.
 | Myna v8 compact faithful diversity head, base view | 408/604 (67.5%) | 0.746 | 86.4% | 447/604 (74.0%) | 411/604 (68.0% OOF) |
 | Myna v9, MTG-selected robust section pooling | 417/604 (69.0%) | 0.754 | 84.9% | 448/604 (74.2%) | rejected |
 | Myna v10, OOF temporal candidate ranker | 422/604 (69.9%) | 0.760 | 85.4% | 455/604 (75.3%) | rejected |
+| S-KEY supervised harmonic head (context-5) | 395/604 (65.4%) | 0.728 | 81.5% | 441/604 (73.0%) | 410/604 (67.9% OOF) |
 | **Myna v6 fast + probability-averaged transpositions** | **426/604 (70.5%)** | **0.765** | **85.6%** | **453/604 (75.0%)** | 426/604 (70.5%) |
 | Myna v6 fast + logit-averaged transpositions | 425/604 (70.4%) | 0.764 | 85.4% | 453/604 (75.0%) | **428/604 (70.9% fixed)** |
 | Myna85M full hybrid embedding, no augmentation | 372/604 (61.6%) | 0.693 | 83.3% | 439/604 (72.7%) | 393/604 (65.1% OOF) |
@@ -179,6 +180,34 @@ but the corrections are not selectable. It is retained as research evidence
 and rejected for promotion. Fixed-time post-hoc pooling is now stopped; the
 next acoustic path must add an independent harmonic representation or genuine
 beat/bar-aligned evidence.
+
+The independent-representation experiment then used the pinned MIT S-KEY
+ChromaNet: the 3x12 harmonic map immediately before its final mode classifier
+was cached for every corpus track, and a small circular-convolution head was
+trained under the same MTG-only contract. Architecture selection on fold 0
+chose a five-bin context window at 161/266 versus 160/266 for the frozen S-KEY
+baseline. Its five OOF shards total 770/1,340 (57.5%) versus 752/1,340 (56.1%)
+for the baseline, and its GiantSteps development result is 395/604 (65.4%),
+0.728 MIREX, and 81.5% top-3, with a 441/604 (73.0%) classical pair oracle.
+It is rejected as a standalone candidate but retained as an opinion: the
+five-model oracle across classical, both Myna heads, the temporal ranker, and
+the harmonic head is **475/604 (78.6%)**, thirteen tracks beyond the previous
+three-model oracle. A five-model OOF convex fusion reaches 427/604 (70.7%),
+which does not beat the 428/604 fixed blend and changes no ranking.
+
+A final selector attempt fit classical + the v6 accuracy head + the harmonic
+head under the unchanged nested MTG-only contract. Its MTG OOF oracle is
+989/1,340 (73.8%), yet the selector realizes only 826/1,340 (61.6%) nested
+OOF—below the first selector's 864—and 410/604 (67.9%) on GiantSteps. It is
+rejected. Four leakage-safe selectors have now failed to beat the single
+70.2% head while the opinion oracle climbed from 74.3% to 78.6%. The binding
+constraint is therefore no longer candidate diversity or selection features;
+it is the 1,340-track adjudicated training corpus. Selector research over
+track-global posteriors is parked until broader adjudicated key-labeled
+training data exists, and the sealed final holdout's labels are to be sourced
+from existing labeled corpora or paid annotation rather than an in-house
+panel. In parallel, latency engineering on the native 70.2% path is now in
+scope; calibration, packaging, and UI integration remain gated.
 
 #### Myna85M and production-artifact checkpoint
 

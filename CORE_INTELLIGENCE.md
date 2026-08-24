@@ -67,11 +67,21 @@ unchanged. A direct hard model gate reaches 869/1,340 (64.9%) on MTG but only
 408/604 (67.5%) on GiantSteps. All three are rejected for promotion; the 70.2%
 accuracy head remains the best deployment-shaped result.
 
-This negative result narrows the next work. The system needs a more independent
-signal—especially bar/section-aware harmonic evidence—or broader adjudicated
-training data. Repeatedly changing the selector on these same global
-posteriors is now a stop condition because it would invite development-set
-tuning without adding information.
+A genuinely independent fourth opinion was then tried: a small supervised head
+on the pinned S-KEY ChromaNet harmonic map, trained under the same MTG-only
+contract. It scores 395/604 (65.4%) on GiantSteps—too weak alone, but its
+errors are different, and the five-opinion oracle (classical, both Myna heads,
+the temporal ranker, and this harmonic head) is **475/604 (78.6%)**. A fourth
+selector over classical + accuracy head + harmonic head reached only 826/1,340
+(61.6%) nested OOF and 410/604 (67.9%) on GiantSteps, and is also rejected.
+
+The pattern is now conclusive: the oracle keeps rising while every
+leakage-safe selector stays below the single accuracy head. The bottleneck is
+the 1,340-track adjudicated training corpus, not candidate diversity or
+selection features. Selector research over track-global posteriors is parked
+until broader adjudicated key-labeled training data is acquired; repeatedly
+changing the selector on these same posteriors remains a stop condition
+because it would invite development-set tuning without adding information.
 
 ## Native engine status
 
@@ -103,9 +113,14 @@ cannot silently replace what the audio models heard.
 
 ## What must be true before integration
 
-- A future three-model selector must beat the 70.2% deployment-shaped neural
-  result under the MTG-only selection contract. The first three locked
-  selectors did not.
+- A future selector must beat the 70.2% deployment-shaped neural
+  result under the MTG-only selection contract. The four locked
+  selectors did not, and further attempts require broader adjudicated
+  training data first.
+- The sealed final holdout's labels are sourced from existing labeled corpora
+  or paid annotation, not an in-house panel.
+- Latency engineering on the native neural path is in scope now; calibration,
+  packaging, and UI integration remain gated.
 - The complete native artifact path must reproduce the locked result over all
   604 development files, not only parity samples.
 - Latency, memory, artifact size, cancellation, caching, and failures must be
