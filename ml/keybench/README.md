@@ -130,7 +130,8 @@ therefore verified against its published MD5.
   ablation. `phase-vocoder-sparse-v1` is the faithful training path: it shares
   the STFT and stores only the non-negligible support of torchaudio's sinc/Hann
   resampler instead of constructing enormous dense kernels for coprime rates.
-  It is a distinct cache identity and has not yet produced a new accuracy score.
+  It is a distinct cache identity. The completed v7 experiment is recorded
+  below as a rejected accuracy path and a retained diversity study.
 - Generated embeddings, checkpoints, posteriors, and external model checkouts
   remain gitignored research artifacts.
 - Resumable caches are metadata-bound. A changed manifest, model/revision,
@@ -185,6 +186,12 @@ ml\venv\Scripts\python.exe ml\keybench\train_myna_head.py `
   --hidden-dims 4096 4096 --dropout 0.99 --amp --device cuda
 ```
 
+The completed validation-only run selected epoch 2 at 172/266 (64.7%), versus
+170/266 (63.9%) for v6. The deterministic final rerun reproduced that result.
+Its base-view Rust bakeoff reached 406/604 (67.2%), 0.741 MIREX, 84.9% top-3,
+and a 446/604 (73.8%) TuneLock pair oracle. This is below v6 base (415/604) and
+below the 453-track oracle requirement.
+
 Only after that result is recorded, rerun without `--validation-only` using
 fresh `myna-mtg-v7-faithful` output/report/checkpoint paths. That second run
 selects epochs on the same disjoint validation fold, retrains on all MTG
@@ -202,6 +209,15 @@ ml\venv\Scripts\python.exe ml\keybench\train_myna_head.py `
   --batch-size 512 --learning-rate 0.0003 --weight-decay 0.0001 `
   --hidden-dims 4096 4096 --dropout 0.99 --amp --device cuda
 ```
+
+The separate development cache completed at 7,248/7,248 shifted embeddings
+with zero failures. Probability TTA remained 406/604 (67.2%); logit TTA reached
+407/604 (67.4%). Their TuneLock pair oracles were only 448 and 449 tracks, so
+v7 is rejected for standalone production and ordinary fusion. Adding v7 to the
+classical and v6 TTA candidates raises the exact oracle to 459/604 (76.0%), but
+the best measured OOF convex blend is 426/604 (70.5%) and generally gives v7
+zero weight. Retain the artifacts for leakage-safe selector research; do not
+replace the 426/604 v6 probability candidate or its 428/604 fixed-blend result.
 
 ## Leakage-safe head selection
 

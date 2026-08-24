@@ -91,8 +91,11 @@ candidate was correct; it is a ceiling, not a selectable result.
 | Myna, published head, no pitch augmentation | 383/604 (63.4%) | 0.718 | 82.8% | 441/604 (73.0%) | 399/604 (66.1%) |
 | Myna, clean 1,077 protocol + pitch/speed augmentation | 411/604 (68.0%) | 0.745 | 84.8% | 451/604 (74.7%) | 403/604 (66.7%) |
 | Myna, 1,349 unambiguous-label ablation + pitch/speed augmentation | 415/604 (68.7%) | 0.753 | 85.1% | 450/604 (74.5%) | 417/604 (69.0%) |
-| **Same Myna model + probability-averaged transpositions** | **426/604 (70.5%)** | **0.765** | **85.6%** | **453/604 (75.0%)** | 426/604 (70.5%) |
-| Same Myna model + logit-averaged transpositions | 425/604 (70.4%) | 0.764 | 85.4% | 453/604 (75.0%) | **428/604 (70.9% fixed)** |
+| Myna v7, 1,349 faithful pitch-only augmentation, base view | 406/604 (67.2%) | 0.741 | 84.9% | 446/604 (73.8%) | 408/604 (67.5% OOF) |
+| Myna v7 faithful + probability-averaged transpositions | 406/604 (67.2%) | 0.742 | 84.9% | 448/604 (74.2%) | 413/604 (68.4% OOF) |
+| Myna v7 faithful + logit-averaged transpositions | 407/604 (67.4%) | 0.742 | 85.1% | 449/604 (74.3%) | 409/604 (67.7% OOF) |
+| **Myna v6 fast + probability-averaged transpositions** | **426/604 (70.5%)** | **0.765** | **85.6%** | **453/604 (75.0%)** | 426/604 (70.5%) |
+| Myna v6 fast + logit-averaged transpositions | 425/604 (70.4%) | 0.764 | 85.4% | 453/604 (75.0%) | **428/604 (70.9% fixed)** |
 | Myna85M full hybrid embedding, no augmentation | 372/604 (61.6%) | 0.693 | 83.3% | 439/604 (72.7%) | 393/604 (65.1% OOF) |
 | Myna85M vertical branch, no augmentation | 378/604 (62.6%) | 0.701 | 83.8% | 439/604 (72.7%) | 402/604 (66.6% OOF) |
 
@@ -104,15 +107,26 @@ remaining 25 oracle-only corrections cannot be claimed until a selector learns
 them on data outside these 604 development labels.
 
 The current fast augmentation is explicitly an ablation: linear resampling
-changes pitch and speed together. The original dense faithful cache reached
-337/1,340 records with zero failures, but dense sinc kernels made completion
-unnecessarily slow. A separately identified sparse-v1 implementation now
-matches all twelve pinned torchaudio views within 1.19e-7 maximum waveform
+changes pitch and speed together. The separately identified sparse-v1 faithful
+path matches all twelve pinned torchaudio views within 1.19e-7 maximum waveform
 error and matching-track Myna embeddings within 8.35e-7 maximum error. Its
-full, clean cache is being regenerated before any retraining or score change.
-Neither Myna candidate is eligible for the app until it repeats on the sealed
-final holdout and passes latency, calibration, data-rights, packaging, and
-commercial-license review.
+clean training cache is now complete at 16,080/16,080 embeddings with zero
+failures. Using the locked v6 head protocol, faithful augmentation improved the
+artist/recording-disjoint MTG validation fold from 170/266 to 172/266, but its
+base-view GiantSteps development result fell from 415/604 to 406/604. Faithful
+probability TTA remained 406/604; logit TTA reached 407/604. Their classical
+pair oracles (448 and 449) are below the 453-track stretch target, so v7 is
+rejected as a standalone or ordinary blend candidate.
+
+V7 is not useless evidence: classical + v7 logit TTA + the existing v6 models
+have a 459/604 (76.0%) exact oracle, ten corrections beyond the classical/v7
+pair. Yet the measured multi-model OOF convex blend is only 426/604 (70.5%),
+and most folds assign v7 zero weight. This establishes diversity that a future
+selector may study; it does not raise the verified score. The accuracy leader
+therefore remains v6 probability TTA at 426/604 (70.5%), with the previously
+measured fixed blend at 428/604 (70.9%). Neither candidate is eligible for the
+app until it repeats on the sealed final holdout and passes latency,
+calibration, data-rights, packaging, and commercial-license review.
 
 #### Myna85M and production-artifact checkpoint
 
