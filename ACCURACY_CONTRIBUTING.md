@@ -28,18 +28,36 @@ sourced from existing labeled corpora or paid annotation. TuneLock will first:
 5. freeze the candidate, evaluation protocol, and exact questions that human
    evidence must answer.
 
-Candidate corpora for the training audit (each must be verified, not assumed):
+Corpus audit results (2026-08-24, verified against primary sources):
 
-- McGill Billboard: professional key/chord annotations of popular recordings;
-  audio rights are separate from the annotations and must be reviewed.
-- Isophonics key annotations (Beatles, Queen, Zweieck, and related sets):
-  research-oriented; narrow artist coverage makes it mainly a diversity probe.
-- RWC Popular Music: research license; small but cleanly annotated.
-- Classical harmonic sets (Beethoven, Mozart, Bach, Schubert): reliable
-  score-derived keys but a genre mismatch; useful for mode/relative-key
-  stress tests, not for improving EDM development accuracy.
-- CC-licensed audio paired with paid blind annotation: the only lane that
-  directly creates rights-cleared audio-plus-label pairs at scale.
+- **FMAK / FMAKv2 — primary target.** 5,489 FMA tracks with expert song-level
+  key and mode labels (lead annotator is a concert pianist with perfect
+  pitch; a cross-annotated sample showed high agreement). Annotations are
+  CC BY 4.0; audio is per-track Creative Commons. This would roughly
+  quadruple the adjudicated training corpus and add 17 non-EDM genres.
+  Required before use: filter out per-track CC-NC audio for any commercial
+  path, run artist/recording-family overlap checks against both GiantSteps
+  corpora, and pin the Zenodo revision (FMAK: 10.5281/zenodo.10719860;
+  FMAKv2: 10.5281/zenodo.12759100).
+- **GiantSteps+ (Zenodo 1095691, CC BY-SA 4.0)** — expanded variant with 500
+  key-change/modal tracks; audit as supplementary training and
+  modulation-behavior material.
+- **McGill Billboard — secondary.** 625 CC0 expert key annotations, but mode
+  was annotated inconsistently (tonic-only signal) and the copyrighted audio
+  must be sourced independently; KeyMyna used it under these constraints.
+- **Non-commercial, excluded from commercial training:** Isophonics
+  (CC BY-NC-SA), DCML classical sets (CC BY-NC-SA), RWC (research purchase).
+  Usable at most as private evaluation probes.
+- **No key labels:** MTG-Jamendo, DEAM, RWC AIST annotations, Music4All
+  (unverified). GTZAN key labels exist (MIT) but audio licensing is unclear
+  and label provenance is weak; treat as a probe only.
+- **Why data is the lever:** S-KEY and STONE train self-supervised on
+  60k-1M internal Deezer tracks; supervised work still rests on GiantSteps
+  MTG + Billboard. TuneLock cannot replicate an internal catalog, so
+  acquiring adjudicated labels is the only honest path past the 1,340-track
+  ceiling.
+- **CC-licensed audio paired with paid blind annotation** remains the lane
+  that creates new rights-cleared audio-plus-label pairs at scale.
 
 For every candidate: pin the source revision, verify label provenance, run
 exact-audio and fingerprint duplicate checks against both existing corpora,
@@ -94,6 +112,16 @@ rights are different problems.
 - This lane measures real-world failure rates and calibration. It does **not**
   automatically authorize centralized model training, because the service does
   not possess rights-cleared audio paired with the label.
+
+The owner's own library is the first Lane A deployment. A Rekordbox XML
+export (File > Export Collection in xml format) carries per-track `Tonality`,
+`AverageBpm`, beat-grid `TEMPO` entries, genre, and file `Location`. Imported
+as a **vendor opinion** beside the existing MIK export, it enables three-way
+disagreement mining (TuneLock vs MIK vs Rekordbox): tracks where the three
+diverge are the highest-information blind-listening tasks, and that queue is
+the pilot for the paid-annotation workflow. Rekordbox keys and beat grids are
+algorithmic opinions—assisted-leaderboard material, never acoustic ground
+truth. Vendor tags embedded in file metadata are the same class.
 
 ### Lane B: rights-cleared training corpus
 
