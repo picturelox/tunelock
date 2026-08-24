@@ -22,6 +22,7 @@ from train_myna_head import (
     leakage_groups,
     pitch_embedding_path,
     sha256,
+    validate_pitch_cache_metadata,
     write_jsonl,
 )
 
@@ -51,6 +52,14 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=1.0,
         help="Weight of the unshifted posterior relative to each shifted posterior.",
+    )
+    parser.add_argument(
+        "--allow-training-pitch-method-mismatch",
+        action="store_true",
+        help=(
+            "Explicitly allow TTA views whose pitch method differs from the head's "
+            "training augmentation. Intended only for named ablations."
+        ),
     )
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     return parser.parse_args()
@@ -156,18 +165,25 @@ def main() -> int:
         raise ValueError(f"Manifest has no {args.role} records")
 
     pitch_metadata = load_metadata(args.pitch_cache / "metadata.json")
-    if pitch_metadata.get("manifest_sha256") != manifest_hash:
-        raise ValueError("Pitch cache was produced from a different manifest")
-    if int(pitch_metadata.get("embedding_dim", 384)) != source_embedding_dim:
-        raise ValueError("Checkpoint and pitch cache use different embedding dimensions")
-    if (
-        pitch_metadata.get("model") != checkpoint_base.get("model")
-        or pitch_metadata.get("model_revision") != checkpoint_base.get("model_revision")
-    ):
-        raise ValueError("Pitch cache does not match the trained checkpoint")
-    if pitch_metadata.get("role") != cache_role:
-        raise ValueError(f"Pitch cache must contain {cache_role}-role embeddings")
-    available_shifts = {int(value) for value in pitch_metadata.get("semitones", [])}
+    available_shifts = validate_pitch_cache_metadata(
+        pitch_metadata,
+        manifest_hash=manifest_hash,
+        base_metadata=checkpoint_base,
+        required_role=cache_role,
+    )
+    training_pitch_metadata = checkpoint.get("pitch_augmentation")
+    if isinstance(training_pitch_metadata, dict):
+        training_method = training_pitch_metadata.get("pitch_method")
+        evaluation_method = pitch_metadata.get("pitch_method")
+        if (
+            training_method != evaluation_method
+            and not args.allow_training_pitch_method_mismatch
+        ):
+            raise ValueError(
+                "TTA pitch method does not match the head's training augmentation: "
+                f"training={training_method}, evaluation={evaluation_method}. "
+                "Use --allow-training-pitch-method-mismatch only for a named ablation."
+            )
     shifts = sorted(args.semitones if args.semitones is not None else available_shifts)
     target_tables = {
         int(item["semitones"]): torch.tensor(item["target_by_source_index"], dtype=torch.long)

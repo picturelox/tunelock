@@ -162,6 +162,47 @@ Never point sparse-v1 at a `phase-vocoder-cached` directory. The metadata guard
 rejects that mismatch; keeping the identities separate makes numerical drift
 and partial-cache provenance auditable.
 
+The head trainer rejects pitch caches unless every expected view is present,
+the failure list is empty, the role is `training`, and the manifest/backbone
+identity matches the base cache. TTA applies the same completeness checks and
+also requires its pitch method to match the head's recorded training method.
+Cross-method comparisons require the explicit
+`--allow-training-pitch-method-mismatch` ablation flag.
+
+Once metadata reports `complete == expected` with no failures, apply the
+already-locked v6 head shape and optimizer to the new augmentation. First run
+the validation-only gate; it never reads GiantSteps development embeddings:
+
+```powershell
+ml\venv\Scripts\python.exe ml\keybench\train_myna_head.py `
+  --manifest ml\data\keybench\key-corpus-manifest-v4-all-unambiguous.json `
+  --embedding-cache ml\data\keybench\myna-embeddings `
+  --pitch-augmentation-cache ml\data\keybench\myna-pitch-phase-sparse-v1-embeddings `
+  --report ml\data\keybench\myna-mtg-v7-faithful-validation-report.json `
+  --checkpoint ml\data\models\myna-mtg-v7-faithful-validation.pt `
+  --validation-only --validation-fold 0 --seeds 42 --epochs 100 --patience 15 `
+  --batch-size 512 --learning-rate 0.0003 --weight-decay 0.0001 `
+  --hidden-dims 4096 4096 --dropout 0.99 --amp --device cuda
+```
+
+Only after that result is recorded, rerun without `--validation-only` using
+fresh `myna-mtg-v7-faithful` output/report/checkpoint paths. That second run
+selects epochs on the same disjoint validation fold, retrains on all MTG
+training records, and emits the 604 development posteriors for Rust scoring.
+
+```powershell
+ml\venv\Scripts\python.exe ml\keybench\train_myna_head.py `
+  --manifest ml\data\keybench\key-corpus-manifest-v4-all-unambiguous.json `
+  --embedding-cache ml\data\keybench\myna-embeddings `
+  --pitch-augmentation-cache ml\data\keybench\myna-pitch-phase-sparse-v1-embeddings `
+  --output ml\data\keybench\myna-mtg-v7-faithful.jsonl `
+  --report ml\data\keybench\myna-mtg-v7-faithful-report.json `
+  --checkpoint ml\data\models\myna-mtg-v7-faithful.pt `
+  --validation-fold 0 --seeds 42 --epochs 100 --patience 15 `
+  --batch-size 512 --learning-rate 0.0003 --weight-decay 0.0001 `
+  --hidden-dims 4096 4096 --dropout 0.99 --amp --device cuda
+```
+
 ## Leakage-safe head selection
 
 Use `--validation-only` while comparing head families. This writes validation

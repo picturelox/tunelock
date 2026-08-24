@@ -94,6 +94,53 @@ def load_manifest(path: Path) -> dict[str, Any]:
     return data
 
 
+def validate_pitch_cache_metadata(
+    metadata: dict[str, Any],
+    *,
+    manifest_hash: str,
+    base_metadata: dict[str, Any],
+    required_role: str,
+) -> set[int]:
+    """Reject incomplete or provenance-incompatible pitch caches."""
+    if metadata.get("adapter") != "tunelock/myna-pitch-embedding-cache":
+        raise ValueError("Pitch cache has an unsupported adapter")
+    if metadata.get("manifest_sha256") != manifest_hash:
+        raise ValueError("Pitch embedding cache was produced from a different manifest")
+    source_embedding_dim = int(base_metadata.get("embedding_dim", EMBEDDING_DIM))
+    if int(metadata.get("embedding_dim", EMBEDDING_DIM)) != source_embedding_dim:
+        raise ValueError("Base and pitch caches use different embedding dimensions")
+    if metadata.get("model") != base_metadata.get("model") or metadata.get(
+        "model_revision"
+    ) != base_metadata.get("model_revision"):
+        raise ValueError("Base and pitch caches were produced by different backbones")
+    if metadata.get("role") != required_role:
+        raise ValueError(f"Pitch cache must contain {required_role}-role embeddings")
+    pitch_method = metadata.get("pitch_method")
+    if not isinstance(pitch_method, str) or not pitch_method:
+        raise ValueError("Pitch cache does not identify its augmentation method")
+    shifts = {int(value) for value in metadata.get("semitones", [])}
+    if not shifts or 0 in shifts:
+        raise ValueError("Pitch cache must contain non-zero semitone views")
+    unique_records = int(metadata.get("unique_records", -1))
+    expected = int(metadata.get("expected", -1))
+    complete = int(metadata.get("complete", -1))
+    failures = metadata.get("failed", [])
+    expected_from_shape = unique_records * len(shifts)
+    if (
+        unique_records < 1
+        or expected != expected_from_shape
+        or complete != expected
+        or not isinstance(failures, list)
+        or failures
+    ):
+        raise ValueError(
+            f"Pitch cache is incomplete: complete={complete}, expected={expected}, "
+            f"shape_expected={expected_from_shape}, "
+            f"failures={len(failures) if isinstance(failures, list) else 'invalid'}"
+        )
+    return shifts
+
+
 def normalized_artist_tokens(value: str) -> tuple[str, ...]:
     value = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
     tokens = []
@@ -592,15 +639,12 @@ def main() -> int:
     if args.pitch_augmentation_cache is not None:
         pitch_metadata_path = args.pitch_augmentation_cache / "metadata.json"
         pitch_metadata = json.loads(pitch_metadata_path.read_text(encoding="utf-8"))
-        if pitch_metadata.get("manifest_sha256") != manifest_hash:
-            raise ValueError("Pitch embedding cache was produced from a different manifest")
-        if int(pitch_metadata.get("embedding_dim", EMBEDDING_DIM)) != source_embedding_dim:
-            raise ValueError("Base and pitch caches use different embedding dimensions")
-        if pitch_metadata.get("model") != base_metadata.get("model") or pitch_metadata.get(
-            "model_revision"
-        ) != base_metadata.get("model_revision"):
-            raise ValueError("Base and pitch caches were produced by different backbones")
-        shifts = {int(value) for value in pitch_metadata.get("semitones", [])}
+        shifts = validate_pitch_cache_metadata(
+            pitch_metadata,
+            manifest_hash=manifest_hash,
+            base_metadata=base_metadata,
+            required_role="training",
+        )
         pitch_targets = {
             int(item["semitones"]): [int(value) for value in item["target_by_source_index"]]
             for item in manifest.get("pitch_shift_targets", [])
