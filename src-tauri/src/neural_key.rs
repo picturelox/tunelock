@@ -5,7 +5,8 @@
 //! `neural-key` feature is enabled, can execute prepared mel chunks in an
 //! external ONNX Runtime dylib. Schema 2 artifacts additionally pin the native
 //! audio-to-mel contract used by [`crate::neural_key_preprocess`], while schema
-//! 3 also pins the real-file decode, downmix, and resampling boundary.
+//! 3 also pins the real-file decode, downmix, and resampling boundary. Schema 4
+//! pins the faithful pitch-preserving views and cross-view aggregation.
 
 use std::collections::HashSet;
 use std::fs::File;
@@ -42,6 +43,8 @@ pub struct NeuralKeyInputContract {
     pub preprocessing: Option<MynaPreprocessingContract>,
     #[serde(default)]
     pub audio_preprocessing: Option<MynaAudioPreprocessingContract>,
+    #[serde(default)]
+    pub pitch_preprocessing: Option<MynaPitchPreprocessingContract>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -69,6 +72,26 @@ pub struct MynaAudioPreprocessingContract {
     pub resampling_method: String,
     pub lowpass_filter_width: usize,
     pub rolloff: f32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MynaPitchPreprocessingContract {
+    pub implementation: String,
+    pub version: String,
+    pub sample_rate_hz: usize,
+    pub n_fft: usize,
+    pub hop_length: usize,
+    pub window: String,
+    pub center: bool,
+    pub pad_mode: String,
+    pub rate_formula: String,
+    pub stretched_length: String,
+    pub resample_original_rate: String,
+    pub output_length: String,
+    pub semitone_views: Vec<i32>,
+    pub original_weight: f32,
+    pub aggregation: String,
+    pub label_alignment: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -142,6 +165,7 @@ impl NeuralKeyArtifact {
             (1, "tunelock-neural-key-chunk-v1")
                 | (2, "tunelock-neural-key-chunk-v2")
                 | (3, "tunelock-neural-key-chunk-v3")
+                | (4, "tunelock-neural-key-chunk-v4")
         );
         if !supported_version {
             bail!("unsupported neural-key artifact contract");
@@ -201,7 +225,7 @@ impl NeuralKeyArtifact {
                 bail!("unsupported Myna mel preprocessing contract");
             }
         }
-        if self.schema_version == 3 {
+        if self.schema_version >= 3 {
             let audio = self
                 .input
                 .audio_preprocessing
@@ -216,7 +240,33 @@ impl NeuralKeyArtifact {
                 || audio.lowpass_filter_width != 6
                 || audio.rolloff != 0.99
             {
-                bail!("unsupported schema-3 Myna real-file preprocessing contract");
+                bail!("unsupported Myna real-file preprocessing contract");
+            }
+        }
+        if self.schema_version == 4 {
+            let pitch = self
+                .input
+                .pitch_preprocessing
+                .as_ref()
+                .context("schema-4 artifact must pin pitch-preserving preprocessing")?;
+            if pitch.implementation != "torchaudio phase vocoder + sinc resampler"
+                || pitch.version != "2.7.1"
+                || pitch.sample_rate_hz != MYNA_SAMPLE_RATE_HZ
+                || pitch.n_fft != 512
+                || pitch.hop_length != 128
+                || pitch.window != "periodic Hann"
+                || !pitch.center
+                || pitch.pad_mode != "reflect"
+                || pitch.rate_formula != "2 ** (-semitones / 12)"
+                || pitch.stretched_length != "round(original_length / rate)"
+                || pitch.resample_original_rate != "int(16000 / rate)"
+                || pitch.output_length != "right zero-pad then truncate to source length"
+                || pitch.semitone_views != [-6, -5, -4, -3, -2, -1, 1, 2, 3, 4, 5, 6]
+                || pitch.original_weight != 1.0
+                || pitch.aggregation != "probability mean after harmony alignment"
+                || pitch.label_alignment != "rotate tonic by -semitones; preserve mode"
+            {
+                bail!("unsupported schema-4 Myna pitch-view contract");
             }
         }
         if self.output.name != "chunk_logits"
@@ -243,7 +293,11 @@ impl NeuralKeyArtifact {
     }
 
     pub fn supports_native_myna_file_decode(&self) -> bool {
-        self.schema_version == 3 && self.input.audio_preprocessing.is_some()
+        self.schema_version >= 3 && self.input.audio_preprocessing.is_some()
+    }
+
+    pub fn supports_native_myna_tta(&self) -> bool {
+        self.schema_version == 4 && self.input.pitch_preprocessing.is_some()
     }
 }
 
@@ -386,8 +440,11 @@ mod runtime {
     use ort::session::{builder::GraphOptimizationLevel, Session};
     use ort::value::Tensor;
 
-    use super::{aggregate_chunk_logits, LoadedNeuralKeyArtifact, KEY_COUNT};
-    use crate::neural_key_audio::decode_myna_audio;
+    use super::{
+        aggregate_chunk_logits, aggregate_transposition_posteriors, LoadedNeuralKeyArtifact,
+        KEY_COUNT,
+    };
+    use crate::neural_key_audio::{decode_myna_audio, MynaPitchShifter};
     use crate::neural_key_preprocess::MynaMelPreprocessor;
 
     static ORT_RUNTIME: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
@@ -467,6 +524,36 @@ mod runtime {
             }
             let audio = decode_myna_audio(path)?;
             self.predict_audio_16khz(&audio.samples)
+        }
+
+        /// Run the artifact-pinned base view and all twelve pitch-preserving
+        /// views, align them to the original harmony vocabulary, and average
+        /// their probabilities exactly as in the research evaluator.
+        pub fn predict_file_tta(
+            &mut self,
+            path: impl AsRef<std::path::Path>,
+        ) -> Result<[f32; KEY_COUNT]> {
+            if !self.artifact.contract.supports_native_myna_tta() {
+                bail!("artifact does not enable pinned native Myna TTA");
+            }
+            let pitch = self
+                .artifact
+                .contract
+                .input
+                .pitch_preprocessing
+                .as_ref()
+                .context("validated pitch-view contract is missing")?;
+            let shifts = pitch.semitone_views.clone();
+            let original_weight = pitch.original_weight;
+            let audio = decode_myna_audio(path)?;
+            let mut views = Vec::with_capacity(shifts.len() + 1);
+            views.push((0, self.predict_audio_16khz(&audio.samples)?));
+            let shifter = MynaPitchShifter::new(&audio.samples)?;
+            for shift in shifts {
+                let shifted = shifter.shift(shift)?;
+                views.push((shift, self.predict_audio_16khz(&shifted)?));
+            }
+            aggregate_transposition_posteriors(&views, original_weight)
         }
 
         /// Run prepared Myna mel chunks. Call this from a background task; a
@@ -586,8 +673,8 @@ mod tests {
         let model_path = directory.join("key-model.onnx");
         std::fs::write(&model_path, b"model").unwrap();
         let manifest = serde_json::json!({
-            "schema_version": 3,
-            "artifact_kind": "tunelock-neural-key-chunk-v3",
+            "schema_version": 4,
+            "artifact_kind": "tunelock-neural-key-chunk-v4",
             "status": "test-only",
             "model_file": "key-model.onnx",
             "model_sha256": sha256(&model_path).unwrap(),
@@ -621,6 +708,24 @@ mod tests {
                     "resampling_method": "sinc_interp_hann",
                     "lowpass_filter_width": 6,
                     "rolloff": 0.99
+                },
+                "pitch_preprocessing": {
+                    "implementation": "torchaudio phase vocoder + sinc resampler",
+                    "version": "2.7.1",
+                    "sample_rate_hz": 16000,
+                    "n_fft": 512,
+                    "hop_length": 128,
+                    "window": "periodic Hann",
+                    "center": true,
+                    "pad_mode": "reflect",
+                    "rate_formula": "2 ** (-semitones / 12)",
+                    "stretched_length": "round(original_length / rate)",
+                    "resample_original_rate": "int(16000 / rate)",
+                    "output_length": "right zero-pad then truncate to source length",
+                    "semitone_views": [-6, -5, -4, -3, -2, -1, 1, 2, 3, 4, 5, 6],
+                    "original_weight": 1.0,
+                    "aggregation": "probability mean after harmony alignment",
+                    "label_alignment": "rotate tonic by -semitones; preserve mode"
                 }
             },
             "output": {
@@ -643,8 +748,22 @@ mod tests {
         assert_eq!(artifact.mel_frames, 196);
         assert!(artifact.contract.supports_native_myna_preprocessing());
         assert!(artifact.contract.supports_native_myna_file_decode());
+        assert!(artifact.contract.supports_native_myna_tta());
 
-        let mut schema_two_manifest = manifest.clone();
+        let mut schema_three_manifest = manifest.clone();
+        schema_three_manifest["schema_version"] = serde_json::json!(3);
+        schema_three_manifest["artifact_kind"] = serde_json::json!("tunelock-neural-key-chunk-v3");
+        schema_three_manifest["input"]
+            .as_object_mut()
+            .unwrap()
+            .remove("pitch_preprocessing");
+        let schema_three: NeuralKeyArtifact =
+            serde_json::from_value(schema_three_manifest.clone()).unwrap();
+        assert!(schema_three.validate().is_ok());
+        assert!(schema_three.supports_native_myna_file_decode());
+        assert!(!schema_three.supports_native_myna_tta());
+
+        let mut schema_two_manifest = schema_three_manifest;
         schema_two_manifest["schema_version"] = serde_json::json!(2);
         schema_two_manifest["artifact_kind"] = serde_json::json!("tunelock-neural-key-chunk-v2");
         schema_two_manifest["input"]
@@ -678,6 +797,13 @@ mod tests {
         let invalid_audio: NeuralKeyArtifact =
             serde_json::from_value(invalid_audio_manifest).unwrap();
         assert!(invalid_audio.validate().is_err());
+
+        let mut invalid_pitch_manifest = manifest.clone();
+        invalid_pitch_manifest["input"]["pitch_preprocessing"]["original_weight"] =
+            serde_json::json!(2.0);
+        let invalid_pitch: NeuralKeyArtifact =
+            serde_json::from_value(invalid_pitch_manifest).unwrap();
+        assert!(invalid_pitch.validate().is_err());
 
         std::fs::write(&model_path, b"other").unwrap();
         assert!(LoadedNeuralKeyArtifact::load(&directory).is_err());

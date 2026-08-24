@@ -91,11 +91,12 @@ candidate was correct; it is a ceiling, not a selectable result.
 | Myna, published head, no pitch augmentation | 383/604 (63.4%) | 0.718 | 82.8% | 441/604 (73.0%) | 399/604 (66.1%) |
 | Myna, clean 1,077 protocol + pitch/speed augmentation | 411/604 (68.0%) | 0.745 | 84.8% | 451/604 (74.7%) | 403/604 (66.7%) |
 | Myna, 1,349 unambiguous-label ablation + pitch/speed augmentation | 415/604 (68.7%) | 0.753 | 85.1% | 450/604 (74.5%) | 417/604 (69.0%) |
-| **Same Myna model + Rust-aligned transposition averaging** | **425/604 (70.4%)** | **0.764** | **85.4%** | **453/604 (75.0%)** | **428/604 (70.9%)** |
+| **Same Myna model + probability-averaged transpositions** | **426/604 (70.5%)** | **0.765** | **85.6%** | **453/604 (75.0%)** | 426/604 (70.5%) |
+| Same Myna model + logit-averaged transpositions | 425/604 (70.4%) | 0.764 | 85.4% | 453/604 (75.0%) | **428/604 (70.9% fixed)** |
 | Myna85M full hybrid embedding, no augmentation | 372/604 (61.6%) | 0.693 | 83.3% | 439/604 (72.7%) | 393/604 (65.1% OOF) |
 | Myna85M vertical branch, no augmentation | 378/604 (62.6%) | 0.701 | 83.8% | 439/604 (72.7%) | 402/604 (66.6% OOF) |
 
-The verified acoustic top-1 result is therefore **70.4%**, 36 additional exact
+The verified acoustic top-1 result is therefore **70.5%**, 37 additional exact
 matches over the 64.4% release baseline. A fixed equal blend using the
 logit-averaged transposition variant reaches **70.9% (428/604)**. The exact
 75.0% pair oracle proves sufficient complementary errors now exist, but the
@@ -106,10 +107,11 @@ The current fast augmentation is explicitly an ablation: linear resampling
 changes pitch and speed together. A cached phase-vocoder implementation was
 verified against `torchaudio.functional.pitch_shift` on controlled tones
 (expected frequencies and approximately 1.0 waveform cosine similarity), but
-the full faithful training cache is still incomplete (286/1,340 records are
-checkpointed, 3,432/16,080 shifted embeddings, with zero failures). Neither Myna candidate
-is eligible for the app until it repeats on the sealed final holdout and passes
-latency, calibration, data-rights, packaging, and commercial-license review.
+the full faithful training cache is still incomplete (337/1,340 records are
+checkpointed, 4,044/16,080 shifted embeddings, with zero failures). Neither
+Myna candidate is eligible for the app until it repeats on the sealed final
+holdout and passes latency, calibration, data-rights, packaging, and
+commercial-license review.
 
 #### Myna85M and production-artifact checkpoint
 
@@ -134,10 +136,11 @@ deployment-shaped artifact path (updated 2026-08-24):
 - one combined backbone + key-head ONNX graph, 162,782,585 bytes;
 - ONNX Runtime CPU parity within 1.02e-6 maximum absolute logit error, with
   identical test-batch argmaxes;
-- a schema-3 manifest binding the model SHA-256, exact input/output shapes,
+- a schema-4 manifest binding the model SHA-256, exact input/output shapes,
   Rust-canonical 24-label order, aggregation rule, model revision, explicit
   research/data-rights status, and machine-readable mel plus real-file audio
-  preprocessing parameters;
+  preprocessing parameters, twelve pitch views, label alignment, and TTA
+  weighting;
 - an opt-in Rust `neural-key` feature that validates the manifest, size, hash,
   labels, and finite logits, then loads an externally supplied ONNX Runtime;
 - a native 16 kHz audio-to-mel implementation of the pinned nnAudio 0.3.3
@@ -154,20 +157,27 @@ deployment-shaped artifact path (updated 2026-08-24):
 - a release-mode audit of 20 real GiantSteps MP3s against cached Python
   posteriors: 20/20 top-1 agreement, zero failures, 0.000632 mean absolute
   posterior error, 0.0167 maximum posterior error, and 866 ms mean execution;
-- Rust-native major/minor-preserving transposition alignment and the winning
-  probability-space view average, with range, duplicate-shift, vocabulary, and
-  posterior validation tests.
+- a native shared-STFT phase vocoder and optimized sinc resampler for all
+  twelve faithful pitch views. Across the committed torchaudio fixture its
+  maximum waveform error is 0.000679 and global mean error is 0.0000558;
+- end-to-end Rust TTA that runs the base plus twelve shifted views, preserves
+  major/minor vocabulary alignment, and averages probabilities. A real-file
+  Python/Rust smoke chose the same C-minor key with 0.00131 mean and 0.00606
+  maximum final-posterior error; native release execution took 16.2 seconds
+  including artifact/runtime load on this machine.
 
 This is a production boundary, not production promotion. The default build
 still downloads and bundles no model or runtime, and the release analyzer still
 returns the classical result first. A sealed final holdout, calibration, rights
 review, artifact distribution, and background lifecycle/UI integration remain
-open gates. The graph covers the base acoustic view; Rust now owns real-file
-decode through base-view inference, alignment, and cross-view probability
-average, but the 70.4% result still requires pitch-preserving view generation
-and orchestration through every view. The 20-file result above measures
-implementation parity, not ground-truth accuracy, so the key scores are
-unchanged by this infrastructure checkpoint.
+open gates. Rust now owns real-file decode through faithful twelve-view TTA,
+but the exported head was trained using the earlier pitch+speed ablation. The
+faithful cache must finish, the head must be retrained, and both accuracy and
+latency/view-subset tradeoffs must be measured before this path can be promoted.
+The parity results above are not ground-truth accuracy, so the key scores are
+not raised by this infrastructure checkpoint. Separately, a consistent v6
+probability-TTA rerun corrected the acoustic leaderboard from the previously
+reported 425-track logit result to 426/604; both remain development results.
 
 The full release-mode GiantSteps benchmark was rerun after this checkpoint:
 604/604 scored with zero failures, 389 exact (64.4%), 0.725 MIREX, 69.0% tonic
@@ -492,7 +502,7 @@ cargo run --release --bin tunelock-bench -- --corpus ..\ground-truth\MIKComplete
 
 **Current status:** All 1,486 MTG previews have now been acquired and checksum
 verified. The legacy CNN itself has not been rerun; instead, the reproducible
-Myna experiment above established a substantially stronger 70.4% acoustic
+Myna experiment above established a substantially stronger 70.5% acoustic
 candidate with the same local training corpus. GiantSteps-key is now explicitly
 a repeatedly observed development benchmark, not an untouched test; any CNN
 revival must use the same leakage and final-holdout contract as the Myna work.

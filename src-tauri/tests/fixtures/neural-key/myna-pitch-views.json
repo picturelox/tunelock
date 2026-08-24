@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "generator": "tunelock/myna-pitch-view-parity-fixture",
+  "source": {
+    "file": "myna-stereo-44100-to-16000-f32le.bin",
+    "sha256": "5013c1ca7b9e9802ce36e177f59344458f5dfa1c8a5c79595269e27dd09c821e",
+    "dtype": "float32 little-endian",
+    "sample_rate_hz": 16000,
+    "samples": 6400
+  },
+  "reference": {
+    "file": "myna-pitch-views-f32le.bin",
+    "sha256": "80949f823f4730dc842c9bae4a8f80d3bb3261b670da148a94371ecb671bf66e",
+    "dtype": "float32 little-endian",
+    "layout": "shift-major contiguous samples",
+    "shifts": [
+      -6,
+      -5,
+      -4,
+      -3,
+      -2,
+      -1,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "samples_per_shift": 6400,
+    "stft": {
+      "n_fft": 512,
+      "hop_length": 128,
+      "window": "periodic Hann",
+      "center": true,
+      "pad_mode": "reflect"
+    },
+    "phase_vocoder": "torchaudio.functional.phase_vocoder",
+    "stretched_length": "round(original_length / rate)",
+    "resampler": {
+      "original_rate": "int(16000 / rate)",
+      "target_rate": 16000,
+      "lowpass_filter_width": 6,
+      "rolloff": 0.99,
+      "method": "sinc_interp_hann"
+    },
+    "output_length": "right zero-pad then truncate to source length"
+  },
+  "versions": {
+    "numpy": "2.2.6",
+    "torch": "2.7.1+cu128",
+    "torchaudio": "2.7.1+cu128"
+  }
+}

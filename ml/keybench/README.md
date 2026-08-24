@@ -31,7 +31,9 @@ The release baseline remains 389/604 (64.4%). The strongest reproducible
 acoustic candidate so far is a pinned Myna-Vertical backbone with an
 MTG-supervised head and Rust-aligned transposition averaging:
 
-- standalone: 425/604 (70.4%), MIREX 0.764, top-3 85.4%;
+- probability-averaged standalone: 426/604 (70.5%), MIREX 0.765,
+  top-3 85.6%;
+- logit-averaged standalone: 425/604 (70.4%);
 - fixed equal blend observed: 428/604 (70.9%);
 - paired TuneLock/Myna oracle: 453/604 (75.0%).
 
@@ -44,7 +46,7 @@ The pinned 85M-parameter hybrid Myna was also evaluated. Head shapes and hybrid
 branches were selected only on fixed MTG validation fold 0. Its best vertical-
 branch candidate reaches 378/604 (62.6%), MIREX 0.701, top-3 83.8%, with a
 439/604 (72.7%) pair oracle. It is a recorded negative result and will not
-replace the smaller 70.4% candidate.
+replace the smaller 70.5% candidate.
 
 ## S-KEY control
 
@@ -155,25 +157,26 @@ ml\venv\Scripts\python.exe ml\keybench\export_myna_onnx.py `
   --manifest ml\data\keybench\key-corpus-manifest-v4-all-unambiguous.json `
   --checkpoint ml\data\models\myna-mtg-v6-validation-state.pt `
   --hf-cache ml\data\huggingface-cache `
-  --output-dir ml\data\models\myna-v6-onnx-v3
+  --output-dir ml\data\models\myna-v6-onnx-v4
 ```
 
 The exporter checks ONNX structure and CPU numerical/argmax parity before it
 atomically publishes the directory. Schema 2 pins the nnAudio 0.3.3 mel
 parameters; schema 3 additionally pins the torchaudio 2.7.1 decode/downmix/
-resample reference contract in machine-readable form. The Rust probe validates
-the manifest, size, SHA-256, harmony and preprocessing contracts, dynamically
-loads a user-supplied ONNX Runtime library, and executes deterministic 16 kHz
-audio or an explicitly supplied real file through the graph on a dedicated
+resample reference contract; schema 4 pins all twelve phase-vocoder views,
+harmony alignment, and probability averaging in machine-readable form. The
+Rust probe validates the manifest, size, SHA-256, harmony and preprocessing
+contracts, dynamically loads a user-supplied ONNX Runtime library, and executes
+deterministic 16 kHz audio, a real file, or the full TTA path on a dedicated
 background worker:
 
 ```powershell
 cd src-tauri
 C:\Users\louis.media\.cargo\bin\cargo.exe run `
   --features neural-key --bin tunelock-neural-key-probe -- `
-  ..\ml\data\models\myna-v6-onnx-v3 `
+  ..\ml\data\models\myna-v6-onnx-v4 `
   ..\ml\venv\Lib\site-packages\onnxruntime\capi\onnxruntime.dll `
-  ..\ground-truth\giantsteps-key\audio\1004923.LOFI.mp3
+  ..\ground-truth\giantsteps-key\audio\1004923.LOFI.mp3 --tta
 ```
 
 The default application feature set does not compile the runtime adapter and
@@ -191,16 +194,30 @@ an accuracy score:
 cd src-tauri
 C:\Users\louis.media\.cargo\bin\cargo.exe run --release `
   --features neural-key --bin tunelock-neural-key-parity -- `
-  ..\ml\data\models\myna-v6-onnx-v3 `
+  ..\ml\data\models\myna-v6-onnx-v4 `
   ..\ml\venv\Lib\site-packages\onnxruntime\capi\onnxruntime.dll `
   ..\ml\data\keybench\key-corpus-manifest-v4-all-unambiguous.json `
   ..\ml\data\keybench\myna-mtg-v6-validation-state.jsonl .. 20
 ```
 
-The pinned 20-file release audit had 20/20 top-1 agreement, no failures,
+The pinned base-view 20-file release audit had 20/20 top-1 agreement, no failures,
 0.000632 mean absolute posterior error, 0.0167 maximum posterior error, and
-866 ms mean per-track execution on this development machine. The exported
-graph represents one acoustic view; reproducing the measured 70.4% result also
-requires production pitch views and end-to-end orchestration. Rust already
-implements and tests the exact major/minor-preserving label alignment and
-probability-space average used by the winning evaluator.
+866 ms mean per-track execution on this development machine.
+
+`export_myna_pitch_fixture.py` pins the complete 12-view torchaudio reference.
+Rust's phase-vocoder audio differs by at most 0.000679 per sample across all
+views (global mean 0.0000558). `probe_myna_onnx_file.py` provides a real-file
+Python reference for the complete TTA path. On the pinned smoke MP3, Rust and
+Python chose the same C-minor top key; their final posteriors differed by
+0.00131 mean absolute and 0.00606 maximum error. Native release TTA took 16.2
+seconds including artifact/runtime load on this machine, so it remains an
+asynchronous research path. The current graph's head was trained with the old
+pitch+speed ablation: schema 4 proves faithful runtime execution, but a new
+accuracy result requires completion of the faithful cache and retraining.
+
+A validation-only latency sweep compared symmetric view sets on the existing
+pitch+speed ablation. Base, six near views (±1/±2/±3), and all twelve scored
+170/266, 171/266, and 169/266 respectively. The validation-locked six-view set
+then reached 422/604 (69.9%) on GiantSteps versus 426/604 (70.5%) for all
+twelve. TuneLock therefore retains the twelve-view accuracy-first research
+contract; the six-view option is a measured latency tradeoff, not a promotion.

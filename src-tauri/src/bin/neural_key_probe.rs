@@ -24,6 +24,7 @@ fn run_probe(
     artifact_directory: std::path::PathBuf,
     runtime_dylib: std::path::PathBuf,
     audio_file: Option<std::path::PathBuf>,
+    tta: bool,
 ) -> Result<()> {
     eprintln!("loading neural-key artifact and external runtime...");
     let mut session = NeuralKeySession::load(&artifact_directory, &runtime_dylib)
@@ -32,7 +33,16 @@ fn run_probe(
         .artifact
         .contract
         .supports_native_myna_preprocessing();
-    let (input_mode, posterior) = if let Some(audio_file) = audio_file.as_ref() {
+    let (input_mode, posterior) = if tta {
+        let audio_file = audio_file
+            .as_ref()
+            .context("--tta requires an explicitly supplied audio file")?;
+        eprintln!("running real file through all pinned pitch-preserving views...");
+        (
+            "native-real-file-tta",
+            session.predict_file_tta(audio_file)?,
+        )
+    } else if let Some(audio_file) = audio_file.as_ref() {
         eprintln!("running real file through native decode and preprocessing...");
         ("native-real-file", session.predict_file(audio_file)?)
     } else if native_audio {
@@ -79,19 +89,24 @@ fn run_probe(
 
 fn main() -> Result<()> {
     let arguments: Vec<_> = std::env::args_os().skip(1).collect();
-    if !(2..=3).contains(&arguments.len()) {
+    if !(2..=4).contains(&arguments.len()) {
         bail!(
-            "usage: tunelock-neural-key-probe <artifact-directory> <onnx-runtime-dylib> [audio-file]"
+            "usage: tunelock-neural-key-probe <artifact-directory> <onnx-runtime-dylib> [audio-file] [--tta]"
         );
     }
     let artifact_directory = std::path::PathBuf::from(&arguments[0]);
     let runtime_dylib = std::path::PathBuf::from(&arguments[1]);
     let audio_file = arguments.get(2).map(std::path::PathBuf::from);
+    let tta = match arguments.get(3) {
+        Some(value) if value == "--tta" => true,
+        Some(_) => bail!("the only supported fourth argument is --tta"),
+        None => false,
+    };
     // Keep the optional model away from the immediate classical-result path.
     // Production uses the same dedicated-background-worker shape.
     std::thread::Builder::new()
         .name("tunelock-neural-key-probe".to_owned())
-        .spawn(move || run_probe(artifact_directory, runtime_dylib, audio_file))?
+        .spawn(move || run_probe(artifact_directory, runtime_dylib, audio_file, tta))?
         .join()
         .map_err(|_| anyhow!("neural-key probe worker panicked"))?
 }

@@ -189,8 +189,8 @@ def main() -> int:
             )
 
         artifact = {
-            "schema_version": 3,
-            "artifact_kind": "tunelock-neural-key-chunk-v3",
+            "schema_version": 4,
+            "artifact_kind": "tunelock-neural-key-chunk-v4",
             "status": "research candidate; not production-enabled",
             "model_file": onnx_path.name,
             "model_sha256": sha256(onnx_path),
@@ -227,6 +227,24 @@ def main() -> int:
                     "resampling_method": "sinc_interp_hann",
                     "lowpass_filter_width": 6,
                     "rolloff": 0.99,
+                },
+                "pitch_preprocessing": {
+                    "implementation": "torchaudio phase vocoder + sinc resampler",
+                    "version": torchaudio_version,
+                    "sample_rate_hz": 16_000,
+                    "n_fft": 512,
+                    "hop_length": 128,
+                    "window": "periodic Hann",
+                    "center": True,
+                    "pad_mode": "reflect",
+                    "rate_formula": "2 ** (-semitones / 12)",
+                    "stretched_length": "round(original_length / rate)",
+                    "resample_original_rate": "int(16000 / rate)",
+                    "output_length": "right zero-pad then truncate to source length",
+                    "semitone_views": [-6, -5, -4, -3, -2, -1, 1, 2, 3, 4, 5, 6],
+                    "original_weight": 1.0,
+                    "aggregation": "probability mean after harmony alignment",
+                    "label_alignment": "rotate tonic by -semitones; preserve mode",
                 },
             },
             "output": {
