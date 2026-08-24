@@ -60,6 +60,22 @@ section evidence leaves exact accuracy unchanged; a direct model gate reaches
 negative results. Do not tune another selector over the same three global
 posterior streams; add a new information-bearing section/temporal signal first.
 
+That section signal has now been tested in two leakage-controlled forms.
+`evaluate_myna_temporal_pooling.py` selects one of seventeen auditable robust
+pooling rules on MTG fold 0 and freezes it before development evaluation. The
+selected 30% trimmed-logit rule improved MTG 169/266 versus 165/266, then fell
+to 417/604 versus the 424/604 mean on GiantSteps. It is rejected.
+
+`train_temporal_candidate_ranker.py` extracts 72 transposition-invariant
+candidate statistics from nineteen ordered sections and thirteen aligned pitch
+views. Its training inputs come from all five OOF neural heads; resumable caches
+are contract-bound to the checkpoint, manifest, view cache, record order and
+feature vocabulary. The tiny shared linear ranker improved MTG fold 0 to
+168/266 but reached only 422/604 (69.9%) on GiantSteps. Its classical pair
+oracle is 455/604 (75.3%), which records modest new diversity but no deployable
+gain. Do not tune either temporal rule on GiantSteps. The next model must add a
+different harmonic representation or truly beat/bar-aligned evidence.
+
 The pinned 85M-parameter hybrid Myna was also evaluated. Head shapes and hybrid
 branches were selected only on fixed MTG validation fold 0. Its best vertical-
 branch candidate reaches 378/604 (62.6%), MIREX 0.701, top-3 83.8%, with a

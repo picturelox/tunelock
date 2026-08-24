@@ -96,6 +96,8 @@ candidate was correct; it is a ceiling, not a selectable result.
 | Myna v7 faithful + logit-averaged transpositions | 407/604 (67.4%) | 0.742 | 85.1% | 449/604 (74.3%) | 409/604 (67.7% OOF) |
 | Myna v6 head + faithful native-equivalent probability TTA | 424/604 (70.2%) | 0.762 | 85.4% | 451/604 (74.7%) | 423/604 (70.0% OOF) |
 | Myna v8 compact faithful diversity head, base view | 408/604 (67.5%) | 0.746 | 86.4% | 447/604 (74.0%) | 411/604 (68.0% OOF) |
+| Myna v9, MTG-selected robust section pooling | 417/604 (69.0%) | 0.754 | 84.9% | 448/604 (74.2%) | rejected |
+| Myna v10, OOF temporal candidate ranker | 422/604 (69.9%) | 0.760 | 85.4% | 455/604 (75.3%) | rejected |
 | **Myna v6 fast + probability-averaged transpositions** | **426/604 (70.5%)** | **0.765** | **85.6%** | **453/604 (75.0%)** | 426/604 (70.5%) |
 | Myna v6 fast + logit-averaged transpositions | 425/604 (70.4%) | 0.764 | 85.4% | 453/604 (75.0%) | **428/604 (70.9% fixed)** |
 | Myna85M full hybrid embedding, no augmentation | 372/604 (61.6%) | 0.693 | 83.3% | 439/604 (72.7%) | 393/604 (65.1% OOF) |
@@ -157,6 +159,26 @@ compact head. These selectors were fit and selected without GiantSteps labels;
 all are rejected. The next selector experiment requires a genuinely new input
 such as bar/section-aware posteriors or broader adjudicated training data, not
 another fit over the same three global vectors.
+
+The first time-localized experiments then used the nineteen ordered Myna chunks
+already cached for almost every track. A fixed family of seventeen robust
+pooling rules was evaluated without GiantSteps labels. MTG fold 0 selected a
+30% per-candidate trimmed-logit rule at 169/266 versus 165/266 for the current
+mean, but the frozen rule fell to 417/604 on GiantSteps, seven below the
+deployment-shaped mean. Its 448/604 classical pair oracle is also below the
+stretch target, so it is rejected.
+
+A second temporal experiment summarized support, rank, margin, persistence,
+edge/middle behavior, thirds and volatility for every candidate. A 72-feature,
+shared linear listwise ranker was trained from the five genuinely out-of-fold
+MTG neural heads, preserving transposition equivariance and adding only dozens
+of weights. It reached 168/266 on the selection fold versus a 165/266 mean, but
+the frozen artifact reached 422/604 (69.9%) on GiantSteps versus 424/604. Its
+classical pair oracle is 455/604 (75.3%), so its errors are somewhat different,
+but the corrections are not selectable. It is retained as research evidence
+and rejected for promotion. Fixed-time post-hoc pooling is now stopped; the
+next acoustic path must add an independent harmonic representation or genuine
+beat/bar-aligned evidence.
 
 #### Myna85M and production-artifact checkpoint
 
