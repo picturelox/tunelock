@@ -127,13 +127,40 @@ therefore verified against its published MD5.
 - The 1,077-track clean protocol and the 1,349-track all-confidence,
   unambiguous-label ablation remain separately named and reported.
 - The fast winning run uses linear pitch+speed resampling as an explicit
-  ablation. A cached, pitch-only phase-vocoder path was numerically verified
-  against torchaudio but has not completed a full training corpus.
+  ablation. `phase-vocoder-sparse-v1` is the faithful training path: it shares
+  the STFT and stores only the non-negligible support of torchaudio's sinc/Hann
+  resampler instead of constructing enormous dense kernels for coprime rates.
+  It is a distinct cache identity and has not yet produced a new accuracy score.
 - Generated embeddings, checkpoints, posteriors, and external model checkouts
   remain gitignored research artifacts.
 - Resumable caches are metadata-bound. A changed manifest, model/revision,
   sample window, embedding width, pitch method, role, or shift set must use a
   new cache directory; stale same-shaped embeddings are rejected.
+
+Validate sparse-v1 against all twelve committed torchaudio 2.7.1 views before
+extracting a cache:
+
+```powershell
+ml\venv\Scripts\python.exe ml\keybench\validate_sparse_sinc_resampler.py
+```
+
+The pinned CPU check currently measures 1.19e-7 maximum and 8.66e-9 mean
+absolute waveform error. On the first shared training record, all twelve Myna
+embedding tensors agreed with the older dense cache within 8.35e-7 maximum and
+4.99e-8 mean absolute error. Generate the isolated, resumable training cache:
+
+```powershell
+ml\venv\Scripts\python.exe ml\keybench\extract_myna_pitch_embeddings.py `
+  --manifest ml\data\keybench\key-corpus-manifest-v4-all-unambiguous.json `
+  --cache-dir ml\data\keybench\myna-pitch-phase-sparse-v1-embeddings `
+  --hf-cache ml\data\huggingface-cache `
+  --pitch-method phase-vocoder-sparse-v1 `
+  --role training --model-batch-size 32 --device cuda
+```
+
+Never point sparse-v1 at a `phase-vocoder-cached` directory. The metadata guard
+rejects that mismatch; keeping the identities separate makes numerical drift
+and partial-cache provenance auditable.
 
 ## Leakage-safe head selection
 

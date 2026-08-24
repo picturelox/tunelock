@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 import re
 import time
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import torch
@@ -42,9 +42,18 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--pitch-method",
-        choices=("phase-vocoder", "phase-vocoder-cached", "resample-speed", "linear-speed"),
+        choices=(
+            "phase-vocoder",
+            "phase-vocoder-cached",
+            "phase-vocoder-sparse-v1",
+            "resample-speed",
+            "linear-speed",
+        ),
         default="phase-vocoder",
-        help="Pitch-only phase vocoder (reference or cached equivalent), or pitch+speed ablation.",
+        help=(
+            "Pitch-only phase vocoder (reference, dense cached, or sparse-v1 equivalent), "
+            "or pitch+speed ablation."
+        ),
     )
     parser.add_argument("--model-batch-size", type=int, default=32)
     parser.add_argument(
@@ -124,13 +133,121 @@ def atomic_save(path: Path, embeddings: np.ndarray) -> None:
     os.replace(temporary, path)
 
 
+class SparseSincResampler:
+    """Sparse equivalent of torchaudio's default sinc/Hann resampler.
+
+    Torchaudio materializes ``new_freq * (orig_freq + 2 * width)`` weights
+    after GCD reduction. The pitch-only rates used here are mostly coprime, so
+    that creates hundreds of millions of near-zero weights per shift. This
+    implementation stores only the local low-pass support for each output
+    phase while preserving torchaudio's rate reduction and float64 kernel
+    construction rules.
+    """
+
+    def __init__(
+        self,
+        orig_freq: int,
+        new_freq: int,
+        device: torch.device | str,
+        *,
+        lowpass_filter_width: int = 6,
+        rolloff: float = 0.99,
+        chunk_size: int = 65_536,
+    ) -> None:
+        if orig_freq <= 0 or new_freq <= 0:
+            raise ValueError("Resampling frequencies must be positive")
+        if lowpass_filter_width <= 0:
+            raise ValueError("Low-pass filter width must be positive")
+        if not 0.0 < rolloff <= 1.0:
+            raise ValueError("Rolloff must be in (0, 1]")
+        if chunk_size < 1:
+            raise ValueError("Chunk size must be positive")
+
+        self.identity = orig_freq == new_freq
+        divisor = math.gcd(orig_freq, new_freq)
+        self.orig_freq = orig_freq // divisor
+        self.new_freq = new_freq // divisor
+        self.chunk_size = chunk_size
+        if self.identity:
+            self.offsets = torch.empty(0, dtype=torch.int64, device=device)
+            self.weights = torch.empty(0, dtype=torch.float32, device=device)
+            return
+
+        base_freq = min(self.orig_freq, self.new_freq) * rolloff
+        width = math.ceil(lowpass_filter_width * self.orig_freq / base_freq)
+        support = lowpass_filter_width * self.orig_freq / base_freq
+        radius = math.ceil(support) + 1
+
+        # Construct in float64 on CPU, as torchaudio does when dtype is omitted,
+        # and cast the final kernel weights to float32 before device transfer.
+        phases = torch.arange(self.new_freq, dtype=torch.float64)
+        centers = phases * self.orig_freq / self.new_freq
+        center_floor = torch.floor(centers).to(torch.int64)
+        relative = torch.arange(-radius, radius + 1, dtype=torch.int64)
+        offsets = center_floor[:, None] + relative[None, :]
+        valid_kernel = (offsets >= -width) & (offsets < width + self.orig_freq)
+
+        # Preserve an otherwise non-obvious torchaudio detail: with its default
+        # dtype, the phase arange/division is float32 while the sample offsets
+        # are float64. This rounding is observable in the resulting weights.
+        phase_term = (
+            -torch.arange(self.new_freq, dtype=torch.float32) / self.new_freq
+        )
+        t = (
+            phase_term.to(torch.float64)[:, None]
+            + offsets.to(torch.float64) / self.orig_freq
+        )
+        t *= base_freq
+        t.clamp_(-lowpass_filter_width, lowpass_filter_width)
+        window = torch.cos(t * math.pi / lowpass_filter_width / 2.0) ** 2
+        t *= math.pi
+        sinc = torch.where(t == 0, torch.ones_like(t), t.sin() / t)
+        weights = sinc * window * (base_freq / self.orig_freq)
+        weights.masked_fill_(~valid_kernel, 0.0)
+
+        self.offsets = offsets.to(device=device)
+        self.weights = weights.to(device=device, dtype=torch.float32)
+
+    def __call__(self, waveform: torch.Tensor) -> torch.Tensor:
+        if not waveform.is_floating_point():
+            raise TypeError(f"Expected floating point waveform, got {waveform.dtype}")
+        if self.identity:
+            return waveform
+        if waveform.device != self.offsets.device:
+            raise ValueError(
+                f"Waveform is on {waveform.device}, resampler is on {self.offsets.device}"
+            )
+        shape = waveform.shape
+        length = shape[-1]
+        if length < 1:
+            raise ValueError("Waveform must contain at least one sample")
+        flattened = waveform.reshape(-1, length)
+        target_length = (self.new_freq * length + self.orig_freq - 1) // self.orig_freq
+        chunks = []
+
+        for start in range(0, target_length, self.chunk_size):
+            stop = min(start + self.chunk_size, target_length)
+            output_indices = torch.arange(start, stop, device=waveform.device)
+            blocks = torch.div(output_indices, self.new_freq, rounding_mode="floor")
+            phases = torch.remainder(output_indices, self.new_freq)
+            source_indices = blocks[:, None] * self.orig_freq + self.offsets[phases]
+            valid_source = (source_indices >= 0) & (source_indices < length)
+            gathered = flattened[:, source_indices.clamp(0, length - 1)]
+            weights = self.weights[phases].to(dtype=waveform.dtype)
+            weighted = gathered * weights.masked_fill(~valid_source, 0.0)
+            chunks.append(weighted.sum(dim=-1))
+
+        result = torch.cat(chunks, dim=-1)
+        return result.reshape(shape[:-1] + (target_length,))
+
+
 def cached_phase_vocoder_shift(
     spectrum: torch.Tensor,
     original_length: int,
     semitones: int,
     window: torch.Tensor,
     phase_advance: torch.Tensor,
-    resampler: torchaudio.transforms.Resample,
+    resampler: Callable[[torch.Tensor], torch.Tensor],
 ) -> torch.Tensor:
     """Equivalent pitch-only path with one shared STFT and cached sinc kernels."""
     n_fft = 512
@@ -171,6 +288,7 @@ def write_metadata(
         "augmentation": {
             "phase-vocoder": "torchaudio.functional.pitch_shift",
             "phase-vocoder-cached": "torchaudio phase-vocoder pitch shift with shared STFT and cached sinc-resample kernels",
+            "phase-vocoder-sparse-v1": "torchaudio-compatible phase-vocoder pitch shift with shared STFT and sparse sinc/Hann resampling (width=6, rolloff=0.99)",
             "resample-speed": "torchaudio.transforms.Resample interpreted at 16kHz (pitch+speed)",
             "linear-speed": "torch linear interpolation interpreted at 16kHz (pitch+speed ablation)",
         }[args.pitch_method],
@@ -294,9 +412,22 @@ def main() -> int:
         if args.pitch_method == "phase-vocoder-cached"
         else {}
     )
+    sparse_pitch_only_resamplers = (
+        {
+            semitones: SparseSincResampler(
+                int(16_000 / (2.0 ** (-float(semitones) / 12.0))),
+                16_000,
+                args.device,
+            )
+            for semitones in args.semitones
+        }
+        if args.pitch_method == "phase-vocoder-sparse-v1"
+        else {}
+    )
     phase_window = (
         torch.hann_window(512, device=args.device)
-        if args.pitch_method == "phase-vocoder-cached"
+        if args.pitch_method
+        in ("phase-vocoder-cached", "phase-vocoder-sparse-v1")
         else None
     )
     failures: list[dict[str, str]] = []
@@ -318,7 +449,10 @@ def main() -> int:
             with torch.inference_mode():
                 shared_spectrum = None
                 phase_advance = None
-                if args.pitch_method == "phase-vocoder-cached":
+                if args.pitch_method in (
+                    "phase-vocoder-cached",
+                    "phase-vocoder-sparse-v1",
+                ):
                     shared_spectrum = torch.stft(
                         waveform,
                         n_fft=512,
@@ -353,6 +487,15 @@ def main() -> int:
                             phase_window,
                             phase_advance,
                             pitch_only_resamplers[semitones],
+                        )
+                    elif args.pitch_method == "phase-vocoder-sparse-v1":
+                        shifted = cached_phase_vocoder_shift(
+                            shared_spectrum,
+                            waveform.shape[-1],
+                            semitones,
+                            phase_window,
+                            phase_advance,
+                            sparse_pitch_only_resamplers[semitones],
                         )
                     elif args.pitch_method == "resample-speed":
                         shifted = pitch_resamplers[semitones](waveform)

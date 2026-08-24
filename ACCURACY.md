@@ -104,13 +104,14 @@ remaining 25 oracle-only corrections cannot be claimed until a selector learns
 them on data outside these 604 development labels.
 
 The current fast augmentation is explicitly an ablation: linear resampling
-changes pitch and speed together. A cached phase-vocoder implementation was
-verified against `torchaudio.functional.pitch_shift` on controlled tones
-(expected frequencies and approximately 1.0 waveform cosine similarity), but
-the full faithful training cache is still incomplete (337/1,340 records are
-checkpointed, 4,044/16,080 shifted embeddings, with zero failures). Neither
-Myna candidate is eligible for the app until it repeats on the sealed final
-holdout and passes latency, calibration, data-rights, packaging, and
+changes pitch and speed together. The original dense faithful cache reached
+337/1,340 records with zero failures, but dense sinc kernels made completion
+unnecessarily slow. A separately identified sparse-v1 implementation now
+matches all twelve pinned torchaudio views within 1.19e-7 maximum waveform
+error and matching-track Myna embeddings within 8.35e-7 maximum error. Its
+full, clean cache is being regenerated before any retraining or score change.
+Neither Myna candidate is eligible for the app until it repeats on the sealed
+final holdout and passes latency, calibration, data-rights, packaging, and
 commercial-license review.
 
 #### Myna85M and production-artifact checkpoint

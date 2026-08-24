@@ -10,8 +10,8 @@ Human collection is intentionally deferred while the engineering work can
 still produce decisive evidence. The owner does **not** need to recruit a panel
 or label hundreds of tracks for the current checkpoint. TuneLock will first:
 
-1. finish the faithful pitch-only training cache and compare it with the fast
-   pitch-plus-speed ablation;
+1. finish the now-accelerated faithful pitch-only sparse-v1 training cache and
+   compare it with the fast pitch-plus-speed ablation;
 2. audit the now-complete native faithful-TTA path on representative files and
    select a view/latency policy only after accuracy measurements justify it;
 3. improve selector features and calibration only with leakage-safe training
