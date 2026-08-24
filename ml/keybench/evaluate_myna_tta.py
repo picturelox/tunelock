@@ -210,6 +210,7 @@ def main() -> int:
         models.append(model.to(args.device).eval())
 
     totals = [torch.zeros((len(records), 24), dtype=torch.float32) for _ in models]
+    diagnostic_views: list[list[torch.Tensor]] = [[] for _ in models]
     transforms: list[tuple[int, Callable[[dict[str, Any]], Path]]] = [
         (0, lambda record: embedding_path(args.embedding_cache, record))
     ]
@@ -237,6 +238,11 @@ def main() -> int:
                 # Indexing shifted outputs by that table aligns every column back
                 # to the original recording's 24-key vocabulary.
                 values = values[:, target_tables[shift]]
+            diagnostic_views[model_index].append(
+                values.detach().cpu()
+                if args.aggregation == "probabilities"
+                else values.softmax(dim=1).detach().cpu()
+            )
             totals[model_index] += values * (args.original_weight if shift == 0 else 1.0)
         print(
             f"transform={transform_index}/{len(transforms)} shift={shift:+d} "
@@ -252,6 +258,51 @@ def main() -> int:
             averaged = averaged.softmax(dim=1)
         seed_posteriors.append(averaged)
     posteriors = torch.stack(seed_posteriors).mean(dim=0)
+    view_stack = torch.stack(
+        [
+            torch.stack([model_views[index] for model_views in diagnostic_views]).mean(dim=0)
+            for index in range(len(transforms))
+        ]
+    )
+    view_mean = view_stack.mean(dim=0)
+    view_entropy = -torch.sum(
+        view_stack * torch.log(torch.clamp(view_stack, min=1e-12)), dim=2
+    )
+    view_js = torch.sum(
+        view_stack
+        * (
+            torch.log(torch.clamp(view_stack, min=1e-12))
+            - torch.log(torch.clamp(view_mean, min=1e-12)).unsqueeze(0)
+        ),
+        dim=2,
+    )
+    view_winners = view_stack.argmax(dim=2)
+    prediction_extras = []
+    for record_index in range(len(records)):
+        winner_rate = torch.bincount(
+            view_winners[:, record_index], minlength=24
+        ).to(dtype=torch.float32) / len(transforms)
+        prediction_extras.append(
+            {
+                "diagnostics": {
+                    "tta": {
+                        "view_count": len(transforms),
+                        "candidate_std": view_stack[:, record_index, :].std(
+                            dim=0, unbiased=False
+                        ).tolist(),
+                        "candidate_min": view_stack[:, record_index, :].min(dim=0).values.tolist(),
+                        "candidate_max": view_stack[:, record_index, :].max(dim=0).values.tolist(),
+                        "candidate_top1_rate": winner_rate.tolist(),
+                        "entropy_mean": float(view_entropy[:, record_index].mean()),
+                        "entropy_std": float(
+                            view_entropy[:, record_index].std(unbiased=False)
+                        ),
+                        "js_to_mean_mean": float(view_js[:, record_index].mean()),
+                        "js_to_mean_max": float(view_js[:, record_index].max()),
+                    }
+                }
+            }
+        )
     truth = torch.tensor([int(record["truth_index"]) for record in records], dtype=torch.long)
     exact = int((posteriors.argmax(dim=1) == truth).sum().item())
     protocol = (
@@ -271,6 +322,17 @@ def main() -> int:
         posteriors,
         revision,
         protocol,
+        model_name=str(checkpoint.get("model", "tunelock/myna-mtg-head")),
+        fold=(validation_fold if args.role == "validation" else None),
+        corpus_role=(
+            "training material; out-of-fold selector-training shard"
+            if args.role == "validation"
+            else "development benchmark; not an untouched final test"
+        ),
+        metadata_extra={
+            "head_contract_revision": checkpoint.get("head_contract_revision")
+        },
+        prediction_extras=prediction_extras,
     )
     print(
         f"wrote={args.output} records={len(records)} exact={exact}/{len(records)} "

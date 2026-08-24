@@ -94,6 +94,8 @@ candidate was correct; it is a ceiling, not a selectable result.
 | Myna v7, 1,349 faithful pitch-only augmentation, base view | 406/604 (67.2%) | 0.741 | 84.9% | 446/604 (73.8%) | 408/604 (67.5% OOF) |
 | Myna v7 faithful + probability-averaged transpositions | 406/604 (67.2%) | 0.742 | 84.9% | 448/604 (74.2%) | 413/604 (68.4% OOF) |
 | Myna v7 faithful + logit-averaged transpositions | 407/604 (67.4%) | 0.742 | 85.1% | 449/604 (74.3%) | 409/604 (67.7% OOF) |
+| Myna v6 head + faithful native-equivalent probability TTA | 424/604 (70.2%) | 0.762 | 85.4% | 451/604 (74.7%) | 423/604 (70.0% OOF) |
+| Myna v8 compact faithful diversity head, base view | 408/604 (67.5%) | 0.746 | 86.4% | 447/604 (74.0%) | 411/604 (68.0% OOF) |
 | **Myna v6 fast + probability-averaged transpositions** | **426/604 (70.5%)** | **0.765** | **85.6%** | **453/604 (75.0%)** | 426/604 (70.5%) |
 | Myna v6 fast + logit-averaged transpositions | 425/604 (70.4%) | 0.764 | 85.4% | 453/604 (75.0%) | **428/604 (70.9% fixed)** |
 | Myna85M full hybrid embedding, no augmentation | 372/604 (61.6%) | 0.693 | 83.3% | 439/604 (72.7%) | 393/604 (65.1% OOF) |
@@ -127,6 +129,34 @@ therefore remains v6 probability TTA at 426/604 (70.5%), with the previously
 measured fixed blend at 428/604 (70.9%). Neither candidate is eligible for the
 app until it repeats on the sealed final holdout and passes latency,
 calibration, data-rights, packaging, and commercial-license review.
+
+The deployment-shaped cross-method check applies the locked v6 accuracy head to
+the faithful pitch-only views implemented by native Rust. It reaches 424/604
+(70.2%), only two tracks below the fast pitch-and-speed research ablation, with
+a 451/604 (74.7%) classical pair oracle. This is the relevant current target
+for end-to-end native reproduction; the 426-track result remains useful
+research evidence but is not silently treated as faithful runtime accuracy.
+
+A compact faithful diversity head was then locked on MTG fold 0 without reading
+GiantSteps: one 512-unit hidden layer, 0.75 dropout, and a 1,681,279-byte
+checkpoint. It reaches 408/604 (67.5%), 0.746 MIREX, and 86.4% top-3. The
+classical, compact, and deployment-shaped v6 results have a **462/604 (76.5%)** exact
+oracle, while an ordinary five-fold convex blend reaches only 419/604 (69.4%).
+The compact head is retained because it adds fifteen exact oracle corrections
+beyond the classical/compact pair while reusing the same Myna backbone; it is
+not an accuracy promotion by itself. Five artist/recording-disjoint OOF shards
+are complete for both neural heads, and the classical engine scored all 1,349
+raw MTG records with zero failures.
+
+The three-model MTG OOF oracle is 979/1,340 (73.1%). A shared-candidate logistic
+ranker realizes 864/1,340 (64.5%) nested OOF and 410/604 (67.9%) on GiantSteps.
+Adding candidate-level pitch-view stability plus classical section evidence
+does not change either exact count. A direct model gate reaches 869/1,340
+(64.9%) nested OOF but 408/604 (67.5%) on GiantSteps, effectively selecting the
+compact head. These selectors were fit and selected without GiantSteps labels;
+all are rejected. The next selector experiment requires a genuinely new input
+such as bar/section-aware posteriors or broader adjudicated training data, not
+another fit over the same three global vectors.
 
 #### Myna85M and production-artifact checkpoint
 

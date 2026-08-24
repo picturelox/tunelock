@@ -44,8 +44,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--embedding-cache", required=True, type=Path)
     parser.add_argument("--pitch-augmentation-cache", type=Path)
     parser.add_argument("--output", type=Path)
+    parser.add_argument(
+        "--validation-output",
+        type=Path,
+        help=(
+            "Write the held-out fold posterior as an out-of-fold selector-training shard. "
+            "The shard is never a full-training prediction."
+        ),
+    )
     parser.add_argument("--report", type=Path)
     parser.add_argument("--checkpoint", type=Path)
+    parser.add_argument("--model-name", default="tunelock/myna-mtg-head")
     parser.add_argument("--audit-only", action="store_true")
     parser.add_argument(
         "--validation-only",
@@ -566,6 +575,12 @@ def write_jsonl(
     posteriors: torch.Tensor,
     revision: str,
     protocol: str,
+    *,
+    model_name: str = "tunelock/myna-mtg-head",
+    fold: int | None = None,
+    corpus_role: str | None = None,
+    metadata_extra: dict[str, Any] | None = None,
+    prediction_extras: list[dict[str, Any]] | None = None,
 ) -> None:
     if output.exists():
         raise FileExistsError(f"Refusing to overwrite existing result: {output}")
@@ -575,19 +590,40 @@ def write_jsonl(
         metadata = {
             "type": "metadata",
             "schema_version": 1,
-            "model": "tunelock/myna-mtg-head",
+            "model": model_name,
             "model_revision": revision,
             "posterior_labels": labels,
             "protocol": protocol,
         }
+        if fold is not None:
+            metadata["out_of_fold"] = True
+            metadata["fold"] = fold
+        if corpus_role is not None:
+            metadata["corpus_role"] = corpus_role
+        if metadata_extra is not None:
+            overlap = set(metadata) & set(metadata_extra)
+            if overlap:
+                raise ValueError(f"Metadata extension replaces reserved fields: {sorted(overlap)}")
+            metadata.update(metadata_extra)
         handle.write(json.dumps(metadata, separators=(",", ":")) + "\n")
-        for record, posterior in zip(records, posteriors.tolist()):
+        if prediction_extras is not None and len(prediction_extras) != len(records):
+            raise ValueError("Prediction extension count does not match records")
+        extras = prediction_extras or [{} for _ in records]
+        for record, posterior, extra in zip(records, posteriors.tolist(), extras):
             prediction = {
                 "type": "prediction",
                 "track_id": record["id"],
                 "status": "ok",
                 "posterior": posterior,
             }
+            if fold is not None:
+                prediction["fold"] = fold
+            overlap = set(prediction) & set(extra)
+            if overlap:
+                raise ValueError(
+                    f"Prediction extension replaces reserved fields: {sorted(overlap)}"
+                )
+            prediction.update(extra)
             handle.write(json.dumps(prediction, separators=(",", ":")) + "\n")
     os.replace(temporary, output)
 
@@ -615,6 +651,8 @@ def main() -> int:
     artifact_paths = [args.report, args.checkpoint]
     if args.output is not None:
         artifact_paths.append(args.output)
+    if args.validation_output is not None:
+        artifact_paths.append(args.validation_output)
     for path in artifact_paths:
         if path.exists():
             raise FileExistsError(f"Refusing to overwrite experiment artifact: {path}")
@@ -737,18 +775,51 @@ def main() -> int:
     )
     script_hash = sha256(Path(__file__))
     base_revision = str(base_metadata["model_revision"])
-    revision = f"myna:{base_revision};head:{script_hash[:16]}"
+    head_contract = {
+        "schema_version": 1,
+        "model": args.model_name,
+        "manifest_sha256": manifest_hash,
+        "base_model_revision": base_revision,
+        "pitch_method": None if pitch_metadata is None else pitch_metadata.get("pitch_method"),
+        "hidden_dims": args.hidden_dims,
+        "embedding_view": args.embedding_view,
+        "embedding_slice": list(embedding_slice),
+        "dropout": args.dropout,
+        "learning_rate": args.learning_rate,
+        "weight_decay": args.weight_decay,
+        "seeds": args.seeds,
+        "script_sha256": script_hash,
+    }
+    contract_hash = hashlib.sha256(
+        json.dumps(head_contract, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    revision = f"myna:{base_revision};head-contract:{contract_hash[:16]}"
     augmentation_protocol = (
         f", pitch shifts={sorted(pitch_targets)}" if pitch_targets is not None else ", no pitch augmentation"
     )
     training_protocol = str(
         manifest.get("training_protocol", "MTG key training records from the Rust manifest")
     )
-    protocol = (
+    validation_protocol = (
         f"{training_protocol}, exact-audio deduplicated, fixed artist/recording-group "
-        f"fold {args.validation_fold} for epoch selection, full-MTG retrain, seeds={args.seeds}"
+        f"fold {args.validation_fold} held out from head training, seeds={args.seeds}"
         f"{augmentation_protocol}, embedding view={args.embedding_view}"
     )
+    protocol = f"{validation_protocol}, selected epoch followed by full-MTG retrain"
+
+    if args.validation_output is not None:
+        write_jsonl(
+            args.validation_output,
+            valid_records,
+            manifest["canonical_labels"],
+            validation_ensemble,
+            revision,
+            validation_protocol,
+            model_name=args.model_name,
+            fold=args.validation_fold,
+            corpus_role="training material; out-of-fold selector-training shard",
+            metadata_extra={"head_contract_revision": contract_hash},
+        )
 
     if not args.validation_only:
         assert args.output is not None and development_ensemble is not None
@@ -759,17 +830,20 @@ def main() -> int:
             development_ensemble,
             revision,
             protocol,
+            model_name=args.model_name,
+            metadata_extra={"head_contract_revision": contract_hash},
         )
     args.checkpoint.parent.mkdir(parents=True, exist_ok=True)
     checkpoint_temp = args.checkpoint.with_name(f"{args.checkpoint.name}.part.{os.getpid()}")
     torch.save(
         {
             "schema_version": 1,
-            "model": "tunelock/myna-mtg-head",
+            "model": args.model_name,
             "base_model": base_metadata,
             "pitch_augmentation": pitch_metadata,
             "manifest_sha256": manifest_hash,
             "script_sha256": script_hash,
+            "head_contract_revision": contract_hash,
             "hidden_dims": args.hidden_dims,
             "source_embedding_dim": source_embedding_dim,
             "embedding_dim": embedding_dim,
@@ -791,6 +865,8 @@ def main() -> int:
     report = {
         "schema_version": 1,
         "experiment": "myna-mtg-head",
+        "model_name": args.model_name,
+        "head_contract": head_contract,
         "manifest_sha256": manifest_hash,
         "script_sha256": script_hash,
         "base_model": base_metadata,
@@ -819,6 +895,9 @@ def main() -> int:
         "validation_ensemble_exact": validation_exact,
         "seed_runs": seed_reports,
         "development_predictions": 0 if args.validation_only else len(development),
+        "validation_predictions": (
+            len(valid_records) if args.validation_output is not None else 0
+        ),
         "elapsed_seconds": time.perf_counter() - started,
         "warning": "GiantSteps-key is a repeatedly observed development benchmark, not a sealed final holdout.",
     }

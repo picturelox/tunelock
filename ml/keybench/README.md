@@ -42,6 +42,24 @@ correct answers to make the stretch target possible; it does not provide a
 deployable way to choose those answers. No learned model is integrated into the
 application in this checkpoint.
 
+### Three-model selector checkpoint
+
+The deployment-shaped v6 head evaluated with faithful native-equivalent views
+reaches 424/604 (70.2%). A separately locked 384 -> 512 -> 24 faithful compact
+head reaches 408/604 (67.5%) from a 1,681,279-byte checkpoint. Classical +
+compact + deployment-shaped v6 raise the GiantSteps exact oracle to 462/604
+(76.5%), but this remains hindsight evidence.
+
+`train_three_model_selector.py` consumes one static classical source and two
+five-shard neural OOF sources. It verifies each neural track's fixed
+artist/recording-group fold, trains with nested MTG-only CV, and never reads
+GiantSteps labels. The first candidate ranker reaches 864/1,340 (64.5%) nested
+OOF and 410/604 (67.9%) on GiantSteps. Pitch-view stability plus classical
+section evidence leaves exact accuracy unchanged; a direct model gate reaches
+869/1,340 (64.9%) OOF but 408/604 (67.5%) on GiantSteps. These are locked
+negative results. Do not tune another selector over the same three global
+posterior streams; add a new information-bearing section/temporal signal first.
+
 The pinned 85M-parameter hybrid Myna was also evaluated. Head shapes and hybrid
 branches were selected only on fixed MTG validation fold 0. Its best vertical-
 branch candidate reaches 378/604 (62.6%), MIREX 0.701, top-3 83.8%, with a
