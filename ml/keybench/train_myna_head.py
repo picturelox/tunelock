@@ -47,6 +47,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--report", type=Path)
     parser.add_argument("--checkpoint", type=Path)
     parser.add_argument("--audit-only", action="store_true")
+    parser.add_argument(
+        "--validation-only",
+        action="store_true",
+        help="Select epochs on MTG without training a final head or reading development embeddings.",
+    )
     parser.add_argument("--validation-fold", type=int, default=0, choices=range(5))
     parser.add_argument("--seeds", type=int, nargs="+", default=[41, 42, 43])
     parser.add_argument("--epochs", type=int, default=100)
@@ -56,6 +61,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--weight-decay", type=float, default=1e-5)
     parser.add_argument("--hidden-dims", type=int, nargs="+", default=[2048])
     parser.add_argument("--dropout", type=float, default=0.75)
+    parser.add_argument(
+        "--embedding-view",
+        choices=("full", "first-half", "second-half"),
+        default="full",
+        help=(
+            "Use the complete backbone output or one half of a hybrid embedding. "
+            "The selected bounds are recorded in the checkpoint."
+        ),
+    )
     parser.add_argument(
         "--amp",
         action="store_true",
@@ -226,12 +240,32 @@ def pitch_embedding_path(root: Path, semitones: int, record: dict[str, Any]) -> 
     return root / f"shift_{semitones:+d}" / record["corpus"] / f"{record['id']}.npy"
 
 
+def embedding_view_bounds(source_dim: int, view: str) -> tuple[int, int]:
+    if source_dim < 1:
+        raise ValueError("Backbone embedding dimension must be positive")
+    if view == "full":
+        return 0, source_dim
+    if source_dim % 2:
+        raise ValueError("Half-embedding views require an even backbone dimension")
+    midpoint = source_dim // 2
+    if view == "first-half":
+        return 0, midpoint
+    if view == "second-half":
+        return midpoint, source_dim
+    raise ValueError(f"Unsupported embedding view: {view}")
+
+
 def load_embeddings(
     records: list[dict[str, Any]],
     cache_root: Path,
     pitch_cache_root: Path | None = None,
     pitch_targets: dict[int, list[int]] | None = None,
+    source_embedding_dim: int = EMBEDDING_DIM,
+    embedding_slice: tuple[int, int] | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    start, end = embedding_slice or (0, source_embedding_dim)
+    if not 0 <= start < end <= source_embedding_dim:
+        raise ValueError("Embedding slice is outside the backbone output")
     chunks: list[np.ndarray] = []
     labels: list[int] = []
     record_indices: list[int] = []
@@ -252,11 +286,15 @@ def load_embeddings(
 
         for path, target in sources:
             value = np.load(path, allow_pickle=False)
-            if value.ndim != 2 or value.shape[0] < 1 or value.shape[1] != EMBEDDING_DIM:
+            if (
+                value.ndim != 2
+                or value.shape[0] < 1
+                or value.shape[1] != source_embedding_dim
+            ):
                 raise ValueError(f"Invalid embedding cache {path}: {value.shape}")
             if not np.isfinite(value).all():
                 raise ValueError(f"Non-finite embedding cache: {path}")
-            chunks.append(np.asarray(value, dtype=np.float32))
+            chunks.append(np.asarray(value[:, start:end], dtype=np.float32))
             labels.extend([target] * len(value))
             record_indices.extend([record_index] * len(value))
     return (
@@ -267,12 +305,19 @@ def load_embeddings(
 
 
 class KeyHead(nn.Module):
-    def __init__(self, hidden_dims: list[int], dropout: float) -> None:
+    def __init__(
+        self,
+        hidden_dims: list[int],
+        dropout: float,
+        embedding_dim: int = EMBEDDING_DIM,
+    ) -> None:
         super().__init__()
         if not hidden_dims or any(dimension < 1 for dimension in hidden_dims):
             raise ValueError("At least one positive hidden dimension is required")
+        if embedding_dim < 1:
+            raise ValueError("Embedding dimension must be positive")
         layers: list[nn.Module] = []
-        input_dim = EMBEDDING_DIM
+        input_dim = embedding_dim
         for index, hidden_dim in enumerate(hidden_dims):
             layers.extend((nn.Linear(input_dim, hidden_dim), nn.ReLU()))
             # This matches the published GiantSteps head: dropout separates the
@@ -376,7 +421,7 @@ def train_with_validation(
     args: argparse.Namespace,
 ) -> tuple[int, float, dict[str, torch.Tensor], torch.Tensor, list[dict[str, float]]]:
     seed_everything(seed)
-    model = KeyHead(args.hidden_dims, args.dropout).to(args.device)
+    model = KeyHead(args.hidden_dims, args.dropout, args.embedding_dim).to(args.device)
     optimizer = torch.optim.Adam(
         model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay
     )
@@ -439,7 +484,7 @@ def train_full(
     args: argparse.Namespace,
 ) -> KeyHead:
     seed_everything(seed)
-    model = KeyHead(args.hidden_dims, args.dropout).to(args.device)
+    model = KeyHead(args.hidden_dims, args.dropout, args.embedding_dim).to(args.device)
     optimizer = torch.optim.Adam(
         model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay
     )
@@ -483,7 +528,7 @@ def write_jsonl(
         metadata = {
             "type": "metadata",
             "schema_version": 1,
-            "model": "tunelock/myna-vertical-mtg-head",
+            "model": "tunelock/myna-mtg-head",
             "model_revision": revision,
             "posterior_labels": labels,
             "protocol": protocol,
@@ -516,9 +561,14 @@ def main() -> int:
     print(json.dumps(audit, sort_keys=True), flush=True)
     if args.audit_only:
         return 0
-    if args.output is None or args.report is None or args.checkpoint is None:
-        raise ValueError("--output, --report, and --checkpoint are required unless --audit-only")
-    for path in (args.output, args.report, args.checkpoint):
+    if args.report is None or args.checkpoint is None:
+        raise ValueError("--report and --checkpoint are required unless --audit-only")
+    if not args.validation_only and args.output is None:
+        raise ValueError("--output is required unless --audit-only or --validation-only")
+    artifact_paths = [args.report, args.checkpoint]
+    if args.output is not None:
+        artifact_paths.append(args.output)
+    for path in artifact_paths:
         if path.exists():
             raise FileExistsError(f"Refusing to overwrite experiment artifact: {path}")
 
@@ -530,6 +580,12 @@ def main() -> int:
     base_metadata = json.loads(base_metadata_path.read_text(encoding="utf-8"))
     if base_metadata.get("manifest_sha256") != manifest_hash:
         raise ValueError("Base embedding cache was produced from a different manifest")
+    source_embedding_dim = int(base_metadata.get("embedding_dim", EMBEDDING_DIM))
+    if source_embedding_dim < 1:
+        raise ValueError("Base embedding metadata has an invalid embedding_dim")
+    embedding_slice = embedding_view_bounds(source_embedding_dim, args.embedding_view)
+    embedding_dim = embedding_slice[1] - embedding_slice[0]
+    args.embedding_dim = embedding_dim
 
     pitch_targets = None
     pitch_metadata = None
@@ -538,6 +594,12 @@ def main() -> int:
         pitch_metadata = json.loads(pitch_metadata_path.read_text(encoding="utf-8"))
         if pitch_metadata.get("manifest_sha256") != manifest_hash:
             raise ValueError("Pitch embedding cache was produced from a different manifest")
+        if int(pitch_metadata.get("embedding_dim", EMBEDDING_DIM)) != source_embedding_dim:
+            raise ValueError("Base and pitch caches use different embedding dimensions")
+        if pitch_metadata.get("model") != base_metadata.get("model") or pitch_metadata.get(
+            "model_revision"
+        ) != base_metadata.get("model_revision"):
+            raise ValueError("Base and pitch caches were produced by different backbones")
         shifts = {int(value) for value in pitch_metadata.get("semitones", [])}
         pitch_targets = {
             int(item["semitones"]): [int(value) for value in item["target_by_source_index"]]
@@ -552,15 +614,32 @@ def main() -> int:
         args.embedding_cache,
         args.pitch_augmentation_cache,
         pitch_targets,
+        source_embedding_dim,
+        embedding_slice,
     )
-    valid_data = load_embeddings(valid_records, args.embedding_cache)
-    full_data = load_embeddings(
-        training,
+    valid_data = load_embeddings(
+        valid_records,
         args.embedding_cache,
-        args.pitch_augmentation_cache,
-        pitch_targets,
+        source_embedding_dim=source_embedding_dim,
+        embedding_slice=embedding_slice,
     )
-    development_data = load_embeddings(development, args.embedding_cache)
+    full_data = None
+    development_data = None
+    if not args.validation_only:
+        full_data = load_embeddings(
+            training,
+            args.embedding_cache,
+            args.pitch_augmentation_cache,
+            pitch_targets,
+            source_embedding_dim,
+            embedding_slice,
+        )
+        development_data = load_embeddings(
+            development,
+            args.embedding_cache,
+            source_embedding_dim=source_embedding_dim,
+            embedding_slice=embedding_slice,
+        )
     valid_record_labels = torch.tensor(
         [int(record["truth_index"]) for record in valid_records], dtype=torch.long
     )
@@ -586,57 +665,78 @@ def main() -> int:
             }
         )
 
-        final_model = train_full(seed, best_epoch, full_data, args)
-        final_states.append({name: value.detach().cpu() for name, value in final_model.state_dict().items()})
-        dev_chunk_logits = batched_logits(
-            final_model, development_data[0], args.batch_size, args.device
-        )
-        dev_logits = aggregate_track_logits(
-            dev_chunk_logits, development_data[2], len(development)
-        )
-        development_probabilities.append(dev_logits.softmax(dim=1))
+        if not args.validation_only:
+            assert full_data is not None and development_data is not None
+            final_model = train_full(seed, best_epoch, full_data, args)
+            final_states.append(
+                {
+                    name: value.detach().cpu()
+                    for name, value in final_model.state_dict().items()
+                }
+            )
+            dev_chunk_logits = batched_logits(
+                final_model, development_data[0], args.batch_size, args.device
+            )
+            dev_logits = aggregate_track_logits(
+                dev_chunk_logits, development_data[2], len(development)
+            )
+            development_probabilities.append(dev_logits.softmax(dim=1))
 
     validation_ensemble = torch.stack(validation_probabilities).mean(dim=0)
     validation_exact = float(
         (validation_ensemble.argmax(dim=1) == valid_record_labels).float().mean().item()
     )
-    development_ensemble = torch.stack(development_probabilities).mean(dim=0)
+    development_ensemble = (
+        torch.stack(development_probabilities).mean(dim=0)
+        if development_probabilities
+        else None
+    )
     script_hash = sha256(Path(__file__))
     base_revision = str(base_metadata["model_revision"])
     revision = f"myna:{base_revision};head:{script_hash[:16]}"
     augmentation_protocol = (
         f", pitch shifts={sorted(pitch_targets)}" if pitch_targets is not None else ", no pitch augmentation"
     )
+    training_protocol = str(
+        manifest.get("training_protocol", "MTG key training records from the Rust manifest")
+    )
     protocol = (
-        f"MTG confidence=2 single-key, exact-audio deduplicated, fixed artist/recording-group "
+        f"{training_protocol}, exact-audio deduplicated, fixed artist/recording-group "
         f"fold {args.validation_fold} for epoch selection, full-MTG retrain, seeds={args.seeds}"
-        f"{augmentation_protocol}"
+        f"{augmentation_protocol}, embedding view={args.embedding_view}"
     )
 
-    write_jsonl(
-        args.output,
-        development,
-        manifest["canonical_labels"],
-        development_ensemble,
-        revision,
-        protocol,
-    )
+    if not args.validation_only:
+        assert args.output is not None and development_ensemble is not None
+        write_jsonl(
+            args.output,
+            development,
+            manifest["canonical_labels"],
+            development_ensemble,
+            revision,
+            protocol,
+        )
     args.checkpoint.parent.mkdir(parents=True, exist_ok=True)
     checkpoint_temp = args.checkpoint.with_name(f"{args.checkpoint.name}.part.{os.getpid()}")
     torch.save(
         {
             "schema_version": 1,
-            "model": "tunelock/myna-vertical-mtg-head",
+            "model": "tunelock/myna-mtg-head",
             "base_model": base_metadata,
             "pitch_augmentation": pitch_metadata,
             "manifest_sha256": manifest_hash,
             "script_sha256": script_hash,
             "hidden_dims": args.hidden_dims,
+            "source_embedding_dim": source_embedding_dim,
+            "embedding_dim": embedding_dim,
+            "embedding_view": args.embedding_view,
+            "embedding_slice": list(embedding_slice),
             "dropout": args.dropout,
             "seeds": args.seeds,
             "amp": args.amp,
             "validation_fold": args.validation_fold,
             "epochs": [report["best_epoch"] for report in seed_reports],
+            "validation_only": args.validation_only,
             "validation_state_dicts": validation_states,
             "state_dicts": final_states,
         },
@@ -646,7 +746,7 @@ def main() -> int:
 
     report = {
         "schema_version": 1,
-        "experiment": "myna-vertical-mtg-head",
+        "experiment": "myna-mtg-head",
         "manifest_sha256": manifest_hash,
         "script_sha256": script_hash,
         "base_model": base_metadata,
@@ -658,6 +758,10 @@ def main() -> int:
         },
         "hyperparameters": {
             "hidden_dims": args.hidden_dims,
+            "source_embedding_dim": source_embedding_dim,
+            "embedding_dim": embedding_dim,
+            "embedding_view": args.embedding_view,
+            "embedding_slice": list(embedding_slice),
             "dropout": args.dropout,
             "learning_rate": args.learning_rate,
             "weight_decay": args.weight_decay,
@@ -670,7 +774,7 @@ def main() -> int:
         "split_audit": audit,
         "validation_ensemble_exact": validation_exact,
         "seed_runs": seed_reports,
-        "development_predictions": len(development),
+        "development_predictions": 0 if args.validation_only else len(development),
         "elapsed_seconds": time.perf_counter() - started,
         "warning": "GiantSteps-key is a repeatedly observed development benchmark, not a sealed final holdout.",
     }
@@ -679,7 +783,8 @@ def main() -> int:
     report_temp.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     os.replace(report_temp, args.report)
     print(
-        f"validation ensemble exact={validation_exact:.1%}; development posteriors={len(development)}; "
+        f"validation ensemble exact={validation_exact:.1%}; "
+        f"development posteriors={0 if args.validation_only else len(development)}; "
         f"elapsed={report['elapsed_seconds']:.1f}s",
         flush=True,
     )

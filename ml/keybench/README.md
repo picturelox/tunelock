@@ -1,7 +1,8 @@
 # TuneLock key-model bakeoff
 
-This folder is benchmark infrastructure, not a production model runtime. Its
-purpose is to answer three questions before an engine integration is considered:
+This folder is benchmark and artifact-export infrastructure, not an enabled
+production model. Its purpose is to answer three questions before an engine
+integration is considered:
 
 1. Does a candidate model beat TuneLock's 389/604 GiantSteps development
    baseline by itself?
@@ -38,6 +39,12 @@ The oracle is only a ceiling. It says the pair contains enough complementary
 correct answers to make the stretch target possible; it does not provide a
 deployable way to choose those answers. No learned model is integrated into the
 application in this checkpoint.
+
+The pinned 85M-parameter hybrid Myna was also evaluated. Head shapes and hybrid
+branches were selected only on fixed MTG validation fold 0. Its best vertical-
+branch candidate reaches 378/604 (62.6%), MIREX 0.701, top-3 83.8%, with a
+439/604 (72.7%) pair oracle. It is a recorded negative result and will not
+replace the smaller 70.4% candidate.
 
 ## S-KEY control
 
@@ -122,3 +129,52 @@ therefore verified against its published MD5.
   against torchaudio but has not completed a full training corpus.
 - Generated embeddings, checkpoints, posteriors, and external model checkouts
   remain gitignored research artifacts.
+- Resumable caches are metadata-bound. A changed manifest, model/revision,
+  sample window, embedding width, pitch method, role, or shift set must use a
+  new cache directory; stale same-shaped embeddings are rejected.
+
+## Leakage-safe head selection
+
+Use `--validation-only` while comparing head families. This writes validation
+states and a report but does not load development embeddings, retrain on all
+MTG records, or emit GiantSteps posteriors. After locking one configuration,
+rerun the same command without `--validation-only` and add `--output`.
+
+Hybrid embeddings can be audited with `--embedding-view full`, `first-half`, or
+`second-half`. The source dimension, selected bounds, and head input dimension
+are stored in every new checkpoint, consumed by TTA, and preserved in ONNX
+artifacts.
+
+## ONNX artifact and Rust runtime smoke
+
+Export one pinned backbone + final head. Generated weights and manifests stay
+below ignored `ml/data` paths:
+
+```powershell
+ml\venv\Scripts\python.exe ml\keybench\export_myna_onnx.py `
+  --manifest ml\data\keybench\key-corpus-manifest-v4-all-unambiguous.json `
+  --checkpoint ml\data\models\myna-mtg-v6-validation-state.pt `
+  --hf-cache ml\data\huggingface-cache `
+  --output-dir ml\data\models\myna-v6-onnx-v1
+```
+
+The exporter checks ONNX structure and CPU numerical/argmax parity before it
+atomically publishes the directory. The Rust probe then validates the manifest,
+size, SHA-256 and harmony contract, dynamically loads a user-supplied ONNX
+Runtime library, and executes a synthetic mel chunk on a dedicated background
+worker:
+
+```powershell
+cd src-tauri
+C:\Users\louis.media\.cargo\bin\cargo.exe run `
+  --features neural-key --bin tunelock-neural-key-probe -- `
+  ..\ml\data\models\myna-v6-onnx-v1 `
+  ..\ml\venv\Lib\site-packages\onnxruntime\capi\onnxruntime.dll
+```
+
+The default application feature set does not compile the runtime adapter and
+does not download or bundle ONNX Runtime or model weights. Exact audio-to-mel
+parity is still required before real-file inference can be product-enabled.
+The exported graph represents one acoustic view; reproducing the 70.4% result
+also requires production pitch views, Rust-defined TTA alignment, and
+aggregation outside the graph.

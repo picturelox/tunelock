@@ -12,6 +12,7 @@ pub mod export;
 pub mod harmony;
 pub mod media;
 pub mod models;
+pub mod neural_key;
 pub mod proof;
 
 use db::Database;

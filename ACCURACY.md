@@ -72,7 +72,10 @@ The first controlled bakeoff used Deezer's MIT-licensed S-KEY checkpoint at
 revision `918b83d273568d5041569bb8068843d19a335726`. Subsequent runs used the
 MIT-licensed `oriyonay/myna-vertical` backbone pinned at revision
 `6b9e1e5aae0832335d61d7a38764114e496824d4`. The local result remains first and
-no network/model call has been added to the production engine.
+no network/model call has been added to the production engine. A larger
+MIT-licensed `oriyonay/myna-85m` ablation is pinned at revision
+`f2c66dc432aa070bc9a82ed7a90a411c3b33f0eb` and is recorded below as a rejected
+candidate, not as an upgrade.
 
 #### 75% sprint results
 
@@ -89,6 +92,8 @@ candidate was correct; it is a ceiling, not a selectable result.
 | Myna, clean 1,077 protocol + pitch/speed augmentation | 411/604 (68.0%) | 0.745 | 84.8% | 451/604 (74.7%) | 403/604 (66.7%) |
 | Myna, 1,349 unambiguous-label ablation + pitch/speed augmentation | 415/604 (68.7%) | 0.753 | 85.1% | 450/604 (74.5%) | 417/604 (69.0%) |
 | **Same Myna model + Rust-aligned transposition averaging** | **425/604 (70.4%)** | **0.764** | **85.4%** | **453/604 (75.0%)** | **428/604 (70.9%)** |
+| Myna85M full hybrid embedding, no augmentation | 372/604 (61.6%) | 0.693 | 83.3% | 439/604 (72.7%) | 393/604 (65.1% OOF) |
+| Myna85M vertical branch, no augmentation | 378/604 (62.6%) | 0.701 | 83.8% | 439/604 (72.7%) | 402/604 (66.6% OOF) |
 
 The verified acoustic top-1 result is therefore **70.4%**, 36 additional exact
 matches over the 64.4% release baseline. A fixed equal blend using the
@@ -104,6 +109,46 @@ verified against `torchaudio.functional.pitch_shift` on controlled tones
 the full faithful training cache has not yet been run. Neither Myna candidate
 is eligible for the app until it repeats on the sealed final holdout and passes
 latency, calibration, data-rights, packaging, and commercial-license review.
+
+#### Myna85M and production-artifact checkpoint
+
+The larger hybrid backbone was evaluated without letting GiantSteps select its
+head. Three head shapes were first compared only on fixed, artist/recording-
+disjoint MTG fold 0. The compact 1,536 -> 2,048 -> 24 head won that round at
+57.5% validation exact (published high-dropout head 49.6%; wide head 56.8%). A
+second architecture-driven audit compared the hybrid branches: the vertical
+128x2-patch half won at 59.0%, versus 49.6% for the horizontal half. Only the
+locked winners were then scored on GiantSteps. Fold 0 has now selected several
+head variants, so its percentages are comparative development evidence too,
+not untouched-test estimates.
+
+The vertical branch improves the full Myna85M result by six tracks, but its
+439/604 TuneLock pair oracle remains fourteen tracks below the 453/604 stretch
+target. The larger model is therefore rejected for integration in this
+checkpoint. Model size alone did not improve key accuracy or error diversity.
+
+Separately, the current Myna-Vertical research candidate now has a reproducible
+deployment-shaped artifact path:
+
+- one combined backbone + key-head ONNX graph, 162,782,585 bytes;
+- ONNX Runtime CPU parity within 1.02e-6 maximum absolute logit error, with
+  identical test-batch argmaxes;
+- a schema-1 manifest binding the model SHA-256, exact input/output shapes,
+  Rust-canonical 24-label order, aggregation rule, model revision, and explicit
+  research/data-rights status;
+- an opt-in Rust `neural-key` feature that validates the manifest, size, hash,
+  labels, and finite logits, then loads an externally supplied ONNX Runtime;
+- a real Rust smoke that loaded that graph and produced a normalized posterior
+  from one synthetic mel chunk.
+
+This is a production boundary, not production promotion. The default build
+still downloads and bundles no model or runtime, and the release analyzer still
+returns the classical result first. Exact Rust preprocessing parity, a sealed
+final holdout, calibration, latency, rights review, artifact distribution, and
+background lifecycle/UI integration remain open gates. The graph covers the
+base acoustic view; the 70.4% result also requires pitch-view generation,
+Rust-aligned TTA, and cross-view aggregation, which have not yet been reproduced
+as an end-to-end Rust production path.
 
 Dataset/protocol audit:
 

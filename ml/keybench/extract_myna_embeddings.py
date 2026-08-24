@@ -38,6 +38,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--revision", default=DEFAULT_REVISION)
     parser.add_argument("--n-samples", type=int, default=100_000)
     parser.add_argument(
+        "--embedding-dim",
+        type=int,
+        default=384,
+        help="Expected backbone output width (384 for Myna-Vertical, 1536 for Myna-85M).",
+    )
+    parser.add_argument(
         "--role",
         choices=("training", "development", "all"),
         default="all",
@@ -73,12 +79,12 @@ def cache_path(root: Path, record: dict[str, Any]) -> Path:
     return root / corpus / f"{track_id}.npy"
 
 
-def valid_cached(path: Path) -> bool:
+def valid_cached(path: Path, embedding_dim: int) -> bool:
     if not path.is_file():
         return False
     try:
         value = np.load(path, mmap_mode="r", allow_pickle=False)
-        return value.ndim == 2 and value.shape[0] > 0 and value.shape[1] == 384
+        return value.ndim == 2 and value.shape[0] > 0 and value.shape[1] == embedding_dim
     except (OSError, ValueError):
         return False
 
@@ -107,7 +113,7 @@ def write_metadata(
         "model_license": "MIT",
         "manifest_sha256": manifest_hash,
         "n_samples": args.n_samples,
-        "embedding_dim": 384,
+        "embedding_dim": args.embedding_dim,
         "torch": torch.__version__,
         "transformers": transformers.__version__,
         "device": args.device,
@@ -120,8 +126,33 @@ def write_metadata(
     os.replace(temporary, target)
 
 
+def validate_existing_metadata(
+    root: Path,
+    args: argparse.Namespace,
+    manifest_hash: str,
+) -> None:
+    path = root / "metadata.json"
+    if not path.exists():
+        return
+    metadata = json.loads(path.read_text(encoding="utf-8"))
+    matches = (
+        metadata.get("adapter") == "tunelock/myna-embedding-cache"
+        and metadata.get("model") == args.model
+        and metadata.get("model_revision") == args.revision
+        and metadata.get("manifest_sha256") == manifest_hash
+        and int(metadata.get("n_samples", -1)) == args.n_samples
+        and int(metadata.get("embedding_dim", 384)) == args.embedding_dim
+    )
+    if not matches:
+        raise ValueError(
+            f"Embedding cache metadata does not match this run: {path}; use a new cache directory"
+        )
+
+
 def main() -> int:
     args = parse_args()
+    if args.embedding_dim < 1:
+        raise ValueError("--embedding-dim must be positive")
     manifest = load_manifest(args.manifest)
     records = [
         record
@@ -136,7 +167,12 @@ def main() -> int:
     args.cache_dir.mkdir(parents=True, exist_ok=True)
     args.hf_cache.mkdir(parents=True, exist_ok=True)
     manifest_hash = sha256(args.manifest)
-    pending = [record for record in records if not valid_cached(cache_path(args.cache_dir, record))]
+    validate_existing_metadata(args.cache_dir, args, manifest_hash)
+    pending = [
+        record
+        for record in records
+        if not valid_cached(cache_path(args.cache_dir, record), args.embedding_dim)
+    ]
     print(
         f"selected={len(records)} cached={len(records) - len(pending)} pending={len(pending)} "
         f"device={args.device}",
@@ -164,7 +200,11 @@ def main() -> int:
             with torch.inference_mode():
                 embeddings = model.from_file(str(record["audio_path"]))
             value = embeddings.detach().to(device="cpu", dtype=torch.float32).numpy()
-            if value.ndim != 2 or value.shape[0] < 1 or value.shape[1] != 384:
+            if (
+                value.ndim != 2
+                or value.shape[0] < 1
+                or value.shape[1] != args.embedding_dim
+            ):
                 raise ValueError(f"unexpected embedding shape {value.shape}")
             if not np.isfinite(value).all():
                 raise ValueError("non-finite embedding")
@@ -180,10 +220,15 @@ def main() -> int:
                 f"rate={rate:.2f} tracks/s",
                 flush=True,
             )
-            complete = sum(valid_cached(cache_path(args.cache_dir, row)) for row in records)
+            complete = sum(
+                valid_cached(cache_path(args.cache_dir, row), args.embedding_dim)
+                for row in records
+            )
             write_metadata(args.cache_dir, args, manifest_hash, complete, failures)
 
-    complete = sum(valid_cached(cache_path(args.cache_dir, row)) for row in records)
+    complete = sum(
+        valid_cached(cache_path(args.cache_dir, row), args.embedding_dim) for row in records
+    )
     print(f"complete={complete}/{len(records)} failed={len(failures)}", flush=True)
     return 1 if failures else 0
 

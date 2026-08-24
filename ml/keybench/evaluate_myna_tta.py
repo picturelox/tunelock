@@ -63,17 +63,24 @@ def load_metadata(path: Path) -> dict[str, Any]:
 def load_cached_embeddings(
     records: list[dict[str, Any]],
     path_for: Callable[[dict[str, Any]], Path],
+    source_embedding_dim: int,
+    embedding_slice: tuple[int, int],
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    start, end = embedding_slice
     chunks: list[np.ndarray] = []
     record_indices: list[int] = []
     for record_index, record in enumerate(records):
         path = path_for(record)
         value = np.load(path, allow_pickle=False)
-        if value.ndim != 2 or value.shape[0] < 1 or value.shape[1] != 384:
+        if (
+            value.ndim != 2
+            or value.shape[0] < 1
+            or value.shape[1] != source_embedding_dim
+        ):
             raise ValueError(f"Invalid embedding cache {path}: {value.shape}")
         if not np.isfinite(value).all():
             raise ValueError(f"Non-finite embedding cache: {path}")
-        chunks.append(np.asarray(value, dtype=np.float32))
+        chunks.append(np.asarray(value[:, start:end], dtype=np.float32))
         record_indices.extend([record_index] * len(value))
     return (
         torch.from_numpy(np.concatenate(chunks)),
@@ -101,6 +108,33 @@ def main() -> int:
         raise ValueError("Checkpoint was trained from a different manifest")
     if args.original_weight <= 0:
         raise ValueError("--original-weight must be positive")
+    embedding_dim = int(
+        checkpoint.get(
+            "embedding_dim", checkpoint.get("base_model", {}).get("embedding_dim", 384)
+        )
+    )
+    if embedding_dim < 1:
+        raise ValueError("Checkpoint has an invalid embedding dimension")
+    source_embedding_dim = int(checkpoint.get("source_embedding_dim", embedding_dim))
+    raw_slice = checkpoint.get("embedding_slice", [0, embedding_dim])
+    if not isinstance(raw_slice, (list, tuple)) or len(raw_slice) != 2:
+        raise ValueError("Checkpoint has an invalid embedding slice")
+    embedding_slice = (int(raw_slice[0]), int(raw_slice[1]))
+    if (
+        not 0 <= embedding_slice[0] < embedding_slice[1] <= source_embedding_dim
+        or embedding_slice[1] - embedding_slice[0] != embedding_dim
+    ):
+        raise ValueError("Checkpoint embedding dimensions are inconsistent")
+
+    base_metadata = load_metadata(args.embedding_cache / "metadata.json")
+    checkpoint_base = checkpoint.get("base_model", {})
+    if (
+        base_metadata.get("manifest_sha256") != manifest_hash
+        or int(base_metadata.get("embedding_dim", 0)) != source_embedding_dim
+        or base_metadata.get("model") != checkpoint_base.get("model")
+        or base_metadata.get("model_revision") != checkpoint_base.get("model_revision")
+    ):
+        raise ValueError("Base cache does not match the trained checkpoint")
 
     if args.role == "development":
         records = [record for record in manifest["records"] if record["role"] == "development"]
@@ -124,6 +158,13 @@ def main() -> int:
     pitch_metadata = load_metadata(args.pitch_cache / "metadata.json")
     if pitch_metadata.get("manifest_sha256") != manifest_hash:
         raise ValueError("Pitch cache was produced from a different manifest")
+    if int(pitch_metadata.get("embedding_dim", 384)) != source_embedding_dim:
+        raise ValueError("Checkpoint and pitch cache use different embedding dimensions")
+    if (
+        pitch_metadata.get("model") != checkpoint_base.get("model")
+        or pitch_metadata.get("model_revision") != checkpoint_base.get("model_revision")
+    ):
+        raise ValueError("Pitch cache does not match the trained checkpoint")
     if pitch_metadata.get("role") != cache_role:
         raise ValueError(f"Pitch cache must contain {cache_role}-role embeddings")
     available_shifts = {int(value) for value in pitch_metadata.get("semitones", [])}
@@ -146,7 +187,9 @@ def main() -> int:
         raise ValueError(f"Checkpoint has no {args.role} state dictionaries")
     models = []
     for state in states:
-        model = KeyHead(checkpoint["hidden_dims"], float(checkpoint["dropout"]))
+        model = KeyHead(
+            checkpoint["hidden_dims"], float(checkpoint["dropout"]), embedding_dim
+        )
         model.load_state_dict(state)
         models.append(model.to(args.device).eval())
 
@@ -165,7 +208,9 @@ def main() -> int:
     )
 
     for transform_index, (shift, path_for) in enumerate(transforms, start=1):
-        embeddings, record_indices = load_cached_embeddings(records, path_for)
+        embeddings, record_indices = load_cached_embeddings(
+            records, path_for, source_embedding_dim, embedding_slice
+        )
         for model_index, model in enumerate(models):
             chunk_logits = batched_logits(model, embeddings, args.batch_size, args.device)
             values = aggregate_track_logits(chunk_logits, record_indices, len(records))

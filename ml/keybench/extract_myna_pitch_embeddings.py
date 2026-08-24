@@ -35,6 +35,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--revision", default=DEFAULT_REVISION)
     parser.add_argument("--n-samples", type=int, default=100_000)
     parser.add_argument(
+        "--embedding-dim",
+        type=int,
+        default=384,
+        help="Expected backbone output width (384 for Myna-Vertical, 1536 for Myna-85M).",
+    )
+    parser.add_argument(
         "--pitch-method",
         choices=("phase-vocoder", "phase-vocoder-cached", "resample-speed", "linear-speed"),
         default="phase-vocoder",
@@ -99,12 +105,12 @@ def cache_path(root: Path, semitones: int, record: dict[str, Any]) -> Path:
     return root / f"shift_{semitones:+d}" / corpus / f"{track_id}.npy"
 
 
-def valid_cached(path: Path) -> bool:
+def valid_cached(path: Path, embedding_dim: int) -> bool:
     if not path.is_file():
         return False
     try:
         value = np.load(path, mmap_mode="r", allow_pickle=False)
-        return value.ndim == 2 and value.shape[0] > 0 and value.shape[1] == 384
+        return value.ndim == 2 and value.shape[0] > 0 and value.shape[1] == embedding_dim
     except (OSError, ValueError):
         return False
 
@@ -155,7 +161,7 @@ def write_metadata(
 ) -> None:
     expected = len(records) * len(args.semitones)
     complete = sum(
-        valid_cached(cache_path(root, semitones, record))
+        valid_cached(cache_path(root, semitones, record), args.embedding_dim)
         for record in records
         for semitones in args.semitones
     )
@@ -174,6 +180,7 @@ def write_metadata(
         "model_license": "MIT",
         "manifest_sha256": manifest_hash,
         "n_samples": args.n_samples,
+        "embedding_dim": args.embedding_dim,
         "semitones": args.semitones,
         "role": args.role,
         "unique_records": len(records),
@@ -187,8 +194,37 @@ def write_metadata(
     os.replace(temporary, target)
 
 
+def validate_existing_metadata(
+    root: Path,
+    args: argparse.Namespace,
+    manifest_hash: str,
+) -> None:
+    path = root / "metadata.json"
+    if not path.exists():
+        return
+    metadata = json.loads(path.read_text(encoding="utf-8"))
+    matches = (
+        metadata.get("adapter") == "tunelock/myna-pitch-embedding-cache"
+        and metadata.get("model") == args.model
+        and metadata.get("model_revision") == args.revision
+        and metadata.get("manifest_sha256") == manifest_hash
+        and int(metadata.get("n_samples", -1)) == args.n_samples
+        and int(metadata.get("embedding_dim", 384)) == args.embedding_dim
+        and metadata.get("pitch_method") == args.pitch_method
+        and metadata.get("role") == args.role
+        and sorted(int(value) for value in metadata.get("semitones", []))
+        == sorted(args.semitones)
+    )
+    if not matches:
+        raise ValueError(
+            f"Pitch cache metadata does not match this run: {path}; use a new cache directory"
+        )
+
+
 def main() -> int:
     args = parse_args()
+    if args.embedding_dim < 1:
+        raise ValueError("--embedding-dim must be positive")
     manifest = load_manifest(args.manifest)
     available_shifts = {int(item["semitones"]) for item in manifest["pitch_shift_targets"]}
     if 0 in args.semitones or any(value not in available_shifts for value in args.semitones):
@@ -204,11 +240,14 @@ def main() -> int:
     args.cache_dir.mkdir(parents=True, exist_ok=True)
     args.hf_cache.mkdir(parents=True, exist_ok=True)
     manifest_hash = sha256(args.manifest)
+    validate_existing_metadata(args.cache_dir, args, manifest_hash)
     pending_records = [
         record
         for record in records
         if any(
-            not valid_cached(cache_path(args.cache_dir, semitones, record))
+            not valid_cached(
+                cache_path(args.cache_dir, semitones, record), args.embedding_dim
+            )
             for semitones in args.semitones
         )
     ]
@@ -300,7 +339,7 @@ def main() -> int:
                     )[..., None]
                 for semitones in args.semitones:
                     destination = cache_path(args.cache_dir, semitones, record)
-                    if valid_cached(destination):
+                    if valid_cached(destination, args.embedding_dim):
                         continue
                     if args.pitch_method == "phase-vocoder":
                         shifted = audio_functional.pitch_shift(
@@ -348,7 +387,11 @@ def main() -> int:
                 embeddings = all_embeddings[cursor : cursor + count]
                 cursor += count
                 value = embeddings.detach().to(device="cpu", dtype=torch.float32).numpy()
-                if value.ndim != 2 or value.shape[0] < 1 or value.shape[1] != 384:
+                if (
+                    value.ndim != 2
+                    or value.shape[0] < 1
+                    or value.shape[1] != args.embedding_dim
+                ):
                     raise ValueError(f"unexpected embedding shape {value.shape}")
                 if not np.isfinite(value).all():
                     raise ValueError("non-finite embedding")

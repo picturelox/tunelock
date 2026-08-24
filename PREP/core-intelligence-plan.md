@@ -67,7 +67,7 @@ other diagnostics live under progressive disclosure.
 - Current release key-path smoke: roughly 0.7-1.6 seconds per track on five
   local files after compilation.
 - Frontend typecheck and production build pass.
-- Rust: 71 tests pass.
+- Rust: 75 library tests pass; the full library/bin suite has 83 tests.
 
 Important: GiantSteps has already been used to select HPSS kernel and analysis
 window parameters. It is now a development benchmark, not an untouched final
@@ -273,3 +273,32 @@ Checkpoint F: useful before/after suggestions with audible, inspectable reasons.
 - No learned model was integrated. Product promotion still requires the sealed
   final holdout, calibration, latency/size measurement, data-rights review, and
   an asynchronous runtime that never blocks the local classical result.
+
+### 2026-08-23 - Artifact/runtime and Myna85M checkpoint
+
+- Generalized the Myna cache, trainer, TTA, and exporter around a manifest-bound
+  embedding dimension. Added validation-only head selection so candidate shapes
+  can be locked on artist/recording-disjoint MTG data without loading or writing
+  GiantSteps development predictions.
+- Pinned the MIT `oriyonay/myna-85m` hybrid backbone at revision
+  `f2c66dc432aa070bc9a82ed7a90a411c3b33f0eb`; extracted all 1,953 manifest
+  records with zero failures.
+- The validation-selected full hybrid head reaches 372/604 (61.6%). A second
+  validation-only branch audit selects its vertical-patch half, which improves
+  to 378/604 (62.6%), but both have only a 439/604 (72.7%) TuneLock pair oracle.
+  The larger model is rejected and the 70.4% Myna-Vertical candidate remains
+  the acoustic leader.
+- Exported the current candidate as a checksum-bound 162,782,585-byte ONNX
+  graph. CPU ONNX Runtime parity is within 1.02e-6 maximum absolute logit error
+  with identical parity-batch argmaxes.
+- Added an opt-in Rust `neural-key` artifact/runtime boundary. It validates
+  schema, SHA-256, size, shapes, canonical labels, aggregation and finite
+  outputs, dynamically loads an external ONNX Runtime, and passed a real
+  synthetic-chunk inference smoke on a dedicated background worker.
+- The graph covers the base acoustic view. Exact audio-to-mel parity and the
+  pitch-view/TTA orchestration behind the 70.4% result are not yet implemented
+  in Rust and remain explicit promotion work.
+- The default app still bundles and downloads nothing, and its immediate
+  classical result is unchanged. Rust preprocessing parity, the sealed holdout,
+  calibration, rights review, latency/package policy and async UI lifecycle
+  remain promotion gates.
