@@ -5,6 +5,7 @@ import { formatCamelotBadge, getKeyAmbiguityRelationship } from '../../lib/harmo
 export interface ReadoutCardProps {
   displayed: KeyCandidate;
   candidates: KeyCandidate[];
+  sectionCount: number;
   badge: { text: string; color: string } | null;
   bpm: number;
   overrideActive: boolean;
@@ -17,6 +18,7 @@ export interface ReadoutCardProps {
 export default function ReadoutCard({
   displayed,
   candidates,
+  sectionCount,
   badge,
   bpm,
   overrideActive,
@@ -25,13 +27,29 @@ export default function ReadoutCard({
   onCopy,
   onReset,
 }: ReadoutCardProps) {
-  // Show up to 2 runner-ups that are "close" (conf >= 0.35) and not the winner.
+  const engineWinner = candidates[0] ?? displayed;
+  const second = candidates[1];
+  const relativeLead = second && engineWinner.confidence > 0
+    ? (engineWinner.confidence - second.confidence) / engineWinner.confidence
+    : 1;
+  const sectionTotal = sectionCount;
+  const sectionShare = sectionTotal > 0 ? engineWinner.segment_count / sectionTotal : 0;
+  const sectionEvidence = sectionTotal > 0
+    ? `${engineWinner.segment_count}/${sectionTotal} sections preferred this key.`
+    : 'No stable section winner was available.';
+
+  const evidence = overrideActive
+    ? { label: 'Manual selection', detail: 'You selected this key instead of the engine pick.' }
+    : sectionShare >= 0.75 && relativeLead >= 0.15
+      ? { label: 'Clear lead', detail: sectionEvidence }
+      : sectionShare >= 0.5 || relativeLead >= 0.08
+        ? { label: 'Mixed evidence', detail: `${sectionEvidence} Alternatives remain plausible.` }
+        : { label: 'Close call', detail: 'The leading keys are tightly grouped. Audition the alternatives.' };
+
+  // Always show the two closest alternatives. Absolute soft-vote score mass is
+  // not a calibrated probability, so an absolute threshold is misleading.
   const runnerUps = candidates
-    .filter(
-      (c) =>
-        c.key_camelot !== displayed.key_camelot &&
-        c.confidence >= 0.35
-    )
+    .filter((c) => c.key_camelot !== displayed.key_camelot)
     .slice(0, 2);
 
   return (
@@ -47,20 +65,10 @@ export default function ReadoutCard({
       <div className="text-2xl font-light text-text-primary">{displayed.key_standard}</div>
       <div className="text-xl font-mono text-text-secondary">{bpm.toFixed(1)} BPM</div>
 
-      <div className="w-full flex flex-col gap-1">
-        <div className="flex justify-between text-xs text-text-secondary">
-          <span>Confidence</span>
-          <span className="font-mono">{Math.round(displayed.confidence * 100)}%</span>
-        </div>
-        <div className="h-2 bg-surface-light rounded-full overflow-hidden">
-          <div
-            className="h-full bg-accent-primary transition-all duration-500"
-            style={{ width: `${displayed.confidence * 100}%` }}
-          />
-        </div>
-        <div className="text-[10px] text-text-secondary mt-1">
-          {displayed.segment_count}/8 segments agreed · profile-match{' '}
-          {Math.round(displayed.avg_score * 100)}%
+      <div className="w-full rounded-lg border border-white/10 bg-black/15 px-3 py-2">
+        <div className="text-xs font-semibold text-text-primary">{evidence.label}</div>
+        <div className="text-[11px] leading-relaxed text-text-secondary mt-0.5">
+          {evidence.detail}
         </div>
       </div>
 
@@ -78,7 +86,7 @@ export default function ReadoutCard({
                 <div
                   key={c.key_camelot}
                   className="group relative flex items-center gap-2 px-3 py-1.5 rounded-lg bg-surface-light hover:bg-white/10 transition-colors"
-                  title={rel.description}
+                  title={`${rel.description} ${c.segment_count}/${sectionTotal || '—'} sections preferred this alternative.`}
                 >
                   <span
                     className="px-1.5 py-0.5 rounded text-[10px] font-bold text-white"
@@ -92,6 +100,9 @@ export default function ReadoutCard({
                       {rel.label}
                     </span>
                   )}
+                  <span className="text-[10px] text-text-secondary">
+                    {c.segment_count}/{sectionTotal || '—'} sections
+                  </span>
                 </div>
               );
             })}

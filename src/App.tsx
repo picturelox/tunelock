@@ -14,7 +14,7 @@ import { onTrackAnalyzed, onMetadataBatchComplete, onAnalysisProgress } from './
 export type View = 'console' | 'analyze' | 'library' | 'mix' | 'delivery' | 'gold' | 'assist';
 
 function App() {
-  const [currentView, setCurrentView] = useState<View>('console');
+  const [currentView, setCurrentView] = useState<View>('analyze');
   const { queueTrackUpdate, flushPendingUpdates, setAnalysisProgress } = useLibraryStore();
 
   useEffect(() => {

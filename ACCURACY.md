@@ -48,6 +48,96 @@ was biased toward easier tracks.
 
 ## Results — current release binary
 
+### 75% exact-key development contract (2026-08-23)
+
+The stretch target is **453/604 exact (75.0%)** on GiantSteps-key. The current
+baseline is 389/604, so reaching it requires 64 net additional correct tracks.
+This is a development objective, not a current accuracy claim.
+
+GiantSteps-key is no longer an untouched test: it has already selected classical
+engine settings. It may be used for repeatable model bakeoffs, paired error
+analysis, and out-of-fold fusion experiments, but final superiority requires a
+new frozen, artist/recording-family-disjoint, human-adjudicated holdout.
+
+Required evidence for every external or learned model:
+
+1. all 24 labeled scores, model/data revision, license, latency, and failures;
+2. standalone exact, MIREX, top-3/top-5, and error taxonomy;
+3. paired overlap with the 389/604 TuneLock baseline and exact oracle union;
+4. fusion selected out-of-fold, never by reporting the best weight on all 604;
+5. duplicate/fingerprint and artist-group checks between training and evaluation;
+6. a separate assisted leaderboard for tags, OSINT, knowledge bases, or LLMs.
+
+The first controlled bakeoff used Deezer's MIT-licensed S-KEY checkpoint at
+revision `918b83d273568d5041569bb8068843d19a335726`. Subsequent runs used the
+MIT-licensed `oriyonay/myna-vertical` backbone pinned at revision
+`6b9e1e5aae0832335d61d7a38764114e496824d4`. The local result remains first and
+no network/model call has been added to the production engine.
+
+#### 75% sprint results
+
+All rows below score the same 604 development tracks with TuneLock's Rust
+parsing and MIREX implementation. "Pair oracle" means either TuneLock or the
+candidate was correct; it is a ceiling, not a selectable result.
+
+| Candidate | Exact | MIREX | Top-3 | Pair oracle | Best measured fixed/OOF fusion |
+|---|---:|---:|---:|---:|---:|
+| TuneLock release baseline | 389/604 (64.4%) | 0.725 | 84.1% | — | — |
+| S-KEY full-track control | 389/604 (64.4%) | 0.721 | 81.3% | 445/604 (73.7%) | 404/604 (66.9%) |
+| KeyMyna Billboard ONNX control | 352/604 (58.3%) | 0.675 | 81.6% | 439/604 (72.7%) | 391/604 (64.7%) |
+| Myna, published head, no pitch augmentation | 383/604 (63.4%) | 0.718 | 82.8% | 441/604 (73.0%) | 399/604 (66.1%) |
+| Myna, clean 1,077 protocol + pitch/speed augmentation | 411/604 (68.0%) | 0.745 | 84.8% | 451/604 (74.7%) | 403/604 (66.7%) |
+| Myna, 1,349 unambiguous-label ablation + pitch/speed augmentation | 415/604 (68.7%) | 0.753 | 85.1% | 450/604 (74.5%) | 417/604 (69.0%) |
+| **Same Myna model + Rust-aligned transposition averaging** | **425/604 (70.4%)** | **0.764** | **85.4%** | **453/604 (75.0%)** | **428/604 (70.9%)** |
+
+The verified acoustic top-1 result is therefore **70.4%**, 36 additional exact
+matches over the 64.4% release baseline. A fixed equal blend using the
+logit-averaged transposition variant reaches **70.9% (428/604)**. The exact
+75.0% pair oracle proves sufficient complementary errors now exist, but the
+remaining 25 oracle-only corrections cannot be claimed until a selector learns
+them on data outside these 604 development labels.
+
+The current fast augmentation is explicitly an ablation: linear resampling
+changes pitch and speed together. A cached phase-vocoder implementation was
+verified against `torchaudio.functional.pitch_shift` on controlled tones
+(expected frequencies and approximately 1.0 waveform cosine similarity), but
+the full faithful training cache has not yet been run. Neither Myna candidate
+is eligible for the app until it repeats on the sealed final holdout and passes
+latency, calibration, data-rights, packaging, and commercial-license review.
+
+Dataset/protocol audit:
+
+- all 1,486 GiantSteps-MTG previews are present and match their published MD5;
+- there are 1,477 unique hashes, nine duplicate groups, no exact audio hashes
+  shared with GiantSteps-key, and no shared track IDs;
+- the historical clean protocol resolves exactly to 1,077 tracks: confidence 2,
+  a single parseable key, and an empty annotator comment;
+- exact-audio deduplication leaves 1,070 clean training recordings; the fixed
+  artist/recording-component validation split has zero measured overlap;
+- the 1,349-track all-confidence/unambiguous run is retained as a separately
+  named ablation rather than silently replacing the published clean protocol.
+
+### 2026-08-23 evidence-semantics verification
+
+Slice A changed only the supporting diagnostics emitted by soft temporal
+voting: `segment_count` is now the number of analyzed sections in which a
+candidate was the strongest key, and `agreement` is that count divided by the
+number of valid sections. Aggregate soft scores still determine the ranking.
+
+The full 604-track GiantSteps release benchmark was rerun after this change:
+
+| Metric | Before | After |
+|---|---:|---:|
+| Key exact match | 64.4% (389/604) | 64.4% (389/604) |
+| Tonic correct | 69.0% | 69.0% |
+| MIREX weighted | 0.725 | 0.725 |
+| Camelot compatible | 85.1% | 85.1% |
+| Failures | 0 | 0 |
+
+This confirms that the user-facing evidence repair did not change key or BPM
+predictions. A unit test also requires candidate section counts to sum to the
+eight evaluated sections.
+
 ### GiantSteps-key (primary accuracy benchmark)
 
 | Metric | Value |
@@ -331,18 +421,12 @@ cargo run --release --bin tunelock-bench -- --corpus ..\ground-truth\MIKComplete
    internal validation (90/10), selects the best epoch on internal
    validation only, and evaluates on the external fold exactly once.
 
-**Download infrastructure:**
-- Added `ground-truth/download-giantsteps-mtg.ps1` to download the
-  GiantSteps-MTG dataset from Zenodo (DOI 10.5281/zenodo.1101082).
-- This provides ~1,486 tracks for training, separate from the 604-track
-  GiantSteps test set.
-
-**Status:** The code fixes are complete. The corrected experiment has
-not yet been run because it requires:
-1. Downloading the MTG dataset (~2 GB).
-2. Extracting features from both MTG and GiantSteps.
-3. Training the CNN with the fixed augmentation and epoch selection.
-4. Evaluating on the untouched GiantSteps test set.
+**Current status:** All 1,486 MTG previews have now been acquired and checksum
+verified. The legacy CNN itself has not been rerun; instead, the reproducible
+Myna experiment above established a substantially stronger 70.4% acoustic
+candidate with the same local training corpus. GiantSteps-key is now explicitly
+a repeatedly observed development benchmark, not an untouched test; any CNN
+revival must use the same leakage and final-holdout contract as the Myna work.
 
 The prior 29.6% CNN result is INVALID — it was produced by a broken
 experiment. No conclusion about CNN viability can be drawn until the

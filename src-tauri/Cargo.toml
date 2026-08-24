@@ -59,5 +59,13 @@ name = "tunelock-bench"
 path = "src/bin/bench.rs"
 
 [[bin]]
+name = "tunelock-key-bakeoff"
+path = "src/bin/key_bakeoff.rs"
+
+[[bin]]
+name = "tunelock-key-corpus-manifest"
+path = "src/bin/key_corpus_manifest.rs"
+
+[[bin]]
 name = "gen-fixtures"
 path = "src/bin/gen_fixtures.rs"

@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, DragEvent } from 'react';
-import { Upload, Mic, Radio } from 'lucide-react';
+import { Upload, FolderOpen } from 'lucide-react';
 import { getCurrentWebview } from '@tauri-apps/api/webview';
+import { open } from '@tauri-apps/plugin-dialog';
 import { analyzeFile, onTunerProgress, getLibraryPage, onTrackAnalyzed } from '../../lib/tauri';
 import type { TrackAnalysis, TunerProgress, KeyCandidate, Track } from '../../types';
 import {
@@ -11,12 +12,8 @@ import {
 } from '../../lib/harmony';
 import ResultPanel from './ResultPanel';
 import AnalysisProgressDisplay from './AnalysisProgressDisplay';
-import InputTab from './InputTab';
-
-type TunerInput = 'file' | 'mic' | 'line';
 
 export default function TunerView() {
-  const [activeInput, setActiveInput] = useState<TunerInput>('file');
   const [isDragging, setIsDragging] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [result, setResult] = useState<TrackAnalysis | null>(null);
@@ -151,6 +148,25 @@ export default function TunerView() {
     setIsDragging(false);
   }, []);
 
+  const handleOpenFile = useCallback(async () => {
+    try {
+      const selected = await open({
+        directory: false,
+        multiple: false,
+        filters: [{
+          name: 'Audio and video',
+          extensions: ['mp3', 'wav', 'flac', 'aif', 'aiff', 'm4a', 'aac', 'ogg', 'mp4', 'mov', 'webm', 'mkv'],
+        }],
+      });
+      if (typeof selected === 'string') {
+        const name = selected.split(/[\\/]/).pop() ?? selected;
+        await handleAnalyzePath(selected, name);
+      }
+    } catch (err) {
+      setError(typeof err === 'string' ? err : 'Could not open the file picker.');
+    }
+  }, [handleAnalyzePath]);
+
   const displayed: KeyCandidate | null = overrideKey
     ? overrideKey
     : result
@@ -181,35 +197,8 @@ export default function TunerView() {
 
   return (
     <div className="flex flex-col h-full p-8 gap-6 overflow-auto">
-      {/* Input mode selector */}
-      <div className="flex gap-2 flex-wrap">
-        <InputTab
-          icon={<Upload className="w-4 h-4" />}
-          label="File"
-          active={activeInput === 'file'}
-          onClick={() => setActiveInput('file')}
-        />
-        <InputTab
-          icon={<Mic className="w-4 h-4" />}
-          label="Microphone"
-          active={activeInput === 'mic'}
-          onClick={() => setActiveInput('mic')}
-          disabled
-        />
-        <InputTab
-          icon={<Radio className="w-4 h-4" />}
-          label="Line-in"
-          active={activeInput === 'line'}
-          onClick={() => setActiveInput('line')}
-          disabled
-        />
-        <div className="flex items-center text-xs text-text-secondary ml-auto">
-          Mic / line-in coming next pass
-        </div>
-      </div>
-
-      {/* Drop zone — visible until a result arrives */}
-      {activeInput === 'file' && !result && (
+      {/* One front door: analyze a file. */}
+      {!result && (
         <div
           onDragOver={(e) => {
             e.preventDefault();
@@ -227,10 +216,20 @@ export default function TunerView() {
             <AnalysisProgressDisplay progress={progress} filename={filename} />
           ) : (
             <>
-              <Upload className="w-12 h-12 text-text-secondary" />
-              <div className="text-lg">Drop an audio file</div>
+              <Upload className="w-12 h-12 text-accent-primary" />
+              <div className="text-xl font-medium">Drop a track anywhere</div>
               <div className="text-sm text-text-secondary">
-                .mp3 · .wav · .flac · .aiff · .m4a · .ogg
+                Get key, BPM, intensity, and harmonic relationships in one pass.
+              </div>
+              <button
+                onClick={handleOpenFile}
+                className="mt-2 flex items-center gap-2 px-5 py-2.5 bg-accent-primary text-white rounded-md text-sm font-semibold hover:opacity-90"
+              >
+                <FolderOpen className="w-4 h-4" />
+                Open audio file
+              </button>
+              <div className="text-xs text-text-secondary">
+                MP3 · WAV · FLAC · AIFF · M4A · OGG · common video formats
               </div>
               {error && (
                 <div className="text-sm text-red-400 mt-4 max-w-md text-center">{error}</div>
@@ -268,12 +267,6 @@ export default function TunerView() {
         />
       )}
 
-      {(activeInput === 'mic' || activeInput === 'line') && (
-        <div className="flex-1 flex items-center justify-center text-text-secondary text-center max-w-md mx-auto">
-          Live audio input is wired in the next pass. For now, drop a file to get
-          an instant key + BPM readout using the same engine.
-        </div>
-      )}
     </div>
   );
 }

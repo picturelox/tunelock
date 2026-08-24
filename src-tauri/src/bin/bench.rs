@@ -15,7 +15,7 @@
 //!      cargo run --release --bin tunelock-bench -- <folder_path>
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
@@ -25,7 +25,10 @@ use tunelock_lib::analysis::ensemble::ProfileWeights;
 use tunelock_lib::analysis::key_detector::detect_key_diagnostic;
 use tunelock_lib::analysis::tempo_detector::detect_tempo;
 use tunelock_lib::analysis::{key_to_camelot, pitch_class_to_name};
-use tunelock_lib::proof::corpus::{load_giantsteps, load_mik_corpus, normalize_genre, stratified_sample_seeded, CorpusRow, RowStatus};
+use tunelock_lib::proof::corpus::{
+    load_giantsteps, load_mik_corpus, normalize_genre, parse_standard_key,
+    stratified_sample_seeded, CorpusRow, RowStatus,
+};
 use tunelock_lib::proof::metrics::{bpm_ratio, classify_error, is_camelot_compatible, mirex_score};
 
 // ============================================================================
@@ -35,6 +38,9 @@ use tunelock_lib::proof::metrics::{bpm_ratio, classify_error, is_camelot_compati
 struct Args {
     corpus: Option<String>,
     giantsteps: Option<String>,
+    key_manifest: Option<String>,
+    role: Option<String>,
+    audio_root: Option<String>,
     limit: Option<usize>,
     out: Option<String>,
     folder: Option<String>,
@@ -54,7 +60,8 @@ struct Args {
 
 fn parse_args() -> Args {
     let mut a = Args {
-        corpus: None, giantsteps: None, limit: None, out: None,
+        corpus: None, giantsteps: None, key_manifest: None, role: None,
+        audio_root: None, limit: None, out: None,
         folder: None, manifest: None, seed: None,
         no_hpss: false, chroma12_only: false, chroma72_only: false,
         hpss_kernel: None, analysis_seconds: None,
@@ -66,6 +73,9 @@ fn parse_args() -> Args {
         match arg.as_str() {
             "--corpus" => a.corpus = it.next(),
             "--giantsteps" => a.giantsteps = it.next(),
+            "--key-manifest" => a.key_manifest = it.next(),
+            "--role" => a.role = it.next(),
+            "--audio-root" => a.audio_root = it.next(),
             "--limit" => a.limit = it.next().and_then(|s| s.parse().ok()),
             "--out" => a.out = it.next(),
             "--manifest" => a.manifest = it.next(),
@@ -83,6 +93,7 @@ fn parse_args() -> Args {
                 eprintln!("Usage:");
                 eprintln!("  tunelock-bench --corpus <csv> [--limit N] [--seed S] [--manifest m.json] [--out report.json]");
                 eprintln!("  tunelock-bench --giantsteps <dataset_root> [--limit N] [--out report.json]");
+                eprintln!("  tunelock-bench --key-manifest <json> --role <training|development> [--audio-root <dir>] [--out report.json]");
                 eprintln!("  tunelock-bench <folder>            (legacy diagnostic mode)");
                 eprintln!("");
                 eprintln!("  Ablation flags:");
@@ -149,7 +160,19 @@ fn main() {
         if args.edm_bgate_plain { eprintln!("  plain chroma + bgate (EDM profiles, no HPCP)"); }
     }
 
-    if let Some(corpus) = args.corpus {
+    if let Some(key_manifest) = args.key_manifest {
+        let role = args.role.as_deref().unwrap_or("training");
+        let audio_root = args.audio_root.as_deref().unwrap_or(".");
+        run_key_manifest(
+            &key_manifest,
+            role,
+            audio_root,
+            args.limit,
+            args.out.as_deref(),
+            &ablation,
+            edm_plain,
+        );
+    } else if let Some(corpus) = args.corpus {
         run_scored_corpus(&corpus, args.limit, args.out.as_deref(), args.manifest.as_deref(), args.seed, &ablation, edm_plain);
     } else if let Some(gs) = args.giantsteps {
         run_giantsteps(&gs, args.limit, args.out.as_deref(), &ablation, edm_plain);
@@ -159,9 +182,126 @@ fn main() {
         eprintln!("Usage:");
         eprintln!("  tunelock-bench --corpus <csv> [--limit N] [--seed S] [--manifest m.json] [--out report.json]");
         eprintln!("  tunelock-bench --giantsteps <dataset_root> [--limit N] [--out report.json]");
+        eprintln!("  tunelock-bench --key-manifest <json> --role <training|development> [--audio-root <dir>] [--out report.json]");
         eprintln!("  tunelock-bench <folder>            (legacy diagnostic mode)");
         std::process::exit(1);
     }
+}
+
+#[derive(serde::Deserialize)]
+struct KeyCorpusManifest {
+    canonical_labels: Vec<String>,
+    records: Vec<KeyManifestRecord>,
+}
+
+#[derive(serde::Deserialize)]
+struct KeyManifestRecord {
+    role: String,
+    id: String,
+    audio_path: String,
+    truth_index: usize,
+    truth_label: String,
+    artist: String,
+    genre: String,
+}
+
+fn run_key_manifest(
+    manifest_path: &str,
+    role: &str,
+    audio_root: &str,
+    limit: Option<usize>,
+    out: Option<&str>,
+    ablation: &tunelock_lib::analysis::key_detector::AblationConfig,
+    edm_plain: Option<tunelock_lib::analysis::ensemble::EdmProfile>,
+) {
+    let rows = match load_key_manifest_rows(
+        Path::new(manifest_path),
+        role,
+        Path::new(audio_root),
+    ) {
+        Ok(rows) => rows,
+        Err(error) => {
+            eprintln!("Failed to load key manifest: {error:#}");
+            std::process::exit(1);
+        }
+    };
+    if rows.is_empty() {
+        eprintln!("No records with role {role:?} found in {manifest_path}");
+        std::process::exit(1);
+    }
+    score_rows(
+        rows,
+        manifest_path,
+        limit,
+        out,
+        None,
+        None,
+        ablation,
+        edm_plain,
+    );
+}
+
+fn load_key_manifest_rows(
+    manifest_path: &Path,
+    role: &str,
+    audio_root: &Path,
+) -> anyhow::Result<Vec<CorpusRow>> {
+    if !matches!(role, "training" | "development") {
+        anyhow::bail!("role must be training or development");
+    }
+    let bytes = std::fs::read(manifest_path)?;
+    let manifest: KeyCorpusManifest = serde_json::from_slice(&bytes)?;
+    if manifest.canonical_labels.len() != 24 {
+        anyhow::bail!("key manifest must contain exactly 24 canonical labels");
+    }
+
+    let mut rows = Vec::new();
+    for record in manifest.records.into_iter().filter(|record| record.role == role) {
+        let canonical = manifest
+            .canonical_labels
+            .get(record.truth_index)
+            .ok_or_else(|| anyhow::anyhow!("truth index out of range for {}", record.id))?;
+        if canonical != &record.truth_label {
+            anyhow::bail!(
+                "truth label/index mismatch for {}: {:?} vs {:?}",
+                record.id,
+                record.truth_label,
+                canonical
+            );
+        }
+        let (tonic, is_major) = parse_standard_key(canonical)
+            .ok_or_else(|| anyhow::anyhow!("invalid canonical key label {canonical:?}"))?;
+        let source_path = PathBuf::from(&record.audio_path);
+        let resolved_path = if source_path.is_absolute() {
+            source_path
+        } else {
+            audio_root.join(source_path)
+        };
+        let extension = resolved_path
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let status = if resolved_path.is_file() {
+            RowStatus::Ready
+        } else {
+            RowStatus::MissingFile
+        };
+        rows.push(CorpusRow {
+            title: record.id,
+            artist: record.artist,
+            key_camelot: Some(key_to_camelot(tonic, is_major)),
+            truth_tonic: Some(tonic),
+            truth_is_major: Some(is_major),
+            truth_bpm: None,
+            truth_energy: None,
+            genre: record.genre,
+            location: resolved_path.to_string_lossy().into_owned(),
+            extension,
+            status,
+        });
+    }
+    Ok(rows)
 }
 
 fn run_giantsteps(root: &str, limit: Option<usize>, out: Option<&str>, ablation: &tunelock_lib::analysis::key_detector::AblationConfig, edm_plain: Option<tunelock_lib::analysis::ensemble::EdmProfile>) {
@@ -370,7 +510,6 @@ fn analyse_row(row: &CorpusRow, weights: ProfileWeights, ablation: &tunelock_lib
 
         rec.candidates = candidates
             .iter()
-            .take(5)
             .map(|c| CandidateOut {
                 camelot: key_to_camelot(c.tonic, c.is_major),
                 standard: format!(

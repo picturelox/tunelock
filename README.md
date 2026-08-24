@@ -1,5 +1,12 @@
 # TuneLock
 
+Current development is deliberately focused on the analyzer: immediate local
+key/BPM, key and intensity over time, and useful relationships between tracks.
+See [CORE_INTELLIGENCE.md](CORE_INTELLIGENCE.md) for the plain-language status,
+[ACCURACY.md](ACCURACY.md) for measured results, and
+[ACCURACY_CONTRIBUTING.md](ACCURACY_CONTRIBUTING.md) for the human/crowdsourced
+data plan.
+
 > Fast, accurate musical key + BPM analysis for producers and DJs.
 > Built for the MPC → Ableton Live → Tape 16 → Traktor workflow.
 

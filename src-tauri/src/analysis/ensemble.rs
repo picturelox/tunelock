@@ -384,6 +384,7 @@ pub fn temporal_vote_ranked_dual_soft(
 
     // Accumulate all 24 scores across segments.
     let mut aggregate = [[0.0f64; 12]; 2];
+    let mut winner_counts = [[0usize; 12]; 2];
     let mut valid_segments = 0usize;
 
     for s in 0..segments {
@@ -414,6 +415,7 @@ pub fn temporal_vote_ranked_dual_soft(
         }
 
         let scores = combined_scores_dual(&mean12, &mean72, w);
+        record_segment_winner(&scores, &mut winner_counts);
 
         // Normalise this segment's scores to [0, 1] so that segments with
         // inherently higher cosine similarities don't dominate. We shift
@@ -452,17 +454,14 @@ pub fn temporal_vote_ranked_dual_soft(
             // likely, confidence = 1/24 ≈ 0.042. If one key dominates,
             // confidence approaches 1.0.
             let confidence = agg_score / total_score;
-            // Agreement is not directly meaningful in soft voting, but we
-            // compute a proxy: the fraction of segments where this key was
-            // the winner. This requires re-checking each segment's winner.
-            // For now, use the score-based confidence as the primary metric.
+            let segment_count = winner_counts[mode][tonic];
             ranked.push(RankedCandidate {
                 tonic,
                 is_major,
                 confidence,
-                agreement: confidence, // soft agreement proxy
+                agreement: segment_count as f64 / valid_segments as f64,
                 avg_score: (agg_score / valid_segments as f64).clamp(0.0, 1.0),
-                segment_count: valid_segments,
+                segment_count,
             });
         }
     }
@@ -549,6 +548,7 @@ pub fn temporal_vote_ranked_soft_12(
     let seg_len = total_frames / segments;
 
     let mut aggregate = [[0.0f64; 12]; 2];
+    let mut winner_counts = [[0usize; 12]; 2];
     let mut valid_segments = 0usize;
 
     for s in 0..segments {
@@ -587,6 +587,7 @@ pub fn temporal_vote_ranked_soft_12(
                 }
             }
         }
+        record_segment_winner(&combined, &mut winner_counts);
 
         // Normalise to [0, 1] within this segment
         let min_score = combined.iter().flat_map(|r| r.iter()).copied().fold(f64::INFINITY, f64::min);
@@ -600,7 +601,7 @@ pub fn temporal_vote_ranked_soft_12(
         valid_segments += 1;
     }
 
-    build_ranked_from_aggregate(&aggregate, valid_segments)
+    build_ranked_from_aggregate(&aggregate, &winner_counts, valid_segments)
 }
 
 /// Soft temporal voting on 72-band chroma only (Sha'ath-72).
@@ -618,6 +619,7 @@ pub fn temporal_vote_ranked_soft_72(
     let seg_len = total_frames / segments;
 
     let mut aggregate = [[0.0f64; 12]; 2];
+    let mut winner_counts = [[0usize; 12]; 2];
     let mut valid_segments = 0usize;
 
     for s in 0..segments {
@@ -636,27 +638,53 @@ pub fn temporal_vote_ranked_soft_72(
         }
 
         let ps = shaath72_vote(&mean72);
+        let segment_scores = [ps.major_scores, ps.minor_scores];
+        record_segment_winner(&segment_scores, &mut winner_counts);
 
         // Normalise to [0, 1] within this segment
-        let min_score = ps.major_scores.iter().chain(ps.minor_scores.iter()).copied()
+        let min_score = segment_scores[0].iter().chain(segment_scores[1].iter()).copied()
             .fold(f64::INFINITY, f64::min);
-        let max_score = ps.major_scores.iter().chain(ps.minor_scores.iter()).copied()
+        let max_score = segment_scores[0].iter().chain(segment_scores[1].iter()).copied()
             .fold(f64::NEG_INFINITY, f64::max);
         let range = (max_score - min_score).max(1e-10);
         for t in 0..12 {
-            aggregate[0][t] += (ps.major_scores[t] - min_score) / range;
-            aggregate[1][t] += (ps.minor_scores[t] - min_score) / range;
+            aggregate[0][t] += (segment_scores[0][t] - min_score) / range;
+            aggregate[1][t] += (segment_scores[1][t] - min_score) / range;
         }
         valid_segments += 1;
     }
 
     // Weight is irrelevant for 72-only, but we pass it for consistency
     let _ = w;
-    build_ranked_from_aggregate(&aggregate, valid_segments)
+    build_ranked_from_aggregate(&aggregate, &winner_counts, valid_segments)
+}
+
+/// Record the strongest key in one section. Soft scores still determine the
+/// final ranking; these counts are supporting evidence, not a second vote.
+fn record_segment_winner(scores: &[[f64; 12]; 2], winner_counts: &mut [[usize; 12]; 2]) {
+    let mut best_mode = 0usize;
+    let mut best_tonic = 0usize;
+    let mut best_score = f64::NEG_INFINITY;
+
+    for mode in 0..2 {
+        for tonic in 0..12 {
+            if scores[mode][tonic] > best_score {
+                best_score = scores[mode][tonic];
+                best_mode = mode;
+                best_tonic = tonic;
+            }
+        }
+    }
+
+    winner_counts[best_mode][best_tonic] += 1;
 }
 
 /// Build the ranked candidate list from an aggregate score table.
-fn build_ranked_from_aggregate(aggregate: &[[f64; 12]; 2], valid_segments: usize) -> Vec<RankedCandidate> {
+fn build_ranked_from_aggregate(
+    aggregate: &[[f64; 12]; 2],
+    winner_counts: &[[usize; 12]; 2],
+    valid_segments: usize,
+) -> Vec<RankedCandidate> {
     if valid_segments == 0 {
         return vec![];
     }
@@ -670,13 +698,14 @@ fn build_ranked_from_aggregate(aggregate: &[[f64; 12]; 2], valid_segments: usize
         for tonic in 0..12 {
             let agg_score = aggregate[mode][tonic];
             let confidence = agg_score / total_score;
+            let segment_count = winner_counts[mode][tonic];
             ranked.push(RankedCandidate {
                 tonic,
                 is_major: mode == 0,
                 confidence,
-                agreement: confidence,
+                agreement: segment_count as f64 / valid_segments as f64,
                 avg_score: (agg_score / valid_segments as f64).clamp(0.0, 1.0),
-                segment_count: valid_segments,
+                segment_count,
             });
         }
     }
@@ -753,6 +782,7 @@ pub fn temporal_vote_edm_soft(
     let seg_len = total_frames / segments;
 
     let mut aggregate = [[0.0f64; 12]; 2];
+    let mut winner_counts = [[0usize; 12]; 2];
     let mut valid_segments = 0usize;
 
     for s in 0..segments {
@@ -781,13 +811,47 @@ pub fn temporal_vote_edm_soft(
         let max_score = all_scores.fold(f64::NEG_INFINITY, f64::max);
         let range = (max_score - min_score).max(1e-10);
 
+        let mut segment_scores = [[0.0f64; 12]; 2];
         for t in 0..12 {
-            aggregate[0][t] += (scores[0][t] - min_score) / range;
-            let minor_score = scores[1][t].max(scores[2][t]);
-            aggregate[1][t] += (minor_score - min_score) / range;
+            segment_scores[0][t] = scores[0][t];
+            segment_scores[1][t] = scores[1][t].max(scores[2][t]);
+            aggregate[0][t] += (segment_scores[0][t] - min_score) / range;
+            aggregate[1][t] += (segment_scores[1][t] - min_score) / range;
         }
+        record_segment_winner(&segment_scores, &mut winner_counts);
         valid_segments += 1;
     }
 
-    build_ranked_from_aggregate(&aggregate, valid_segments)
+    build_ranked_from_aggregate(&aggregate, &winner_counts, valid_segments)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn soft_vote_reports_actual_section_winners() {
+        let mut chroma12 = Array2::<f64>::zeros((12, 80));
+        let mut chroma72 = Array2::<f64>::zeros((72, 80));
+        for frame in 0..80 {
+            chroma12[(0, frame)] = 1.0;
+            for band in (0..72).step_by(12) {
+                chroma72[(band, frame)] = 1.0;
+            }
+        }
+
+        let ranked = temporal_vote_ranked_dual_soft(
+            &chroma12,
+            &chroma72,
+            8,
+            ProfileWeights::default(),
+        );
+
+        assert_eq!(ranked.iter().map(|candidate| candidate.segment_count).sum::<usize>(), 8);
+        assert!(ranked.iter().any(|candidate| candidate.segment_count == 0));
+        for candidate in ranked {
+            let expected = candidate.segment_count as f64 / 8.0;
+            assert!((candidate.agreement - expected).abs() < f64::EPSILON);
+        }
+    }
 }

@@ -73,7 +73,7 @@ export interface KeyCandidate {
   confidence: number;
   agreement: number;     // fraction of segments voting for this candidate, 0..1
   avg_score: number;     // normalised profile-match score, 0..1
-  segment_count: number; // raw count out of 8 segments
+  segment_count: number; // raw winner count out of TrackAnalysis.section_count
 }
 
 export interface TunerTimings {
@@ -116,6 +116,8 @@ export interface TrackAnalysis {
   /** Absolute path to the cached cover-art image, if extracted. */
   artwork_path?: string | null;
   candidates?: KeyCandidate[];
+  /** Valid temporal sections used for candidate section-vote evidence. */
+  section_count?: number;
   /** 12-bin mean chroma vector. Order: C, C#, D, D#, E, F, F#, G, G#, A, A#, B. */
   chroma?: number[];
   timings?: TunerTimings;

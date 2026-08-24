@@ -353,6 +353,8 @@ pub struct TunerAnalysis {
     pub artwork_path: Option<String>,
     /// Top-N candidates, highest confidence first. Index 0 is the winner.
     pub candidates: Vec<KeyCandidate>,
+    /// Number of valid temporal sections used for the section-vote evidence.
+    pub section_count: usize,
     /// Mean chroma vector across the track, normalised so max == 1.0.
     /// Order: C, C#, D, D#, E, F, F#, G, G#, A, A#, B.
     pub chroma: [f64; 12],
@@ -379,7 +381,7 @@ fn candidate_from_ranked(r: &crate::analysis::ensemble::RankedCandidate) -> KeyC
 ///   3. HPSS          ->  60%
 ///   4. chromagram    ->  75%
 ///   5. ensemble vote ->  85%
-///   6. tempo         ->  95%
+///   6. tempo + energy -> 95%
 ///   7. metadata + DB -> 100%
 ///
 /// Also **auto-imports the file into the library** (upsert by file_path),
@@ -428,6 +430,7 @@ pub async fn analyze_file(
         f64,
         u64, // decode_ms
         u64, // tempo_ms
+        i32, // energy_level
     ), String> {
         let _ = tx.send(("decode".to_string(), 0.05));
         let decode_start = Instant::now();
@@ -451,9 +454,10 @@ pub async fn analyze_file(
         let bpm = crate::analysis::tempo_detector::detect_tempo(&samples)
             .map_err(|e| format!("Tempo detection failed: {}", e))?;
         let tempo_ms = tempo_start.elapsed().as_millis() as u64;
+        let energy_level = detect_energy(&samples, crate::analysis::SAMPLE_RATE).energy_level;
         let _ = tx.send(("tempo".to_string(), 0.95));
 
-        Ok((diagnostic, bpm, decode_ms, tempo_ms))
+        Ok((diagnostic, bpm, decode_ms, tempo_ms, energy_level))
     });
 
     // Drain the progress channel concurrently while the blocking task runs.
@@ -465,7 +469,7 @@ pub async fn analyze_file(
         }
     });
 
-    let (diagnostic, bpm, decode_ms, tempo_ms) = analyze_handle
+    let (diagnostic, bpm, decode_ms, tempo_ms, energy_level) = analyze_handle
         .await
         .map_err(|e| format!("Join error: {}", e))??;
 
@@ -564,6 +568,9 @@ pub async fn analyze_file(
         ) {
             eprintln!("[tuner] analysis write failed: {}", e);
         }
+        if let Err(e) = db.update_track_energy(track_id, energy_level) {
+            eprintln!("[tuner] energy write failed: {}", e);
+        }
         track_id
     };
 
@@ -609,12 +616,17 @@ pub async fn analyze_file(
     }
 
     timings.total_ms = total_start.elapsed().as_millis() as u64;
+    let section_count: usize = diagnostic
+        .candidates
+        .iter()
+        .map(|candidate| candidate.segment_count)
+        .sum();
 
     // Final structured log. Tuned to be greppable in dev console.
     eprintln!(
-        "[tuner] DONE  {}  -> {} ({})  bpm={:.1}  conf={:.2}  agree={:.2}  segs={}/8  total={}ms  (decode={} spec={} hpss={} chroma={} ens={} tempo={} meta={})",
-        filename,
-        key_standard, key_camelot, bpm, winner.confidence, winner.agreement, winner.segment_count,
+        "[tuner] DONE  {}  -> {} ({})  bpm={:.1}  conf={:.2}  agree={:.2}  segs={}/{}  total={}ms  (decode={} spec={} hpss={} chroma={} ens={} tempo={} meta={})",
+        filename, key_standard, key_camelot, bpm, winner.confidence, winner.agreement,
+        winner.segment_count, section_count,
         timings.total_ms,
         timings.decode_ms, timings.spectrogram_ms, timings.hpss_ms,
         timings.chromagram_ms, timings.ensemble_ms, timings.tempo_ms, timings.metadata_ms,
@@ -629,8 +641,9 @@ pub async fn analyze_file(
             );
             let cam = crate::analysis::key_to_camelot(c.tonic, c.is_major);
             eprintln!(
-                "  {}.  {:>10}  ({:>3})  conf={:.3}  agree={:.2}  segs={}/8  score={:.3}",
-                i + 1, name, cam, c.confidence, c.agreement, c.segment_count, c.avg_score
+                "  {}.  {:>10}  ({:>3})  conf={:.3}  agree={:.2}  segs={}/{}  score={:.3}",
+                i + 1, name, cam, c.confidence, c.agreement, c.segment_count,
+                section_count, c.avg_score
             );
         }
     }
@@ -643,7 +656,6 @@ pub async fn analyze_file(
         .take(5)
         .map(candidate_from_ranked)
         .collect();
-
     Ok(TunerAnalysis {
         track_id,
         file_path: path,
@@ -653,12 +665,13 @@ pub async fn analyze_file(
         key_confidence: winner.confidence,
         bpm,
         duration_ms,
-        energy_level: None,
+        energy_level: Some(energy_level),
         title,
         artist,
         album,
         artwork_path,
         candidates,
+        section_count,
         chroma: diagnostic.chroma_mean,
         timings,
     })

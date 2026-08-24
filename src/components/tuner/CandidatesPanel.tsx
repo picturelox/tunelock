@@ -3,6 +3,7 @@ import { formatCamelotBadge, getKeyAmbiguityRelationship } from '../../lib/harmo
 
 export interface CandidatesPanelProps {
   candidates: KeyCandidate[];
+  sectionCount: number;
   selected: KeyCandidate;
   winnerStandard: string;
   onSelect: (c: KeyCandidate) => void;
@@ -10,6 +11,7 @@ export interface CandidatesPanelProps {
 
 export default function CandidatesPanel({
   candidates,
+  sectionCount,
   selected,
   winnerStandard,
   onSelect,
@@ -52,10 +54,7 @@ export default function CandidatesPanel({
                 </span>
               )}
               <span className="font-mono text-xs text-text-secondary">
-                conf {Math.round(c.confidence * 100)}%
-              </span>
-              <span className="font-mono text-xs text-text-secondary">
-                {c.segment_count}/8
+                {c.segment_count}/{sectionCount || '—'} sections
               </span>
             </button>
           );
