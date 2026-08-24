@@ -4,29 +4,56 @@ The highest-value contribution is not another opinion scraped from the web. It
 is a carefully blinded label on a legally usable or privately evaluated audio
 recording, with enough independent review to know whether the label is sound.
 
-## Current phase: no panel required yet
+## Current phase: acquire data before convening a panel
 
-Human collection is intentionally deferred while the engineering work can
-still produce decisive evidence. The owner does **not** need to recruit a panel
-or label hundreds of tracks for the current checkpoint. TuneLock will first:
+Four leakage-safe selectors over track-global posteriors have now failed to
+beat the single neural head while the five-opinion oracle climbed to 475/604
+(78.6%). The binding constraint is the 1,340-track adjudicated MTG training
+corpus, not model diversity or selection features, so selector research is
+parked until more adjudicated key-labeled data exists. The owner does **not**
+need to recruit an in-house panel for the current checkpoint: labels are to be
+sourced from existing labeled corpora or paid annotation. TuneLock will first:
 
-1. use the completed faithful-v7 diversity evidence to improve selector
-   features with out-of-fold, artist/recording-disjoint MTG predictions;
-2. keep the fast v6 candidate while auditing its native TTA latency and view
-   policy only through locked validation experiments;
-3. improve calibration only with leakage-safe training and validation data
-   already available;
-4. audit public corpora, licenses, duplicates, and recording-family overlap;
+1. audit existing key-labeled corpora for training use: label quality,
+   annotation provenance, license for commercial training, and—critically—
+   artist/recording-family overlap with GiantSteps-key and GiantSteps-MTG;
+2. specify the sealed final holdout (300-500 tracks) with outsourced labels:
+   at least two independent blind annotators per track, measured
+   inter-annotator agreement, and expert arbitration of conflicts;
+3. keep latency engineering on the native neural path moving—profiling,
+   runtime reuse, and view-subset policy—with mandatory accuracy
+   re-measurement against the ACCURACY.md baseline after every change;
+4. specify fingerprint-based known-recording enrichment as an assisted
+   leaderboard that never enters the acoustic leaderboard;
 5. freeze the candidate, evaluation protocol, and exact questions that human
    evidence must answer.
 
-Human work becomes necessary when one of two gates is reached: either the best
-candidate is ready for a credible final superiority claim, or progress is
-limited by disagreements that existing independent labels cannot resolve. At
-that point, start with a small, high-information pilot—not a large campaign:
-five experienced contributors, roughly 20 shared disagreement tracks, hidden
-repeats, and no engine/vendor answers shown. Expand only if that pilot is
-reliable and materially changes model selection or calibration.
+Candidate corpora for the training audit (each must be verified, not assumed):
+
+- McGill Billboard: professional key/chord annotations of popular recordings;
+  audio rights are separate from the annotations and must be reviewed.
+- Isophonics key annotations (Beatles, Queen, Zweieck, and related sets):
+  research-oriented; narrow artist coverage makes it mainly a diversity probe.
+- RWC Popular Music: research license; small but cleanly annotated.
+- Classical harmonic sets (Beethoven, Mozart, Bach, Schubert): reliable
+  score-derived keys but a genre mismatch; useful for mode/relative-key
+  stress tests, not for improving EDM development accuracy.
+- CC-licensed audio paired with paid blind annotation: the only lane that
+  directly creates rights-cleared audio-plus-label pairs at scale.
+
+For every candidate: pin the source revision, verify label provenance, run
+exact-audio and fingerprint duplicate checks against both existing corpora,
+group by artist/recording family before any split, and record license and
+redistribution terms in the corpus manifest. A public label never grants
+permission to train on its audio.
+
+A human panel still becomes necessary when one of two gates is reached: either
+the best candidate is ready for a credible final superiority claim, or
+progress is limited by disagreements that existing independent labels cannot
+resolve. At that point, start with a small, high-information pilot—not a large
+campaign: five experienced contributors, roughly 20 shared disagreement
+tracks, hidden repeats, and no engine/vendor answers shown. Expand only if
+that pilot is reliable and materially changes model selection or calibration.
 
 ## What the owner will need to do at that gate
 
