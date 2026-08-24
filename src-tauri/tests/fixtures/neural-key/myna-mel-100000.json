@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "generator": "tunelock/myna-mel-parity-fixture",
+  "waveform": {
+    "generator": "LCG state = 1664525 * state + 1013904223 mod 2^32; sample = ((state >> 8) - 2^23) / 2^23",
+    "seed": 1592594996,
+    "samples": 100000,
+    "sample_rate_hz": 16000
+  },
+  "preprocessor": {
+    "implementation": "nnAudio MelSpectrogram 0.3.3",
+    "n_fft": 2048,
+    "hop_length": 512,
+    "n_mels": 128,
+    "window": "periodic Hann",
+    "center": true,
+    "pad_mode": "reflect",
+    "power": 2.0,
+    "mel_scale": "Slaney",
+    "normalization": "area"
+  },
+  "output": {
+    "shape": [
+      1,
+      128,
+      196
+    ],
+    "dtype": "float32 little-endian",
+    "file": "myna-mel-100000-f32le.bin",
+    "bytes": 100352,
+    "sha256": "e8dda8ae9edc17541e7e4b5bacfb626812259a15a3d684088b5979e3f047c173"
+  },
+  "versions": {
+    "nnAudio": "0.3.3",
+    "numpy": "2.2.6",
+    "torch": "2.7.1+cu128"
+  }
+}

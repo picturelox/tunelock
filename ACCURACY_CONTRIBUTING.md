@@ -4,7 +4,31 @@ The highest-value contribution is not another opinion scraped from the web. It
 is a carefully blinded label on a legally usable or privately evaluated audio
 recording, with enough independent review to know whether the label is sound.
 
-## What the owner needs to do now
+## Current phase: no panel required yet
+
+Human collection is intentionally deferred while the engineering work can
+still produce decisive evidence. The owner does **not** need to recruit a panel
+or label hundreds of tracks for the current checkpoint. TuneLock will first:
+
+1. finish the faithful pitch-only training cache and compare it with the fast
+   pitch-plus-speed ablation;
+2. reproduce native decode, resampling, mel preprocessing, pitch views, and
+   transposition averaging through the production-shaped runtime;
+3. improve selector features and calibration only with leakage-safe training
+   and validation data already available;
+4. audit public corpora, licenses, duplicates, and recording-family overlap;
+5. freeze the candidate, evaluation protocol, and exact questions that human
+   evidence must answer.
+
+Human work becomes necessary when one of two gates is reached: either the best
+candidate is ready for a credible final superiority claim, or progress is
+limited by disagreements that existing independent labels cannot resolve. At
+that point, start with a small, high-information pilot—not a large campaign:
+five experienced contributors, roughly 20 shared disagreement tracks, hidden
+repeats, and no engine/vendor answers shown. Expand only if that pilot is
+reliable and materially changes model selection or calibration.
+
+## What the owner will need to do at that gate
 
 1. **Choose the data policy.** Decide whether model training will use only
    CC0/CC-BY and contributor-owned audio (recommended), or whether other

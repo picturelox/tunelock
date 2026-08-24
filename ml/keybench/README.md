@@ -159,9 +159,11 @@ ml\venv\Scripts\python.exe ml\keybench\export_myna_onnx.py `
 ```
 
 The exporter checks ONNX structure and CPU numerical/argmax parity before it
-atomically publishes the directory. The Rust probe then validates the manifest,
-size, SHA-256 and harmony contract, dynamically loads a user-supplied ONNX
-Runtime library, and executes a synthetic mel chunk on a dedicated background
+atomically publishes the directory. Schema 2 also pins the nnAudio 0.3.3 mel
+parameters in machine-readable form. The Rust probe validates the manifest,
+size, SHA-256, harmony and preprocessing contracts, dynamically loads a
+user-supplied ONNX Runtime library, and executes deterministic 16 kHz audio
+through native mel preprocessing and the graph on a dedicated background
 worker:
 
 ```powershell
@@ -173,8 +175,11 @@ C:\Users\louis.media\.cargo\bin\cargo.exe run `
 ```
 
 The default application feature set does not compile the runtime adapter and
-does not download or bundle ONNX Runtime or model weights. Exact audio-to-mel
-parity is still required before real-file inference can be product-enabled.
-The exported graph represents one acoustic view; reproducing the 70.4% result
-also requires production pitch views, Rust-defined TTA alignment, and
-aggregation outside the graph.
+does not download or bundle ONNX Runtime or model weights. Native PCM-to-mel
+parity is now fixture-tested against the pinned Python implementation (maximum
+scaled relative error 3.56e-6). Real-file decode/downmix/resampler parity is
+still required before inference can be product-enabled. The exported graph
+represents one acoustic view; reproducing the 70.4% result also requires
+production pitch views and end-to-end orchestration. Rust now implements and
+tests the exact major/minor-preserving label alignment and probability-space
+average used by the winning evaluator.

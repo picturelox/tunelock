@@ -2,10 +2,11 @@
 //!
 //! The classical analyzer remains the unconditional, immediate result. This
 //! module validates a separately supplied model artifact and, only when the
-//! `neural-key` feature is enabled, can execute already-prepared mel chunks in
-//! an external ONNX Runtime dylib. Audio preprocessing parity remains a
-//! separate promotion gate.
+//! `neural-key` feature is enabled, can execute prepared mel chunks in an
+//! external ONNX Runtime dylib. Schema 2 artifacts additionally pin the native
+//! audio-to-mel contract used by [`crate::neural_key_preprocess`].
 
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
@@ -15,6 +16,9 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 use crate::harmony::pitch_class_to_name;
+use crate::neural_key_preprocess::{
+    MYNA_FRAMES_PER_CHUNK, MYNA_HOP_LENGTH, MYNA_MEL_BINS, MYNA_N_FFT, MYNA_SAMPLE_RATE_HZ,
+};
 
 const KEY_COUNT: usize = 24;
 
@@ -33,6 +37,23 @@ pub struct NeuralKeyInputContract {
     pub sample_rate_hz: usize,
     pub audio_samples_per_chunk: usize,
     pub preprocessor: String,
+    #[serde(default)]
+    pub preprocessing: Option<MynaPreprocessingContract>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MynaPreprocessingContract {
+    pub implementation: String,
+    pub version: String,
+    pub n_fft: usize,
+    pub hop_length: usize,
+    pub n_mels: usize,
+    pub window: String,
+    pub center: bool,
+    pub pad_mode: String,
+    pub power: f32,
+    pub mel_scale: String,
+    pub normalization: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -101,7 +122,11 @@ fn fixed_dimension(value: &ArtifactDimension, label: &str) -> Result<usize> {
 
 impl NeuralKeyArtifact {
     fn validate(&self) -> Result<(usize, usize)> {
-        if self.schema_version != 1 || self.artifact_kind != "tunelock-neural-key-chunk-v1" {
+        let supported_version = matches!(
+            (self.schema_version, self.artifact_kind.as_str()),
+            (1, "tunelock-neural-key-chunk-v1") | (2, "tunelock-neural-key-chunk-v2")
+        );
+        if !supported_version {
             bail!("unsupported neural-key artifact contract");
         }
         if self.model_bytes == 0
@@ -135,6 +160,30 @@ impl NeuralKeyArtifact {
         }
         let mel_bins = fixed_dimension(&self.input.shape[2], "mel bins")?;
         let mel_frames = fixed_dimension(&self.input.shape[3], "mel frames")?;
+        if self.schema_version == 2 {
+            let preprocessing = self
+                .input
+                .preprocessing
+                .as_ref()
+                .context("schema-2 artifact must pin preprocessing parameters")?;
+            if preprocessing.implementation != "nnAudio MelSpectrogram"
+                || preprocessing.version != "0.3.3"
+                || preprocessing.n_fft != MYNA_N_FFT
+                || preprocessing.hop_length != MYNA_HOP_LENGTH
+                || preprocessing.n_mels != MYNA_MEL_BINS
+                || preprocessing.window != "periodic Hann"
+                || !preprocessing.center
+                || preprocessing.pad_mode != "reflect"
+                || preprocessing.power != 2.0
+                || preprocessing.mel_scale != "Slaney"
+                || preprocessing.normalization != "area"
+                || self.input.sample_rate_hz != MYNA_SAMPLE_RATE_HZ
+                || mel_bins != MYNA_MEL_BINS
+                || mel_frames != MYNA_FRAMES_PER_CHUNK
+            {
+                bail!("unsupported schema-2 Myna preprocessing contract");
+            }
+        }
         if self.output.name != "chunk_logits"
             || self.output.dtype != "float32"
             || self.output.shape.len() != 2
@@ -152,6 +201,10 @@ impl NeuralKeyArtifact {
             bail!("artifact must state model and data-rights status");
         }
         Ok((mel_bins, mel_frames))
+    }
+
+    pub fn supports_native_myna_preprocessing(&self) -> bool {
+        self.schema_version == 2 && self.input.preprocessing.is_some()
     }
 }
 
@@ -216,6 +269,76 @@ pub fn aggregate_chunk_logits(logits: &[f32], chunk_count: usize) -> Result<[f32
     Ok(mean)
 }
 
+/// Align a posterior from audio shifted by `semitones` back to the original
+/// 24-key vocabulary. Mode is preserved and each tonic rotates modulo 12.
+pub fn align_transposed_posterior(
+    posterior: &[f32; KEY_COUNT],
+    semitones: i32,
+) -> Result<[f32; KEY_COUNT]> {
+    if !(-6..=6).contains(&semitones) {
+        bail!("TTA semitone shift must be in [-6, 6]");
+    }
+    validate_posterior(posterior)?;
+    let mut aligned = [0.0_f32; KEY_COUNT];
+    for (source, target) in aligned.iter_mut().enumerate() {
+        let mode_offset = (source / 12) * 12;
+        let shifted_tonic = (source as i32 % 12 + semitones).rem_euclid(12) as usize;
+        *target = posterior[mode_offset + shifted_tonic];
+    }
+    Ok(aligned)
+}
+
+/// Reproduce the winning evaluator's probability-space transposition average.
+/// The unshifted posterior may receive a distinct positive weight; each unique
+/// shifted view receives weight 1.
+pub fn aggregate_transposition_posteriors(
+    views: &[(i32, [f32; KEY_COUNT])],
+    original_weight: f32,
+) -> Result<[f32; KEY_COUNT]> {
+    if !original_weight.is_finite() || original_weight <= 0.0 {
+        bail!("TTA original weight must be positive and finite");
+    }
+    if views.is_empty() {
+        bail!("TTA requires at least the unshifted posterior");
+    }
+    let mut shifts = HashSet::with_capacity(views.len());
+    let mut total = [0.0_f32; KEY_COUNT];
+    let mut total_weight = 0.0_f32;
+    for (shift, posterior) in views {
+        if !shifts.insert(*shift) {
+            bail!("TTA semitone shifts must be unique");
+        }
+        let aligned = align_transposed_posterior(posterior, *shift)?;
+        let weight = if *shift == 0 { original_weight } else { 1.0 };
+        for (target, value) in total.iter_mut().zip(aligned) {
+            *target += value * weight;
+        }
+        total_weight += weight;
+    }
+    if !shifts.contains(&0) {
+        bail!("TTA requires exactly one unshifted posterior");
+    }
+    for value in &mut total {
+        *value /= total_weight;
+    }
+    validate_posterior(&total)?;
+    Ok(total)
+}
+
+fn validate_posterior(posterior: &[f32; KEY_COUNT]) -> Result<()> {
+    if posterior
+        .iter()
+        .any(|value| !value.is_finite() || *value < 0.0)
+    {
+        bail!("neural-key posterior must contain finite non-negative values");
+    }
+    let sum = posterior.iter().sum::<f32>();
+    if !sum.is_finite() || (sum - 1.0).abs() > 1.0e-3 {
+        bail!("neural-key posterior must sum to one");
+    }
+    Ok(())
+}
+
 #[cfg(feature = "neural-key")]
 mod runtime {
     use std::sync::Mutex;
@@ -225,6 +348,7 @@ mod runtime {
     use ort::value::Tensor;
 
     use super::{aggregate_chunk_logits, LoadedNeuralKeyArtifact, KEY_COUNT};
+    use crate::neural_key_preprocess::MynaMelPreprocessor;
 
     static ORT_RUNTIME: Mutex<Option<std::path::PathBuf>> = Mutex::new(None);
 
@@ -252,6 +376,7 @@ mod runtime {
     pub struct NeuralKeySession {
         pub artifact: LoadedNeuralKeyArtifact,
         session: Session,
+        mel_preprocessor: MynaMelPreprocessor,
     }
 
     impl NeuralKeySession {
@@ -272,7 +397,23 @@ mod runtime {
                 .commit_from_file(&artifact.model_path)
                 .map_err(|error| anyhow!(error.to_string()))
                 .with_context(|| format!("loading {}", artifact.model_path.display()))?;
-            Ok(Self { artifact, session })
+            Ok(Self {
+                artifact,
+                session,
+                mel_preprocessor: MynaMelPreprocessor::new(),
+            })
+        }
+
+        /// Prepare finite mono 16 kHz samples using the artifact-pinned nnAudio
+        /// contract, then run and aggregate every complete 196-frame chunk.
+        pub fn predict_audio_16khz(&mut self, samples: &[f32]) -> Result<[f32; KEY_COUNT]> {
+            if !self.artifact.contract.supports_native_myna_preprocessing() {
+                bail!("artifact does not enable native Myna audio preprocessing");
+            }
+            let prepared = self
+                .mel_preprocessor
+                .prepare(samples, self.artifact.mel_frames)?;
+            self.predict_mel_chunks(prepared.values, prepared.chunk_count)
         }
 
         /// Run prepared Myna mel chunks. Call this from a background task; a
@@ -350,6 +491,35 @@ mod tests {
     }
 
     #[test]
+    fn transposed_posteriors_align_in_the_rust_harmony_order() {
+        let mut d_major_after_plus_two = [0.0_f32; KEY_COUNT];
+        d_major_after_plus_two[2] = 1.0;
+        let aligned = align_transposed_posterior(&d_major_after_plus_two, 2).unwrap();
+        assert_eq!(aligned[0], 1.0); // original C major
+
+        let mut b_minor_after_minus_one = [0.0_f32; KEY_COUNT];
+        b_minor_after_minus_one[23] = 1.0;
+        let aligned = align_transposed_posterior(&b_minor_after_minus_one, -1).unwrap();
+        assert_eq!(aligned[12], 1.0); // original C minor
+    }
+
+    #[test]
+    fn probability_tta_matches_the_winning_evaluator_contract() {
+        let mut original = [0.0_f32; KEY_COUNT];
+        original[0] = 1.0;
+        let mut plus_two = [0.0_f32; KEY_COUNT];
+        plus_two[2] = 1.0;
+        let averaged =
+            aggregate_transposition_posteriors(&[(0, original), (2, plus_two)], 2.0).unwrap();
+        assert_eq!(averaged[0], 1.0);
+        assert!((averaged.iter().sum::<f32>() - 1.0).abs() < 1.0e-6);
+
+        assert!(aggregate_transposition_posteriors(&[(2, plus_two)], 1.0).is_err());
+        assert!(aggregate_transposition_posteriors(&[(0, original), (0, original)], 1.0).is_err());
+        assert!(align_transposed_posterior(&original, 7).is_err());
+    }
+
+    #[test]
     fn artifact_load_checks_contract_size_and_checksum() {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -363,8 +533,8 @@ mod tests {
         let model_path = directory.join("key-model.onnx");
         std::fs::write(&model_path, b"model").unwrap();
         let manifest = serde_json::json!({
-            "schema_version": 1,
-            "artifact_kind": "tunelock-neural-key-chunk-v1",
+            "schema_version": 2,
+            "artifact_kind": "tunelock-neural-key-chunk-v2",
             "status": "test-only",
             "model_file": "key-model.onnx",
             "model_sha256": sha256(&model_path).unwrap(),
@@ -375,7 +545,20 @@ mod tests {
                 "shape": ["chunk_count", 1, 128, 196],
                 "sample_rate_hz": 16000,
                 "audio_samples_per_chunk": 100000,
-                "preprocessor": "test fixture"
+                "preprocessor": "test fixture",
+                "preprocessing": {
+                    "implementation": "nnAudio MelSpectrogram",
+                    "version": "0.3.3",
+                    "n_fft": 2048,
+                    "hop_length": 512,
+                    "n_mels": 128,
+                    "window": "periodic Hann",
+                    "center": true,
+                    "pad_mode": "reflect",
+                    "power": 2.0,
+                    "mel_scale": "Slaney",
+                    "normalization": "area"
+                }
             },
             "output": {
                 "name": "chunk_logits",
@@ -395,6 +578,24 @@ mod tests {
         let artifact = LoadedNeuralKeyArtifact::load(&directory).unwrap();
         assert_eq!(artifact.mel_bins, 128);
         assert_eq!(artifact.mel_frames, 196);
+        assert!(artifact.contract.supports_native_myna_preprocessing());
+
+        let mut legacy_manifest = manifest.clone();
+        legacy_manifest["schema_version"] = serde_json::json!(1);
+        legacy_manifest["artifact_kind"] = serde_json::json!("tunelock-neural-key-chunk-v1");
+        legacy_manifest["input"]
+            .as_object_mut()
+            .unwrap()
+            .remove("preprocessing");
+        let legacy: NeuralKeyArtifact = serde_json::from_value(legacy_manifest).unwrap();
+        assert!(legacy.validate().is_ok());
+        assert!(!legacy.supports_native_myna_preprocessing());
+
+        let mut invalid_manifest = manifest.clone();
+        invalid_manifest["input"]["preprocessing"]["hop_length"] = serde_json::json!(256);
+        let invalid: NeuralKeyArtifact = serde_json::from_value(invalid_manifest).unwrap();
+        assert!(invalid.validate().is_err());
+
         std::fs::write(&model_path, b"other").unwrap();
         assert!(LoadedNeuralKeyArtifact::load(&directory).is_err());
 

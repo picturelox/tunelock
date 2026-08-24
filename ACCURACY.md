@@ -128,27 +128,43 @@ target. The larger model is therefore rejected for integration in this
 checkpoint. Model size alone did not improve key accuracy or error diversity.
 
 Separately, the current Myna-Vertical research candidate now has a reproducible
-deployment-shaped artifact path:
+deployment-shaped artifact path (updated 2026-08-24):
 
 - one combined backbone + key-head ONNX graph, 162,782,585 bytes;
 - ONNX Runtime CPU parity within 1.02e-6 maximum absolute logit error, with
   identical test-batch argmaxes;
-- a schema-1 manifest binding the model SHA-256, exact input/output shapes,
-  Rust-canonical 24-label order, aggregation rule, model revision, and explicit
-  research/data-rights status;
+- a schema-2 manifest binding the model SHA-256, exact input/output shapes,
+  Rust-canonical 24-label order, aggregation rule, model revision, explicit
+  research/data-rights status, and machine-readable preprocessing parameters;
 - an opt-in Rust `neural-key` feature that validates the manifest, size, hash,
   labels, and finite logits, then loads an externally supplied ONNX Runtime;
-- a real Rust smoke that loaded that graph and produced a normalized posterior
-  from one synthetic mel chunk.
+- a native 16 kHz audio-to-mel implementation of the pinned nnAudio 0.3.3
+  contract (2048-point periodic-Hann STFT, 512 hop, reflect centering, 128
+  Slaney area-normalized bands, power 2, and 196-frame chunks);
+- deterministic parity against the committed nnAudio reference fixture:
+  maximum absolute mel error 0.0002594 and maximum scaled relative error
+  0.00000356;
+- a real Rust smoke that loaded the 162,782,585-byte schema-2 graph, ran
+  deterministic 16 kHz audio through native preprocessing, and produced a
+  finite normalized 24-key posterior (sum 1.0);
+- Rust-native major/minor-preserving transposition alignment and the winning
+  probability-space view average, with range, duplicate-shift, vocabulary, and
+  posterior validation tests.
 
 This is a production boundary, not production promotion. The default build
 still downloads and bundles no model or runtime, and the release analyzer still
-returns the classical result first. Exact Rust preprocessing parity, a sealed
-final holdout, calibration, latency, rights review, artifact distribution, and
-background lifecycle/UI integration remain open gates. The graph covers the
-base acoustic view; the 70.4% result also requires pitch-view generation,
-Rust-aligned TTA, and cross-view aggregation, which have not yet been reproduced
-as an end-to-end Rust production path.
+returns the classical result first. Real-file decode/downmix/resampler parity,
+a sealed final holdout, calibration, latency, rights review, artifact
+distribution, and background lifecycle/UI integration remain open gates. The
+graph covers the base acoustic view; Rust now owns the alignment and cross-view
+probability average, but the 70.4% result still requires pitch-preserving view
+generation and orchestration through every view. The measured key scores above
+are unchanged by this infrastructure checkpoint.
+
+The full release-mode GiantSteps benchmark was rerun after this checkpoint:
+604/604 scored with zero failures, 389 exact (64.4%), 0.725 MIREX, 69.0% tonic
+accuracy, and 85.1% Camelot compatibility. This exactly reproduces the frozen
+classical baseline; the local immediate result did not regress.
 
 Dataset/protocol audit:
 

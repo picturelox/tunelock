@@ -18,6 +18,7 @@ import shutil
 from typing import Any
 
 import numpy as np
+import nnAudio
 import onnx
 import onnxruntime
 import torch
@@ -71,6 +72,8 @@ def load_json(path: Path) -> dict[str, Any]:
 
 def main() -> int:
     args = parse_args()
+    if nnAudio.__version__ != "0.3.3":
+        raise ValueError(f"Expected pinned nnAudio 0.3.3, found {nnAudio.__version__}")
     if args.output_dir.exists():
         raise FileExistsError(f"Refusing to overwrite artifact directory: {args.output_dir}")
     if args.opset < 17:
@@ -180,8 +183,8 @@ def main() -> int:
             )
 
         artifact = {
-            "schema_version": 1,
-            "artifact_kind": "tunelock-neural-key-chunk-v1",
+            "schema_version": 2,
+            "artifact_kind": "tunelock-neural-key-chunk-v2",
             "status": "research candidate; not production-enabled",
             "model_file": onnx_path.name,
             "model_sha256": sha256(onnx_path),
@@ -194,9 +197,21 @@ def main() -> int:
                 "sample_rate_hz": int(backbone.config.sr),
                 "audio_samples_per_chunk": n_samples,
                 "preprocessor": (
-                    "exact pinned Myna nnAudio MelSpectrogram output; production "
-                    "preprocessor parity is a separate promotion gate"
+                    "native TuneLock parity implementation of pinned nnAudio MelSpectrogram"
                 ),
+                "preprocessing": {
+                    "implementation": "nnAudio MelSpectrogram",
+                    "version": "0.3.3",
+                    "n_fft": 2048,
+                    "hop_length": 512,
+                    "n_mels": n_mels,
+                    "window": "periodic Hann",
+                    "center": True,
+                    "pad_mode": "reflect",
+                    "power": 2.0,
+                    "mel_scale": "Slaney",
+                    "normalization": "area",
+                },
             },
             "output": {
                 "name": "chunk_logits",
