@@ -18,6 +18,8 @@ pub mod command;
 pub mod engine;
 pub mod eq;
 pub mod filter;
+#[cfg(test)]
+pub mod dsp_char;
 pub mod intelligence;
 pub mod io;
 pub mod meter;
