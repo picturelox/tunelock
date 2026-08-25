@@ -111,6 +111,12 @@ pub enum EngineCommand {
         at_frame: u64,
         rate: f32,
     },
+    /// Set player pitch shift in semitones (independent of tempo).
+    SetPitch {
+        player: PlayerId,
+        at_frame: u64,
+        semitones: f32,
+    },
     /// Set player gain with a ramp to avoid clicks.
     SetGain {
         player: PlayerId,

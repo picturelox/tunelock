@@ -211,6 +211,12 @@ impl CallbackState {
                     self.players[idx].set_tempo(rate);
                 }
             }
+            EngineCommand::SetPitch { player, semitones, .. } => {
+                let idx = player.as_index();
+                if idx < MAX_PLAYERS {
+                    self.players[idx].set_pitch_semitones(semitones);
+                }
+            }
             EngineCommand::SetGain { player, gain, ramp_frames, .. } => {
                 let idx = player.as_index();
                 if idx < MAX_PLAYERS {
@@ -367,6 +373,7 @@ impl CommandFrame for EngineCommand {
             | EngineCommand::Resume { at_frame, .. }
             | EngineCommand::Seek { at_frame, .. }
             | EngineCommand::SetTempo { at_frame, .. }
+            | EngineCommand::SetPitch { at_frame, .. }
             | EngineCommand::SetGain { at_frame, .. }
             | EngineCommand::SetPan { at_frame, .. }
             | EngineCommand::SetMute { at_frame, .. }

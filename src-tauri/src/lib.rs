@@ -139,6 +139,7 @@ pub fn run() {
             commands::audio_engine_seek,
             commands::audio_engine_set_crossfade,
             commands::audio_engine_set_tempo,
+            commands::audio_engine_set_pitch,
             commands::audio_engine_set_player_gain,
             commands::audio_engine_set_pan,
             commands::audio_engine_set_mute,

@@ -21,6 +21,7 @@ pub mod intelligence;
 pub mod meter;
 pub mod player;
 pub mod ring_buffer;
+pub mod timepitch;
 pub mod worker;
 
 pub use bus::Bus;
@@ -37,4 +38,5 @@ pub use intelligence::{
 pub use meter::{MeterSnapshot, MeterReadout, PlayerMeterReadout};
 pub use player::Player;
 pub use ring_buffer::{RingBufferConsumer, RingBufferProducer, create_ring_buffer};
+pub use timepitch::{TimePitchProcessor, default_processor};
 pub use worker::{decode_file, DecodeResult};

@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use super::command::{PlayerId, BusId, DecodedBuffer, EqBand, LoopRegion, SourceHandle, BeatGridCompact};
 use super::eq::DjIsolator;
+use super::timepitch::{TimePitchProcessor, default_processor};
 
 /// Ramped gain to avoid clicks.
 struct RampedGain {
@@ -67,12 +68,13 @@ pub struct Player {
     pub muted: bool,
     pub soloed: bool,
 
-    // Source handle and shared buffer (set by Launch)
+    // Source handle (set by Launch); the buffer lives in the processor
     source_handle: Option<SourceHandle>,
     buffer: Option<Arc<DecodedBuffer>>,
 
-    // Position in the source buffer (in samples, per channel)
-    source_position: f64, // Fractional for tempo adjustment
+    // Time/pitch engine — the replaceable abstraction. Owns the source
+    // position; the player never reads the buffer directly.
+    processor: Box<dyn TimePitchProcessor>,
 
     // Bus assignment
     pub bus: BusId,
@@ -85,9 +87,6 @@ pub struct Player {
 
     // Pan (-1.0 to 1.0)
     pan: f64,
-
-    // Tempo (playback rate — 1.0 = original)
-    tempo: f32,
 
     // Loop region (in beats, relative to beat grid)
     loop_region: Option<LoopRegion>,
@@ -114,12 +113,11 @@ impl Player {
             soloed: false,
             source_handle: None,
             buffer: None,
-            source_position: 0.0,
+            processor: default_processor(),
             bus: if id.0 == 0 { BusId::A } else { BusId::B },
             eq: DjIsolator::new(sample_rate),
             gain: RampedGain::new(sample_rate),
             pan: 0.0,
-            tempo: 1.0,
             loop_region: None,
             bpm: 120.0,
             first_beat_sec: 0.0,
@@ -145,9 +143,8 @@ impl Player {
         // Convert start_beat to source position
         let beat_duration_sec = 60.0 / self.bpm;
         let start_sec = self.first_beat_sec + start_beat * beat_duration_sec;
-        let start_sample = start_sec * buffer.sample_rate as f64;
-        let max = (buffer.samples.len() / buffer.channels as usize) as f64;
-        self.source_position = start_sample.min(max).max(0.0);
+        let start_frame = start_sec * buffer.sample_rate as f64;
+        self.processor.set_source(buffer.clone(), start_frame);
         self.buffer = Some(buffer);
         self.playing = true;
         self.eq.reset();
@@ -161,8 +158,8 @@ impl Player {
         } else {
             self.bpm = buffer.bpm.unwrap_or(120.0);
         }
+        self.processor.set_source(buffer.clone(), 0.0);
         self.buffer = Some(buffer);
-        self.source_position = 0.0;
         self.eq.reset();
     }
 
@@ -180,7 +177,8 @@ impl Player {
 
     pub fn stop(&mut self) {
         self.playing = false;
-        self.source_position = 0.0;
+        self.processor.seek_frames(0.0);
+        self.processor.reset();
         self.eq.reset();
     }
 
@@ -188,24 +186,28 @@ impl Player {
         if let Some(buf) = &self.buffer {
             let beat_duration_sec = 60.0 / self.bpm;
             let pos_sec = self.first_beat_sec + source_beat * beat_duration_sec;
-            let sample = pos_sec * buf.sample_rate as f64;
-            let max = (buf.samples.len() / buf.channels as usize) as f64;
-            self.source_position = sample.min(max).max(0.0);
+            let frame = pos_sec * buf.sample_rate as f64;
+            self.processor.seek_frames(frame);
         }
+        self.processor.reset();
         self.eq.reset();
     }
 
     pub fn seek_sec(&mut self, position_sec: f64) {
         if let Some(buf) = &self.buffer {
-            let sample = position_sec * buf.sample_rate as f64;
-            let max = (buf.samples.len() / buf.channels as usize) as f64;
-            self.source_position = sample.min(max).max(0.0);
+            let frame = position_sec * buf.sample_rate as f64;
+            self.processor.seek_frames(frame);
         }
+        self.processor.reset();
         self.eq.reset();
     }
 
     pub fn set_tempo(&mut self, rate: f32) {
-        self.tempo = rate;
+        self.processor.set_tempo_ratio(rate as f64);
+    }
+
+    pub fn set_pitch_semitones(&mut self, semitones: f32) {
+        self.processor.set_pitch_semitones(semitones as f64);
     }
 
     pub fn set_gain(&mut self, gain: f32, ramp_frames: u32) {
@@ -243,7 +245,7 @@ impl Player {
 
     pub fn get_position_sec(&self) -> f64 {
         if let Some(buf) = &self.buffer {
-            self.source_position / buf.sample_rate as f64
+            self.processor.position_frames() / buf.sample_rate as f64
         } else {
             0.0
         }
@@ -287,34 +289,42 @@ impl Player {
     /// Process one stereo sample pair from this player.
     /// Returns (left, right) output. If not playing, muted, or no buffer,
     /// returns (0, 0). The caller (engine) routes the output to the bus.
+    /// The time/pitch processor owns source positioning and interpolation.
     #[inline]
     pub fn process_sample(&mut self, any_soloed: bool) -> (f64, f64) {
         if !self.is_audible(any_soloed) {
             return (0.0, 0.0);
         }
 
-        let buf = match &self.buffer {
-            Some(b) => b,
-            None => return (0.0, 0.0),
-        };
-
-        let channels = buf.channels as usize;
-        let total_frames = buf.samples.len() / channels;
-        let pos = self.source_position as usize;
-
-        // Check for end of buffer
-        if pos >= total_frames {
-            self.playing = false;
+        if self.buffer.is_none() {
             return (0.0, 0.0);
         }
 
-        // Read source sample (stereo — take first two channels)
-        let src_l = buf.samples[pos * channels] as f64;
-        let src_r = if channels >= 2 {
-            buf.samples[pos * channels + 1] as f64
-        } else {
-            src_l
+        // Pull the next frame from the time/pitch processor
+        let (src_l, src_r) = match self.processor.next_frame() {
+            Some(frame) => frame,
+            None => {
+                self.playing = false;
+                return (0.0, 0.0);
+            }
         };
+
+        // Handle looping: wrap the processor position when it crosses the
+        // loop end (checked in source frames).
+        if let Some(loop_region) = &self.loop_region {
+            let beat_duration_sec = 60.0 / self.bpm;
+            let loop_start_sec = self.first_beat_sec + loop_region.start_beat * beat_duration_sec;
+            let loop_end_sec = loop_start_sec + loop_region.length_beats * beat_duration_sec;
+            let sample_rate = self.buffer.as_ref().map(|b| b.sample_rate as f64).unwrap_or(44100.0);
+            let loop_end_frame = loop_end_sec * sample_rate;
+
+            if self.processor.position_frames() >= loop_end_frame {
+                let loop_start_frame = loop_start_sec * sample_rate;
+                self.processor.seek_frames(loop_start_frame);
+                self.processor.reset();
+                self.eq.reset();
+            }
+        }
 
         // Apply per-player EQ
         let (eq_l, eq_r) = self.eq.process(src_l, src_r);
@@ -342,23 +352,6 @@ impl Player {
         if abs_r > self.block_peak[1] { self.block_peak[1] = abs_r; }
         if abs_l >= 1.0 { self.clip[0] = true; }
         if abs_r >= 1.0 { self.clip[1] = true; }
-
-        // Advance source position by tempo
-        self.source_position += self.tempo as f64;
-
-        // Handle looping
-        if let Some(loop_region) = &self.loop_region {
-            let beat_duration_sec = 60.0 / self.bpm;
-            let loop_start_sec = self.first_beat_sec + loop_region.start_beat * beat_duration_sec;
-            let loop_end_sec = loop_start_sec + loop_region.length_beats * beat_duration_sec;
-            let loop_end_sample = loop_end_sec * buf.sample_rate as f64;
-
-            if self.source_position >= loop_end_sample {
-                let loop_start_sample = loop_start_sec * buf.sample_rate as f64;
-                self.source_position = loop_start_sample;
-                self.eq.reset();
-            }
-        }
 
         (out_l, out_r)
     }

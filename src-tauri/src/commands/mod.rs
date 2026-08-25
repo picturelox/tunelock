@@ -1797,6 +1797,20 @@ pub async fn audio_engine_set_tempo(state: State<'_, AppState>, player: u8, rate
 }
 
 #[command]
+pub async fn audio_engine_set_pitch(state: State<'_, AppState>, player: u8, semitones: f32) -> Result<(), String> {
+    let engine_slot = state.audio_engine.lock().await;
+    if let Some(engine) = engine_slot.as_ref() {
+        let frame = engine.current_frame();
+        engine.send_command(crate::audio::EngineCommand::SetPitch {
+            player: crate::audio::PlayerId(player),
+            at_frame: frame,
+            semitones,
+        });
+    }
+    Ok(())
+}
+
+#[command]
 pub async fn audio_engine_set_player_gain(state: State<'_, AppState>, player: u8, gain: f32) -> Result<(), String> {
     let engine_slot = state.audio_engine.lock().await;
     if let Some(engine) = engine_slot.as_ref() {
