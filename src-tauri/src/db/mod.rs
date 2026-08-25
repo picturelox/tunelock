@@ -1147,4 +1147,106 @@ impl Database {
         )?;
         Ok(())
     }
+
+    // ── PB-2 Listening Lab ───────────────────────────────────────────
+
+    pub fn save_listening_lab_result(
+        &self,
+        timestamp: &str,
+        processor: &str,
+        tempo_percent: f64,
+        pitch_semitones: f64,
+        material: &str,
+        track_name: Option<&str>,
+        transients: u8,
+        bass: u8,
+        vocals: u8,
+        stereo: u8,
+        artifacts: u8,
+        overall: u8,
+        abx_correct: Option<u32>,
+        abx_trials: Option<u32>,
+        notes: Option<&str>,
+    ) -> Result<i64> {
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS listening_lab_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                processor TEXT NOT NULL,
+                tempo_percent REAL NOT NULL,
+                pitch_semitones REAL NOT NULL,
+                material TEXT NOT NULL,
+                track_name TEXT,
+                transients INTEGER NOT NULL,
+                bass INTEGER NOT NULL,
+                vocals INTEGER NOT NULL,
+                stereo INTEGER NOT NULL,
+                artifacts INTEGER NOT NULL,
+                overall INTEGER NOT NULL,
+                abx_correct INTEGER,
+                abx_trials INTEGER,
+                notes TEXT
+            )",
+            [],
+        )?;
+        self.conn.execute(
+            "INSERT INTO listening_lab_results (
+                timestamp, processor, tempo_percent, pitch_semitones, material,
+                track_name, transients, bass, vocals, stereo, artifacts, overall,
+                abx_correct, abx_trials, notes
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            params![
+                timestamp,
+                processor,
+                tempo_percent,
+                pitch_semitones,
+                material,
+                track_name,
+                transients as i64,
+                bass as i64,
+                vocals as i64,
+                stereo as i64,
+                artifacts as i64,
+                overall as i64,
+                abx_correct.map(|v| v as i64),
+                abx_trials.map(|v| v as i64),
+                notes,
+            ],
+        )?;
+        Ok(self.conn.last_insert_rowid())
+    }
+
+    pub fn get_listening_lab_results(&self) -> Result<Vec<crate::commands::ListeningLabResult>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, timestamp, processor, tempo_percent, pitch_semitones,
+             material, track_name, transients, bass, vocals, stereo, artifacts,
+             overall, abx_correct, abx_trials, notes
+             FROM listening_lab_results ORDER BY timestamp DESC LIMIT 500",
+        )?;
+        let results = stmt.query_map([], |row| {
+            Ok(crate::commands::ListeningLabResult {
+                id: row.get(0)?,
+                timestamp: row.get(1)?,
+                processor: row.get(2)?,
+                tempo_percent: row.get(3)?,
+                pitch_semitones: row.get(4)?,
+                material: row.get(5)?,
+                track_name: row.get(6)?,
+                transients: row.get::<_, i64>(7)? as u8,
+                bass: row.get::<_, i64>(8)? as u8,
+                vocals: row.get::<_, i64>(9)? as u8,
+                stereo: row.get::<_, i64>(10)? as u8,
+                artifacts: row.get::<_, i64>(11)? as u8,
+                overall: row.get::<_, i64>(12)? as u8,
+                abx_correct: row.get::<_, Option<i64>>(13)?.map(|v| v as u32),
+                abx_trials: row.get::<_, Option<i64>>(14)?.map(|v| v as u32),
+                notes: row.get(15)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for r in results {
+            out.push(r?);
+        }
+        Ok(out)
+    }
 }

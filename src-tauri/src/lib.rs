@@ -161,6 +161,10 @@ pub fn run() {
             commands::audio_engine_set_device,
             // Beat-grid DSP
             commands::detect_beat_grid,
+            // PB-2 Listening Lab
+            commands::listening_lab_get_processor_info,
+            commands::listening_lab_save_result,
+            commands::listening_lab_get_results,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

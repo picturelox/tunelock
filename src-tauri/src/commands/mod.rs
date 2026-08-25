@@ -2299,3 +2299,89 @@ pub async fn audio_engine_set_device(
 
     Ok(new_sr)
 }
+
+// ── PB-2 Listening Lab ───────────────────────────────────────────────
+//
+// Developer-only tool for human validation of the time/pitch processor.
+// Uses the production Performance Engine and SignalsmithProcessor.
+// Results are persisted locally as JSON for comparison across DSP revisions.
+
+/// Processor information for the Listening Lab display.
+#[derive(serde::Serialize)]
+pub struct ListeningLabProcessorInfo {
+    /// "signalsmith" or "varispeed"
+    pub processor_type: String,
+    /// Algorithmic latency in frames
+    pub latency_frames: usize,
+    /// Engine sample rate
+    pub sample_rate: u32,
+}
+
+/// A saved listening lab result.
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub struct ListeningLabResult {
+    pub id: Option<i64>,
+    pub timestamp: String,
+    pub processor: String,
+    pub tempo_percent: f64,
+    pub pitch_semitones: f64,
+    pub material: String,
+    pub track_name: Option<String>,
+    pub transients: u8,
+    pub bass: u8,
+    pub vocals: u8,
+    pub stereo: u8,
+    pub artifacts: u8,
+    pub overall: u8,
+    pub abx_correct: Option<u32>,
+    pub abx_trials: Option<u32>,
+    pub notes: Option<String>,
+}
+
+#[command]
+pub async fn listening_lab_get_processor_info(
+    state: State<'_, AppState>,
+) -> Result<ListeningLabProcessorInfo, String> {
+    let engine_slot = state.audio_engine.lock().await;
+    let engine = engine_slot.as_ref().ok_or("Audio engine not initialized")?;
+    Ok(ListeningLabProcessorInfo {
+        processor_type: "signalsmith".to_string(),
+        latency_frames: 0, // TODO: expose from player processor
+        sample_rate: engine.sample_rate() as u32,
+    })
+}
+
+#[command]
+pub async fn listening_lab_save_result(
+    state: State<'_, AppState>,
+    result: ListeningLabResult,
+) -> Result<i64, String> {
+    let db = state.db.lock().await;
+    db.save_listening_lab_result(
+        &result.timestamp,
+        &result.processor,
+        result.tempo_percent,
+        result.pitch_semitones,
+        &result.material,
+        result.track_name.as_deref(),
+        result.transients,
+        result.bass,
+        result.vocals,
+        result.stereo,
+        result.artifacts,
+        result.overall,
+        result.abx_correct,
+        result.abx_trials,
+        result.notes.as_deref(),
+    )
+    .map_err(|e| format!("Failed to save listening lab result: {}", e))
+}
+
+#[command]
+pub async fn listening_lab_get_results(
+    state: State<'_, AppState>,
+) -> Result<Vec<ListeningLabResult>, String> {
+    let db = state.db.lock().await;
+    db.get_listening_lab_results()
+        .map_err(|e| format!("Failed to query listening lab results: {}", e))
+}

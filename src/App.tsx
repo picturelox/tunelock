@@ -8,10 +8,11 @@ import MixWorkspace from './components/mix/MixWorkspace';
 import DeliveryView from './components/delivery/DeliveryView';
 import GoldView from './components/gold/GoldView';
 import AssistView from './components/assist/AssistView';
+import ListeningLab from './components/listeninglab/ListeningLab';
 import { useLibraryStore } from './stores/libraryStore';
 import { onTrackAnalyzed, onMetadataBatchComplete, onAnalysisProgress } from './lib/tauri';
 
-export type View = 'console' | 'analyze' | 'library' | 'mix' | 'delivery' | 'gold' | 'assist';
+export type View = 'console' | 'analyze' | 'library' | 'mix' | 'delivery' | 'gold' | 'assist' | 'listening-lab';
 
 function App() {
   const [currentView, setCurrentView] = useState<View>('analyze');
@@ -77,6 +78,8 @@ function App() {
         return <GoldView />;
       case 'assist':
         return <AssistView />;
+      case 'listening-lab':
+        return <ListeningLab />;
       default:
         return <ConsoleView />;
     }

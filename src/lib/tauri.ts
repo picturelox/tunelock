@@ -469,6 +469,10 @@ export async function audioEngineSetTempo(player: number, rate: number): Promise
   return invoke('audio_engine_set_tempo', { player, rate });
 }
 
+export async function audioEngineSetPitch(player: number, semitones: number): Promise<void> {
+  return invoke('audio_engine_set_pitch', { player, semitones });
+}
+
 export async function audioEngineSetPlayerGain(player: number, gain: number): Promise<void> {
   return invoke('audio_engine_set_player_gain', { player, gain });
 }
@@ -546,4 +550,43 @@ export interface BeatGridDetectionResult {
 
 export async function detectBeatGrid(trackId: number): Promise<BeatGridDetectionResult> {
   return invoke('detect_beat_grid', { trackId });
+}
+
+// === PB-2 Listening Lab ===
+
+export interface ListeningLabProcessorInfo {
+  processorType: string;
+  latencyFrames: number;
+  sampleRate: number;
+}
+
+export interface ListeningLabResult {
+  id?: number;
+  timestamp: string;
+  processor: string;
+  tempoPercent: number;
+  pitchSemitones: number;
+  material: string;
+  trackName?: string;
+  transients: number;
+  bass: number;
+  vocals: number;
+  stereo: number;
+  artifacts: number;
+  overall: number;
+  abxCorrect?: number;
+  abxTrials?: number;
+  notes?: string;
+}
+
+export async function listeningLabGetProcessorInfo(): Promise<ListeningLabProcessorInfo> {
+  return invoke('listening_lab_get_processor_info');
+}
+
+export async function listeningLabSaveResult(result: ListeningLabResult): Promise<number> {
+  return invoke('listening_lab_save_result', { result });
+}
+
+export async function listeningLabGetResults(): Promise<ListeningLabResult[]> {
+  return invoke('listening_lab_get_results');
 }

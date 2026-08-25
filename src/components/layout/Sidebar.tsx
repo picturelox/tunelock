@@ -10,6 +10,7 @@ import {
   Sparkles,
   FlaskConical,
   ChevronDown,
+  Headphones,
 } from 'lucide-react';
 import type { View } from '../../App';
 
@@ -29,6 +30,7 @@ const experimentalNavItems: { view: View; label: string; icon: typeof Activity }
   { view: 'delivery', label: 'Delivery', icon: PackageOpen },
   { view: 'gold', label: 'Gold Set', icon: GraduationCap },
   { view: 'assist', label: 'Assist', icon: Sparkles },
+  { view: 'listening-lab', label: 'Listening Lab', icon: Headphones },
 ];
 
 export default function Sidebar({ currentView, onViewChange }: SidebarProps) {
