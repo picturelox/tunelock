@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "experiment": "fmak-corpus-lock-v1-freeze",
+  "input_manifest_sha256": "7f2ae05b46f61a34ace4e0174c5d35bc303f9d0637c132ccd71d2768effb7289",
+  "verification_report_sha256": "0533ef6f1ea34ff37a80d3332436375ad755c542bd27380990e3c728ba165964",
+  "locked_manifest_sha256": "92704e786644148593fabbdb40a6628123c5c34917557398d9026863aa1db08d",
+  "lock_script_sha256": "58a4001ef84279d0d52f068c9af274f9c77de68a276527cfbf44f1bebc90c10a",
+  "total_records": 5489,
+  "quarantined_ids": [
+    "098877",
+    "099017"
+  ],
+  "recording_families": 4906,
+  "exact_duplicate_groups": 47,
+  "near_duplicate_pairs": 1190,
+  "near_dup_threshold": 0.995,
+  "fold_counts": {
+    "holdout": 548,
+    "fold_1": 988,
+    "fold_2": 988,
+    "fold_3": 988,
+    "fold_4": 988,
+    "fold_5": 987
+  },
+  "research_training": {
+    "total": 5487,
+    "folds": {
+      "fold_3": 988,
+      "fold_4": 988,
+      "fold_2": 988,
+      "fold_1": 988,
+      "fold_5": 987,
+      "holdout": 548
+    },
+    "license_distribution": {
+      "noncommercial": 4901,
+      "cc_by": 372,
+      "cc_by_sa": 158,
+      "public_domain": 35,
+      "unknown": 21
+    }
+  },
+  "product_training": {
+    "total": 565,
+    "folds": {
+      "fold_3": 110,
+      "fold_2": 109,
+      "fold_1": 107,
+      "fold_4": 103,
+      "fold_5": 96,
+      "holdout": 40
+    },
+    "license_distribution": {
+      "cc_by": 372,
+      "cc_by_sa": 158,
+      "public_domain": 35
+    }
+  },
+  "warning": "This freeze file records the corpus state before any FMAK model evaluation. The locked manifest (hashed above) contains the full per-record fold assignments. Research training includes all non-quarantined records; product training excludes NonCommercial-licensed audio."
+}
