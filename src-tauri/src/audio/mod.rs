@@ -23,6 +23,8 @@ pub mod io;
 pub mod meter;
 pub mod player;
 #[cfg(test)]
+pub mod qg_pb2;
+#[cfg(test)]
 pub mod rt_audit;
 pub mod ring_buffer;
 pub mod timepitch;
