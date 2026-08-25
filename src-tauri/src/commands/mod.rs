@@ -1981,6 +1981,55 @@ pub async fn audio_engine_set_master_gain(state: State<'_, AppState>, gain: f32)
 }
 
 #[command]
+pub async fn audio_engine_sync_launch(
+    state: State<'_, AppState>,
+    player_a: u8,
+    player_b: u8,
+) -> Result<(), String> {
+    let engine_slot = state.audio_engine.lock().await;
+    if let Some(engine) = engine_slot.as_ref() {
+        // Schedule both launches at the same future frame. Use a small
+        // lookahead (e.g., 1024 frames ≈ 21ms at 48k) to ensure both
+        // commands arrive before the target frame.
+        let frame = engine.current_frame();
+        let target_frame = frame + 1024;
+        engine.send_command(crate::audio::EngineCommand::Resume {
+            player: crate::audio::PlayerId(player_a),
+            at_frame: target_frame,
+        });
+        engine.send_command(crate::audio::EngineCommand::Resume {
+            player: crate::audio::PlayerId(player_b),
+            at_frame: target_frame,
+        });
+    }
+    Ok(())
+}
+
+#[command]
+pub async fn audio_engine_set_processor_type(
+    state: State<'_, AppState>,
+    player: u8,
+    processor_type: String,
+) -> Result<(), String> {
+    let pt = match processor_type.as_str() {
+        "bypass" => crate::audio::command::ProcessorType::Bypass,
+        "varispeed" => crate::audio::command::ProcessorType::Varispeed,
+        "signalsmith" => crate::audio::command::ProcessorType::Signalsmith,
+        other => return Err(format!("Unknown processor type: {}", other)),
+    };
+    let engine_slot = state.audio_engine.lock().await;
+    if let Some(engine) = engine_slot.as_ref() {
+        let frame = engine.current_frame();
+        engine.send_command(crate::audio::EngineCommand::SetProcessorType {
+            player: crate::audio::PlayerId(player),
+            at_frame: frame,
+            processor_type: pt,
+        });
+    }
+    Ok(())
+}
+
+#[command]
 pub async fn audio_engine_set_bus_gain(state: State<'_, AppState>, bus: String, gain: f32) -> Result<(), String> {
     let engine_slot = state.audio_engine.lock().await;
     if let Some(engine) = engine_slot.as_ref() {
@@ -2336,6 +2385,8 @@ pub struct ListeningLabResult {
     pub abx_correct: Option<u32>,
     pub abx_trials: Option<u32>,
     pub notes: Option<String>,
+    /// Git revision at the time of the test (for DSP revision comparison).
+    pub git_revision: Option<String>,
 }
 
 #[command]
@@ -2344,10 +2395,15 @@ pub async fn listening_lab_get_processor_info(
 ) -> Result<ListeningLabProcessorInfo, String> {
     let engine_slot = state.audio_engine.lock().await;
     let engine = engine_slot.as_ref().ok_or("Audio engine not initialized")?;
+    let sr = engine.sample_rate();
+    // Create a temporary Signalsmith instance to measure its latency.
+    // This is the real algorithmic latency (input_latency + output_latency).
+    let proc = crate::audio::timepitch::default_processor(sr as f64, 2);
+    let latency = proc.latency_frames();
     Ok(ListeningLabProcessorInfo {
         processor_type: "signalsmith".to_string(),
-        latency_frames: 0, // TODO: expose from player processor
-        sample_rate: engine.sample_rate() as u32,
+        latency_frames: latency,
+        sample_rate: sr,
     })
 }
 
@@ -2373,6 +2429,7 @@ pub async fn listening_lab_save_result(
         result.abx_correct,
         result.abx_trials,
         result.notes.as_deref(),
+        result.git_revision.as_deref(),
     )
     .map_err(|e| format!("Failed to save listening lab result: {}", e))
 }

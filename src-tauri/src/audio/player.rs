@@ -171,15 +171,15 @@ impl Player {
     ///
     /// If the queue is full, the source goes into a fixed-capacity overflow
     /// buffer. On each call, we first try to flush overflow entries to the
-    /// queue. This NEVER overwrites an occupied slot — if all overflow slots
-    /// are full, the source is returned to the caller (via the return value
-    /// of set_source) for engine-side deferred destruction.
+    /// queue. This NEVER overwrites an occupied slot.
     ///
-    /// Key invariant: no Arc<DecodedBuffer> is ever dropped on the realtime
-    /// audio thread due to overflow. The overflow buffer is preallocated and
-    /// fixed-capacity; it cannot grow or allocate.
+    /// Returns any Arc that could not be stored (queue full + all overflow
+    /// slots full). The caller MUST hold the returned Arc off the realtime
+    /// thread (e.g., in an engine-level deferred list drained on the async
+    /// runtime). This guarantees no Arc<DecodedBuffer> is ever dropped on
+    /// the realtime audio thread.
     #[inline]
-    fn retire(&mut self, old: Option<Arc<DecodedBuffer>>) {
+    fn retire(&mut self, old: Option<Arc<DecodedBuffer>>) -> Option<Arc<DecodedBuffer>> {
         // First, try to flush any overflow entries to the queue
         for slot in &mut self.overflow_retire {
             if let Some(buf) = slot.take() {
@@ -195,7 +195,6 @@ impl Player {
         if let Some(buf) = old {
             if let Err(returned) = self.retired_sources.push(buf) {
                 // Queue full — store in first free overflow slot.
-                // Use Option::take() pattern to satisfy the borrow checker.
                 let mut to_store = Some(returned);
                 for slot in &mut self.overflow_retire {
                     if slot.is_none() {
@@ -204,16 +203,20 @@ impl Player {
                     }
                 }
                 // If to_store is still Some, all overflow slots were full.
-                // Use force_push as a last resort (evicts oldest queue entry).
-                // In practice, the drain on meter poll (~30Hz) prevents this.
-                if let Some(remaining) = to_store {
-                    self.retired_sources.force_push(remaining);
-                }
+                // Return it to the caller — do NOT force_push (which would
+                // evict and drop an older Arc on the realtime thread).
+                return to_store;
             }
         }
+        None
     }
 
-    pub fn launch(&mut self, handle: SourceHandle, buffer: Arc<DecodedBuffer>, start_beat: f64) {
+    pub fn launch(
+        &mut self,
+        handle: SourceHandle,
+        buffer: Arc<DecodedBuffer>,
+        start_beat: f64,
+    ) -> [Option<Arc<DecodedBuffer>>; 2] {
         self.source_handle = Some(handle);
         if let Some(bg) = &buffer.beat_grid {
             self.bpm = bg.bpm;
@@ -224,22 +227,25 @@ impl Player {
             self.first_beat_sec = 0.0;
             self.meter_numerator = 4;
         }
-        // Convert start_beat to source position
         let beat_duration_sec = 60.0 / self.bpm;
         let start_sec = self.first_beat_sec + start_beat * beat_duration_sec;
         let start_frame = start_sec * buffer.sample_rate as f64;
-        // set_source returns the processor's old source; retire it to the
-        // deferred-destruction queue so its Vec<f32> doesn't deallocate here.
         let old_processor_src = self.processor.set_source(buffer.clone(), start_frame);
         let old_buffer = self.buffer.take();
         self.buffer = Some(buffer);
-        self.retire(old_processor_src);
-        self.retire(old_buffer);
+        // retire() returns any Arc that couldn't be stored. Collect them
+        // for the caller to push to the engine-level deferred_overflow queue.
+        // Fixed array — no allocation.
+        let unstored: [Option<Arc<DecodedBuffer>>; 2] = [
+            self.retire(old_processor_src),
+            self.retire(old_buffer),
+        ];
         self.playing = true;
         self.eq.reset();
+        unstored
     }
 
-    pub fn load_buffer(&mut self, buffer: Arc<DecodedBuffer>) {
+    pub fn load_buffer(&mut self, buffer: Arc<DecodedBuffer>) -> [Option<Arc<DecodedBuffer>>; 2] {
         if let Some(bg) = &buffer.beat_grid {
             self.bpm = bg.bpm;
             self.first_beat_sec = bg.first_beat_sec;
@@ -250,13 +256,36 @@ impl Player {
         let old_processor_src = self.processor.set_source(buffer.clone(), 0.0);
         let old_buffer = self.buffer.take();
         self.buffer = Some(buffer);
-        self.retire(old_processor_src);
-        self.retire(old_buffer);
+        let unstored: [Option<Arc<DecodedBuffer>>; 2] = [
+            self.retire(old_processor_src),
+            self.retire(old_buffer),
+        ];
         self.eq.reset();
+        unstored
     }
 
     pub fn set_source_handle(&mut self, handle: SourceHandle) {
         self.source_handle = Some(handle);
+    }
+
+    /// Swap the time/pitch processor. The old processor's source Arc is
+    /// retired through the deferred-destruction queue. The new processor
+    /// gets the current source re-attached at the current audible position.
+    /// Used by the Listening Lab to switch between bypass, varispeed, and
+    /// signalsmith.
+    pub fn swap_processor(&mut self, new_processor: Box<dyn TimePitchProcessor>) {
+        let old_processor = std::mem::replace(&mut self.processor, new_processor);
+        // Re-attach the current source to the new processor at the current
+        // audible position. set_source returns the new processor's old
+        // source (None for a fresh processor), which we retire.
+        if let Some(buf) = &self.buffer {
+            let audible_pos = old_processor.position_frames();
+            let old_src = self.processor.set_source(buf.clone(), audible_pos);
+            let _ = self.retire(old_src);
+        }
+        // The old processor Box itself drops here. It's small (no large PCM
+        // buffers — those are in the source Arcs, which are handled above).
+        drop(old_processor);
     }
 
     pub fn play(&mut self) {

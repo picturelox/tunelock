@@ -37,6 +37,7 @@ mod tests {
             Arc::new(CommandQueue::new(512)),
             Arc::new(MeterSnapshot::new()),
             Arc::new(crossbeam_queue::ArrayQueue::new(128)),
+            Arc::new(crossbeam_queue::ArrayQueue::new(16)),
             SR,
         )
     }
@@ -215,6 +216,7 @@ mod tests {
             Arc::new(CommandQueue::new(512)),
             Arc::new(MeterSnapshot::new()),
             Arc::new(crossbeam_queue::ArrayQueue::new(128)),
+            Arc::new(crossbeam_queue::ArrayQueue::new(16)),
             sr,
         );
         state.command_queue.push(EngineCommand::SetMasterGain { at_frame: 0, gain: 1.0 });

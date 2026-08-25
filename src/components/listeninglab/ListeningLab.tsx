@@ -12,6 +12,8 @@ import {
   audioEngineSetLoop,
   audioEngineSetBus,
   audioEngineSetMasterGain,
+  audioEngineSetProcessorType,
+  audioEngineSyncLaunch,
   audioEngineGetMeters,
   listeningLabGetProcessorInfo,
   listeningLabSaveResult,
@@ -23,6 +25,9 @@ import {
 
 type ProcessorMode = 'original' | 'signalsmith';
 type TestMode = 'quality' | 'transport' | 'twodeck' | 'abx';
+
+// App version for tracking which DSP revision produced each result.
+const APP_VERSION = '0.1.0-pb2-listening-lab';
 
 const TEMPO_PRESETS = [-10, -6, -2, 0, 2, 6, 10];
 const PITCH_PRESETS = [-3, -1, 0, 1, 3];
@@ -57,6 +62,7 @@ export default function ListeningLab() {
   const [abxCorrect, setAbxCorrect] = useState(0);
   const [abxTrials, setAbxTrials] = useState(0);
   const [abxLastAnswer, setAbxLastAnswer] = useState<string>('');
+  const [gitRevision, setGitRevision] = useState<string>('');
 
   // Ratings
   const [transients, setTransients] = useState(0);
@@ -92,6 +98,9 @@ export default function ListeningLab() {
   useEffect(() => {
     initEngine();
     listeningLabGetResults().then(setSavedResults).catch(() => {});
+    // Get git revision for saving with results
+    // Use the Tauri app version as a fallback
+    setGitRevision(APP_VERSION);
     return () => {
       if (meterRef.current) cancelAnimationFrame(meterRef.current);
     };
@@ -184,9 +193,25 @@ export default function ListeningLab() {
   };
 
   // ABX: randomly switch between original (tempo=0, pitch=0) and processed
+  // ABX: actually route X to bypass (A) or signalsmith (B) based on abxIsB.
+  // The processor switch happens via audioEngineSetProcessorType.
+  const abxApplyProcessor = (isB: boolean) => {
+    if (isB) {
+      // B = Signalsmith with current tempo/pitch settings
+      audioEngineSetProcessorType(0, 'signalsmith');
+      audioEngineSetTempo(0, 1 + tempo / 100);
+      audioEngineSetPitch(0, pitch);
+    } else {
+      // A = bypass (true original, no processing)
+      audioEngineSetProcessorType(0, 'bypass');
+    }
+  };
+
   const abxStart = () => {
     setAbxHidden(true);
-    setAbxIsB(Math.random() < 0.5);
+    const initialIsB = Math.random() < 0.5;
+    setAbxIsB(initialIsB);
+    abxApplyProcessor(initialIsB);
     setAbxCorrect(0);
     setAbxTrials(0);
     setAbxLastAnswer('');
@@ -200,18 +225,22 @@ export default function ListeningLab() {
     setAbxCorrect(newCorrect);
     setAbxTrials(newTrials);
     setAbxLastAnswer(correct ? 'Correct!' : 'Wrong.');
-    // Next trial
-    setAbxIsB(Math.random() < 0.5);
+    // Next trial: randomly switch processor
+    const nextIsB = Math.random() < 0.5;
+    setAbxIsB(nextIsB);
+    abxApplyProcessor(nextIsB);
   };
 
   const abxStop = () => {
     setAbxHidden(false);
+    // Restore signalsmith processor
+    audioEngineSetProcessorType(0, 'signalsmith');
   };
 
   const handleSave = async () => {
     const result: ListeningLabResult = {
       timestamp: new Date().toISOString(),
-      processor: processor === 'original' ? 'original' : 'signalsmith',
+      processor: processor === 'original' ? 'bypass' : 'signalsmith',
       tempoPercent: tempo,
       pitchSemitones: pitch,
       material,
@@ -225,6 +254,7 @@ export default function ListeningLab() {
       abxCorrect: abxTrials > 0 ? abxCorrect : undefined,
       abxTrials: abxTrials > 0 ? abxTrials : undefined,
       notes: notes || undefined,
+      gitRevision: gitRevision || undefined,
     };
     try {
       await listeningLabSaveResult(result);
@@ -320,20 +350,28 @@ export default function ListeningLab() {
               <label className="text-xs text-label-dim block mb-1">PROCESSOR</label>
               <div className="flex gap-2">
                 <button
-                  onClick={() => { setProcessor('original'); applyTempo(0); applyPitch(0); }}
+                  onClick={() => {
+                    setProcessor('original');
+                    audioEngineSetProcessorType(0, 'bypass');
+                    applyTempo(0);
+                    applyPitch(0);
+                  }}
                   className={`px-3 py-1 text-sm rounded ${processor === 'original' ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}
                 >
                   Original (bypass)
                 </button>
                 <button
-                  onClick={() => setProcessor('signalsmith')}
+                  onClick={() => {
+                    setProcessor('signalsmith');
+                    audioEngineSetProcessorType(0, 'signalsmith');
+                  }}
                   className={`px-3 py-1 text-sm rounded ${processor === 'signalsmith' ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}
                 >
                   Signalsmith
                 </button>
               </div>
               <p className="text-xs text-label-dim mt-1">
-                Original = tempo/pitch at unity. Signalsmith = apply tempo/pitch below.
+                Original = true bypass (unprocessed source). Signalsmith = pitch-preserving time stretch.
               </p>
             </div>
           )}
@@ -396,12 +434,13 @@ export default function ListeningLab() {
       {/* Loop controls (transport mode) */}
       {testMode === 'transport' && (
         <div className="mb-6">
-          <label className="text-xs text-label-dim block mb-1">LOOP</label>
+          <label className="text-xs text-label-dim block mb-1">LOOP (4/4 time)</label>
           <div className="flex gap-2">
             <button onClick={() => handleSetLoop(null)} className={`px-3 py-1 text-sm rounded ${loopBeats === null ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>Off</button>
-            <button onClick={() => handleSetLoop(8)} className={`px-3 py-1 text-sm rounded ${loopBeats === 8 ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>8 bars</button>
-            <button onClick={() => handleSetLoop(16)} className={`px-3 py-1 text-sm rounded ${loopBeats === 16 ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>16 bars</button>
-            <button onClick={() => handleSetLoop(4)} className={`px-3 py-1 text-sm rounded ${loopBeats === 4 ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>4 bars</button>
+            <button onClick={() => handleSetLoop(4)} className={`px-3 py-1 text-sm rounded ${loopBeats === 4 ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>1 bar</button>
+            <button onClick={() => handleSetLoop(8)} className={`px-3 py-1 text-sm rounded ${loopBeats === 8 ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>2 bars</button>
+            <button onClick={() => handleSetLoop(16)} className={`px-3 py-1 text-sm rounded ${loopBeats === 16 ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>4 bars</button>
+            <button onClick={() => handleSetLoop(32)} className={`px-3 py-1 text-sm rounded ${loopBeats === 32 ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>8 bars</button>
           </div>
         </div>
       )}
@@ -409,21 +448,25 @@ export default function ListeningLab() {
       {/* Two-deck mode */}
       {testMode === 'twodeck' && (
         <div className="mb-6 p-4 bg-plate-dark rounded-lg border border-plate-darker">
-          <div className="flex gap-4">
+          <div className="flex gap-4 mb-3">
             <div className="flex-1">
               <h3 className="text-sm font-bold mb-2">Deck A</h3>
-              <button onClick={() => audioEnginePlay(0)} className="px-3 py-1 bg-cap-amber text-black rounded text-sm mr-2">▶ A</button>
-              <button onClick={() => audioEnginePause(0)} className="px-3 py-1 bg-plate-light rounded text-sm">❚❚</button>
+              <button onClick={() => audioEnginePause(0)} className="px-3 py-1 bg-plate-light rounded text-sm">❚❚ Pause</button>
             </div>
             <div className="flex-1">
               <h3 className="text-sm font-bold mb-2">Deck B</h3>
-              <button onClick={() => audioEnginePlay(1)} className="px-3 py-1 bg-cap-amber text-black rounded text-sm mr-2">▶ B</button>
-              <button onClick={() => audioEnginePause(1)} className="px-3 py-1 bg-plate-light rounded text-sm">❚❚</button>
+              <button onClick={() => audioEnginePause(1)} className="px-3 py-1 bg-plate-light rounded text-sm">❚❚ Pause</button>
             </div>
           </div>
+          <button
+            onClick={() => audioEngineSyncLaunch(0, 1)}
+            className="px-4 py-2 bg-cap-amber text-black rounded text-sm font-medium mb-3"
+          >
+            ⏯ Sync Start A+B
+          </button>
           <p className="text-xs text-label-dim mt-3">
-            Load two beat-driven tracks, play both, and listen for drift or phasing over time.
-            The engine's quantized scheduling keeps them aligned.
+            Load two beat-driven tracks, then hit Sync Start to launch both at the same engine frame.
+            Listen for drift or phasing over 30s, 1min, 2min+.
           </p>
         </div>
       )}

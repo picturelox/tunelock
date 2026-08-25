@@ -59,6 +59,72 @@ pub fn varispeed_processor() -> Box<dyn TimePitchProcessor> {
     Box::new(VarispeedProcessor::new())
 }
 
+/// Create a bypass processor that reads directly from the source with no
+/// time/pitch processing. Used by the Listening Lab as the true reference
+/// path — the unprocessed original. Zero latency, sample-exact.
+pub fn bypass_processor() -> Box<dyn TimePitchProcessor> {
+    Box::new(BypassProcessor::new())
+}
+
+/// Bypass processor: reads samples directly from the source at the original
+/// speed with no pitch or tempo modification. This is the true reference
+/// path for the Listening Lab — what the listener compares Signalsmith
+/// against. tempo_ratio and pitch_semitones are accepted but ignored.
+pub struct BypassProcessor {
+    source: Option<Arc<DecodedBuffer>>,
+    position: f64,
+}
+
+impl BypassProcessor {
+    pub fn new() -> Self {
+        Self {
+            source: None,
+            position: 0.0,
+        }
+    }
+}
+
+impl TimePitchProcessor for BypassProcessor {
+    fn set_tempo_ratio(&mut self, _ratio: f64) {}
+    fn set_pitch_semitones(&mut self, _semitones: f64) {}
+    fn tempo_ratio(&self) -> f64 { 1.0 }
+    fn pitch_semitones(&self) -> f64 { 0.0 }
+    fn latency_frames(&self) -> usize { 0 }
+
+    fn set_source(&mut self, source: Arc<DecodedBuffer>, start_frame: f64) -> Option<Arc<DecodedBuffer>> {
+        let old = self.source.take();
+        self.source = Some(source);
+        self.position = start_frame;
+        old
+    }
+
+    fn next_frame(&mut self) -> Option<(f64, f64)> {
+        let source = self.source.as_ref()?;
+        let pos = self.position as usize;
+        let channels = source.channels as usize;
+        let total_samples = source.samples.len();
+        if pos * channels + 1 >= total_samples {
+            return None;
+        }
+        let l = source.samples[pos * channels] as f64;
+        let r = source.samples[pos * channels + 1] as f64;
+        self.position += 1.0;
+        Some((l, r))
+    }
+
+    fn position_frames(&self) -> f64 {
+        self.position
+    }
+
+    fn seek_frames(&mut self, frame: f64) {
+        self.position = frame;
+    }
+
+    fn reset(&mut self) {
+        // No internal state to clear — bypass has no filters or buffers.
+    }
+}
+
 /// Varispeed processor: high-quality cubic (Catmull-Rom) interpolation with
 /// pitch coupled to tempo, plus an optional additional semitone shift that
 /// compounds the read rate. Zero latency. This is the honest starting

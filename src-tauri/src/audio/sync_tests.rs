@@ -30,6 +30,7 @@ mod tests {
             Arc::new(CommandQueue::new(512)),
             Arc::new(MeterSnapshot::new()),
             Arc::new(crossbeam_queue::ArrayQueue::new(32)),
+            Arc::new(crossbeam_queue::ArrayQueue::new(16)),
             SR,
         )
     }

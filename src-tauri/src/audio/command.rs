@@ -218,6 +218,26 @@ pub enum EngineCommand {
     },
     /// Shutdown the engine.
     Shutdown,
+    /// Set the processor type for a player. Used by the Listening Lab to
+    /// switch between bypass (true reference), varispeed, and signalsmith.
+    /// The callback creates the new processor — this is a user-initiated
+    /// mode switch, not per-block allocation.
+    SetProcessorType {
+        player: PlayerId,
+        at_frame: u64,
+        processor_type: ProcessorType,
+    },
+}
+
+/// Processor type for the Listening Lab's reference comparison.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessorType {
+    /// True bypass — reads directly from source, no processing.
+    Bypass,
+    /// Varispeed — tempo and pitch coupled, cubic interpolation.
+    Varispeed,
+    /// Signalsmith Stretch — independent tempo and pitch.
+    Signalsmith,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1167,6 +1167,7 @@ impl Database {
         abx_correct: Option<u32>,
         abx_trials: Option<u32>,
         notes: Option<&str>,
+        git_revision: Option<&str>,
     ) -> Result<i64> {
         self.conn.execute(
             "CREATE TABLE IF NOT EXISTS listening_lab_results (
@@ -1185,16 +1186,22 @@ impl Database {
                 overall INTEGER NOT NULL,
                 abx_correct INTEGER,
                 abx_trials INTEGER,
-                notes TEXT
+                notes TEXT,
+                git_revision TEXT
             )",
             [],
         )?;
+        // Add column if upgrading from older schema
+        let _ = self.conn.execute(
+            "ALTER TABLE listening_lab_results ADD COLUMN git_revision TEXT",
+            [],
+        );
         self.conn.execute(
             "INSERT INTO listening_lab_results (
                 timestamp, processor, tempo_percent, pitch_semitones, material,
                 track_name, transients, bass, vocals, stereo, artifacts, overall,
-                abx_correct, abx_trials, notes
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                abx_correct, abx_trials, notes, git_revision
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 timestamp,
                 processor,
@@ -1211,6 +1218,7 @@ impl Database {
                 abx_correct.map(|v| v as i64),
                 abx_trials.map(|v| v as i64),
                 notes,
+                git_revision,
             ],
         )?;
         Ok(self.conn.last_insert_rowid())
@@ -1220,7 +1228,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT id, timestamp, processor, tempo_percent, pitch_semitones,
              material, track_name, transients, bass, vocals, stereo, artifacts,
-             overall, abx_correct, abx_trials, notes
+             overall, abx_correct, abx_trials, notes, git_revision
              FROM listening_lab_results ORDER BY timestamp DESC LIMIT 500",
         )?;
         let results = stmt.query_map([], |row| {
@@ -1241,6 +1249,7 @@ impl Database {
                 abx_correct: row.get::<_, Option<i64>>(13)?.map(|v| v as u32),
                 abx_trials: row.get::<_, Option<i64>>(14)?.map(|v| v as u32),
                 notes: row.get(15)?,
+                git_revision: row.get(16)?,
             })
         })?;
         let mut out = Vec::new();

@@ -473,6 +473,14 @@ export async function audioEngineSetPitch(player: number, semitones: number): Pr
   return invoke('audio_engine_set_pitch', { player, semitones });
 }
 
+export async function audioEngineSetProcessorType(player: number, processorType: 'bypass' | 'varispeed' | 'signalsmith'): Promise<void> {
+  return invoke('audio_engine_set_processor_type', { player, processorType });
+}
+
+export async function audioEngineSyncLaunch(playerA: number, playerB: number): Promise<void> {
+  return invoke('audio_engine_sync_launch', { playerA, playerB });
+}
+
 export async function audioEngineSetPlayerGain(player: number, gain: number): Promise<void> {
   return invoke('audio_engine_set_player_gain', { player, gain });
 }
@@ -577,6 +585,7 @@ export interface ListeningLabResult {
   abxCorrect?: number;
   abxTrials?: number;
   notes?: string;
+  gitRevision?: string;
 }
 
 export async function listeningLabGetProcessorInfo(): Promise<ListeningLabProcessorInfo> {

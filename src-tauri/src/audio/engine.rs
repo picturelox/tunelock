@@ -57,6 +57,9 @@ pub struct AudioEngine {
     /// drops them outside the realtime path, so large Vec<f32> deallocation
     /// never happens inside the audio callback.
     retired_sources: Arc<crossbeam_queue::ArrayQueue<Arc<DecodedBuffer>>>,
+    /// Last-resort overflow queue for when retired_sources and per-player
+    /// overflow slots are all full. Drained alongside retired_sources.
+    deferred_overflow: Arc<crossbeam_queue::ArrayQueue<Arc<DecodedBuffer>>>,
 }
 
 /// Wrapper around cpal::Stream to make it Send + Sync.
@@ -83,6 +86,11 @@ pub struct CallbackState {
     /// so large Vec<f32> deallocation never happens on the realtime thread.
     /// The engine thread drains this queue periodically.
     retired_sources: Arc<crossbeam_queue::ArrayQueue<Arc<DecodedBuffer>>>,
+    /// Last-resort overflow queue: if the retirement queue AND all per-player
+    /// overflow slots are full, un-storable Arcs go here. This is a separate
+    /// lock-free queue shared with the engine thread for draining. No
+    /// allocation or deallocation on the realtime thread.
+    deferred_overflow: Arc<crossbeam_queue::ArrayQueue<Arc<DecodedBuffer>>>,
     master_gain: f64,
     // Crossfader state (ramped)
     crossfade_position: f64,
@@ -124,6 +132,7 @@ impl CallbackState {
         command_queue: Arc<CommandQueue>,
         meter_snapshot: Arc<MeterSnapshot>,
         retired_sources: Arc<crossbeam_queue::ArrayQueue<Arc<DecodedBuffer>>>,
+        deferred_overflow: Arc<crossbeam_queue::ArrayQueue<Arc<DecodedBuffer>>>,
         sample_rate: f64,
     ) -> Self {
         Self::new_impl(
@@ -131,6 +140,7 @@ impl CallbackState {
             command_queue,
             meter_snapshot,
             retired_sources,
+            deferred_overflow,
             sample_rate,
             false, // use default (Signalsmith) processor
         )
@@ -152,6 +162,7 @@ impl CallbackState {
             command_queue,
             meter_snapshot,
             retired_sources,
+            Arc::new(crossbeam_queue::ArrayQueue::new(16)),
             sample_rate,
             true, // use varispeed (zero latency) processor
         )
@@ -162,6 +173,7 @@ impl CallbackState {
         command_queue: Arc<CommandQueue>,
         meter_snapshot: Arc<MeterSnapshot>,
         retired_sources: Arc<crossbeam_queue::ArrayQueue<Arc<DecodedBuffer>>>,
+        deferred_overflow: Arc<crossbeam_queue::ArrayQueue<Arc<DecodedBuffer>>>,
         sample_rate: f64,
         use_varispeed: bool,
     ) -> Self {
@@ -193,6 +205,7 @@ impl CallbackState {
                 Bus::new(BusId::B, sample_rate),
             ],
             retired_sources,
+            deferred_overflow,
             master_gain: 0.8,
             crossfade_position: 0.5,
             crossfade_target: 0.5,
@@ -269,7 +282,14 @@ impl CallbackState {
                 // player — no callback-side registry lookup, no buffer copy.
                 let idx = player.as_index();
                 if idx < MAX_PLAYERS {
-                    self.players[idx].launch(source, buffer, start_beat);
+                    let unstored = self.players[idx].launch(source, buffer, start_beat);
+                    // Push any un-storable Arcs to the deferred_overflow queue.
+                    // If the queue is full, the Arc drops here — but this
+                    // requires 128 + 8*8 + 16 = 208 undrained sources, which
+                    // is impossible with 30Hz meter-poll draining.
+                    for arc in unstored.iter().flatten() {
+                        let _ = self.deferred_overflow.push(arc.clone());
+                    }
                 }
             }
             EngineCommand::Stop { player, .. } => {
@@ -416,6 +436,18 @@ impl CallbackState {
                     p.stop();
                 }
             }
+            EngineCommand::SetProcessorType { player, processor_type, .. } => {
+                let idx = player.as_index();
+                if idx < MAX_PLAYERS {
+                    let sr = self.sample_rate;
+                    let new_processor: Box<dyn super::timepitch::TimePitchProcessor> = match processor_type {
+                        super::command::ProcessorType::Bypass => super::timepitch::bypass_processor(),
+                        super::command::ProcessorType::Varispeed => super::timepitch::varispeed_processor(),
+                        super::command::ProcessorType::Signalsmith => super::timepitch::default_processor(sr, 2),
+                    };
+                    self.players[idx].swap_processor(new_processor);
+                }
+            }
         }
     }
 
@@ -515,6 +547,7 @@ impl CommandFrame for EngineCommand {
             | EngineCommand::SetFilterResonance { at_frame, .. }
             | EngineCommand::SetFilterDrive { at_frame, .. }
             | EngineCommand::SetMasterGain { at_frame, .. } => *at_frame,
+            EngineCommand::SetProcessorType { at_frame, .. } => *at_frame,
             EngineCommand::Shutdown => 0,
         }
     }
@@ -552,12 +585,14 @@ impl AudioEngine {
         // 32 slots: 8 players × 2 Arcs each (player buffer + processor source)
         // plus headroom for rapid relaunching.
         let retired_sources = Arc::new(crossbeam_queue::ArrayQueue::new(128));
+        let deferred_overflow = Arc::new(crossbeam_queue::ArrayQueue::new(16));
 
         let callback_state = CallbackState::new(
             frame_counter.clone(),
             command_queue.clone(),
             meter_snapshot.clone(),
             retired_sources.clone(),
+            deferred_overflow.clone(),
             sample_rate as f64,
         );
 
@@ -618,6 +653,7 @@ impl AudioEngine {
             sources: HashMap::new(),
             next_source_handle: 1,
             retired_sources,
+            deferred_overflow,
         })
     }
 
@@ -634,13 +670,17 @@ impl AudioEngine {
         self.command_queue.push(cmd)
     }
 
-    /// Drain the deferred-destruction queue. Call this periodically from a
+    /// Drain the deferred-destruction queues. Call this periodically from a
     /// non-realtime thread (e.g., the Tauri async runtime) to drop retired
     /// source buffers outside the audio callback. Returns the number of
-    /// buffers dropped.
+    /// buffers dropped. Drains both the main queue and the last-resort
+    /// overflow queue.
     pub fn drain_retired_sources(&self) -> usize {
         let mut count = 0;
         while self.retired_sources.pop().is_some() {
+            count += 1;
+        }
+        while self.deferred_overflow.pop().is_some() {
             count += 1;
         }
         count
