@@ -83,5 +83,10 @@ path = "src/bin/neural_key_parity.rs"
 required-features = ["neural-key"]
 
 [[bin]]
+name = "tunelock-neural-corpus-bench"
+path = "src/bin/neural_corpus_bench.rs"
+required-features = ["neural-key"]
+
+[[bin]]
 name = "gen-fixtures"
 path = "src/bin/gen_fixtures.rs"
