@@ -115,6 +115,18 @@ impl Player {
         sample_rate: f64,
         retired_sources: Arc<crossbeam_queue::ArrayQueue<Arc<DecodedBuffer>>>,
     ) -> Self {
+        Self::new_with_processor(id, sample_rate, retired_sources, default_processor())
+    }
+
+    /// Create a player with a specific time/pitch processor. Used in tests
+    /// to use VarispeedProcessor (zero latency, sample-exact) instead of
+    /// the default SignalsmithProcessor (which has STFT latency).
+    pub fn new_with_processor(
+        id: PlayerId,
+        sample_rate: f64,
+        retired_sources: Arc<crossbeam_queue::ArrayQueue<Arc<DecodedBuffer>>>,
+        processor: Box<dyn TimePitchProcessor>,
+    ) -> Self {
         Self {
             id,
             playing: false,
@@ -122,7 +134,7 @@ impl Player {
             soloed: false,
             source_handle: None,
             buffer: None,
-            processor: default_processor(),
+            processor,
             retired_sources,
             bus: if id.0 == 0 { BusId::A } else { BusId::B },
             eq: DjIsolator::new(sample_rate),

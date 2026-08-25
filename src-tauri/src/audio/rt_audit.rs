@@ -24,7 +24,7 @@ mod tests {
     const SR: f64 = 44100.0;
 
     fn make_state() -> CallbackState {
-        CallbackState::new(
+        CallbackState::new_for_test(
             Arc::new(AtomicU64::new(0)),
             Arc::new(CommandQueue::new(512)),
             Arc::new(MeterSnapshot::new()),

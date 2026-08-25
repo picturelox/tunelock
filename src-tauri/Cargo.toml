@@ -30,6 +30,7 @@ cpal = "0.15"
 rtrb = "0.3"                             # Lock-free SPSC ring buffer for real-time audio
 crossbeam-queue = "0.3"                  # Lock-free bounded queue for commands
 rubato = "0.15"                          # Band-limited resampling
+signalsmith-stretch = "0.1"              # PB-2: pitch-preserving time stretch (MIT, C++ via bindgen)
 
 # Database
 rusqlite = { version = "0.31", features = ["bundled", "chrono"] }

@@ -126,9 +126,57 @@ impl CallbackState {
         retired_sources: Arc<crossbeam_queue::ArrayQueue<Arc<DecodedBuffer>>>,
         sample_rate: f64,
     ) -> Self {
+        Self::new_impl(
+            frame_counter,
+            command_queue,
+            meter_snapshot,
+            retired_sources,
+            sample_rate,
+            false, // use default (Signalsmith) processor
+        )
+    }
+
+    /// Create CallbackState with VarispeedProcessor for engine tests.
+    /// Engine tests need zero-latency, sample-exact processing to verify
+    /// routing, scheduling, and transparency — not STFT behavior.
+    #[cfg(test)]
+    pub fn new_for_test(
+        frame_counter: Arc<AtomicU64>,
+        command_queue: Arc<CommandQueue>,
+        meter_snapshot: Arc<MeterSnapshot>,
+        retired_sources: Arc<crossbeam_queue::ArrayQueue<Arc<DecodedBuffer>>>,
+        sample_rate: f64,
+    ) -> Self {
+        Self::new_impl(
+            frame_counter,
+            command_queue,
+            meter_snapshot,
+            retired_sources,
+            sample_rate,
+            true, // use varispeed (zero latency) processor
+        )
+    }
+
+    fn new_impl(
+        frame_counter: Arc<AtomicU64>,
+        command_queue: Arc<CommandQueue>,
+        meter_snapshot: Arc<MeterSnapshot>,
+        retired_sources: Arc<crossbeam_queue::ArrayQueue<Arc<DecodedBuffer>>>,
+        sample_rate: f64,
+        use_varispeed: bool,
+    ) -> Self {
         let meter_update_interval = (sample_rate / 30.0) as u64; // 30 Hz meter updates
         let mut players: [Player; MAX_PLAYERS] = std::array::from_fn(|i| {
-            Player::new(PlayerId(i as u8), sample_rate, retired_sources.clone())
+            if use_varispeed {
+                Player::new_with_processor(
+                    PlayerId(i as u8),
+                    sample_rate,
+                    retired_sources.clone(),
+                    super::timepitch::varispeed_processor(),
+                )
+            } else {
+                Player::new(PlayerId(i as u8), sample_rate, retired_sources.clone())
+            }
         });
         // Default bus assignments: even → A, odd → B
         for (i, p) in players.iter_mut().enumerate() {
@@ -803,7 +851,7 @@ mod tests {
     const SR: f64 = 44100.0;
 
     fn make_state() -> CallbackState {
-        CallbackState::new(
+        CallbackState::new_for_test(
             Arc::new(AtomicU64::new(0)),
             Arc::new(CommandQueue::new(512)),
             Arc::new(MeterSnapshot::new()),
