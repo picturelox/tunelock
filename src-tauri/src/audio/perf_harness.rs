@@ -249,4 +249,160 @@ mod tests {
             "2-deck max callback {max_us:.0}µs must be under budget {budget_us:.0}µs"
         );
     }
+
+    // ── Event-deadline tests ─────────────────────────────────────────
+    //
+    // These measure the callback that CONTAINS the event (launch, seek,
+    // loop-wrap) — not just steady state. These are the callbacks where
+    // pre-roll, state reset, and ring clearing happen, so they're the
+    // most expensive callbacks in normal operation.
+
+    #[test]
+    #[ignore = "run with: cargo test --release -- --ignored"]
+    fn perf_event_launch_2_decks_48k_128() {
+        // Measure the callback containing a quantized 2-deck launch.
+        // This is where Signalsmith pre-roll happens.
+        let budget_us = 128.0 / SR * 1e6;
+        let block_size = 128;
+
+        let mut state = make_state();
+        state.command_queue.push(EngineCommand::SetMasterGain { at_frame: 0, gain: 1.0 });
+
+        // Pre-launch deck 0 so it's in steady state
+        launch_deck(&mut state, 0, 220.0, 1.06);
+        let mut buf = vec![0.0f32; block_size];
+        for _ in 0..100 {
+            audio_callback_f32(&mut state, &mut buf);
+        }
+
+        // Now schedule deck 1 launch at the start of the next block
+        let frame = state.frame_counter.load(Ordering::Relaxed);
+        let buf1 = sine_buffer(330.0, SR as usize * 10);
+        state.command_queue.push(EngineCommand::SetBus {
+            player: PlayerId(1), at_frame: frame, bus: BusId::Master,
+        });
+        state.command_queue.push(EngineCommand::Launch {
+            player: PlayerId(1), at_frame: frame, source: SourceHandle(2),
+            buffer: buf1, start_beat: 0.0, quantize: Quantize::Immediate,
+        });
+
+        // Measure the callback containing the launch
+        let start = Instant::now();
+        audio_callback_f32(&mut state, &mut buf);
+        let launch_us = start.elapsed().as_secs_f64() * 1e6;
+
+        eprintln!(
+            "2-deck launch event @ 48k/128: {launch_us:.0}µs, budget={budget_us:.0}µs"
+        );
+
+        assert!(
+            launch_us < budget_us,
+            "launch event callback {launch_us:.0}µs must be under budget {budget_us:.0}µs"
+        );
+    }
+
+    #[test]
+    #[ignore = "run with: cargo test --release -- --ignored"]
+    fn perf_event_seek_2_decks_48k_128() {
+        // Measure the callback containing a seek/beat-jump on an active deck.
+        // This is where Signalsmith reset + pre-roll happens.
+        let budget_us = 128.0 / SR * 1e6;
+        let block_size = 128;
+
+        let mut state = make_state();
+        state.command_queue.push(EngineCommand::SetMasterGain { at_frame: 0, gain: 1.0 });
+        launch_deck(&mut state, 0, 220.0, 1.06);
+        launch_deck(&mut state, 1, 330.0, 0.94);
+
+        // Get into steady state
+        let mut buf = vec![0.0f32; block_size];
+        for _ in 0..200 {
+            audio_callback_f32(&mut state, &mut buf);
+        }
+
+        // Schedule a seek on deck 0 (jump forward ~10 beats)
+        let frame = state.frame_counter.load(Ordering::Relaxed);
+        state.command_queue.push(EngineCommand::Seek {
+            player: PlayerId(0),
+            at_frame: frame,
+            source_beat: 10.0,
+        });
+
+        // Measure the callback containing the seek
+        let start = Instant::now();
+        audio_callback_f32(&mut state, &mut buf);
+        let seek_us = start.elapsed().as_secs_f64() * 1e6;
+
+        eprintln!(
+            "2-deck seek event @ 48k/128: {seek_us:.0}µs, budget={budget_us:.0}µs"
+        );
+
+        assert!(
+            seek_us < budget_us,
+            "seek event callback {seek_us:.0}µs must be under budget {budget_us:.0}µs"
+        );
+    }
+
+    #[test]
+    #[ignore = "run with: cargo test --release -- --ignored"]
+    fn perf_event_loop_wrap_2_decks_48k_128() {
+        // Measure the callback containing a loop wrap on an active deck.
+        // This is where Signalsmith reset + pre-roll + seek happens.
+        let budget_us = 128.0 / SR * 1e6;
+        let block_size = 128;
+
+        let mut state = make_state();
+        state.command_queue.push(EngineCommand::SetMasterGain { at_frame: 0, gain: 1.0 });
+        launch_deck(&mut state, 0, 220.0, 1.06);
+        launch_deck(&mut state, 1, 330.0, 0.94);
+
+        // Set a very short loop on deck 0 so it wraps within a few blocks
+        // At 120 BPM, 0.1 beats = 0.05s = 2400 frames at 48k
+        state.command_queue.push(EngineCommand::SetLoop {
+            player: PlayerId(0),
+            at_frame: state.frame_counter.load(Ordering::Relaxed),
+            loop_region: Some(crate::audio::command::LoopRegion {
+                start_beat: 0.0,
+                length_beats: 0.1,
+            }),
+        });
+
+        // Run until a loop wrap occurs (check for the max callback time)
+        let mut buf = vec![0.0f32; block_size];
+        let mut max_us = 0.0f64;
+        let mut measured_wrap = false;
+
+        // Skip initial warm-up
+        for _ in 0..50 {
+            audio_callback_f32(&mut state, &mut buf);
+        }
+
+        // Measure 200 blocks — the loop should wrap multiple times
+        for _ in 0..200 {
+            let start = Instant::now();
+            audio_callback_f32(&mut state, &mut buf);
+            let elapsed = start.elapsed().as_secs_f64() * 1e6;
+
+            // Check if position wrapped (audible position near 0 after being
+            // near the loop end)
+            let pos = state.player_position_sec(0);
+            if pos < 0.01 {
+                // This might be a wrap callback — record it
+                if elapsed > max_us {
+                    max_us = elapsed;
+                    measured_wrap = true;
+                }
+            }
+            max_us = max_us.max(elapsed);
+        }
+
+        eprintln!(
+            "2-deck loop-wrap @ 48k/128: max={max_us:.0}µs (wrap detected: {measured_wrap}), budget={budget_us:.0}µs"
+        );
+
+        assert!(
+            max_us < budget_us,
+            "loop-wrap event callback {max_us:.0}µs must be under budget {budget_us:.0}µs"
+        );
+    }
 }

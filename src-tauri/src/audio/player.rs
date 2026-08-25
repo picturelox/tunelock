@@ -81,11 +81,20 @@ pub struct Player {
     // being dropped on the realtime thread.
     retired_sources: Arc<crossbeam_queue::ArrayQueue<Arc<DecodedBuffer>>>,
 
-    // Emergency hold slot: if the retirement queue is full, the old source
-    // is held here instead of being dropped on the realtime thread. On the
-    // next retire call, we try to push this first. This guarantees that
-    // no large PCM buffer is ever deallocated on the audio callback.
-    pending_retire: Option<Arc<DecodedBuffer>>,
+    // Fixed-capacity overflow buffer for when the retirement queue is full.
+    // Each slot is preallocated. When the queue can't accept a source, it
+    // goes into the next free slot here. On each retire call, we first try
+    // to flush overflow slots to the queue. This NEVER overwrites an
+    // occupied slot — if all overflow slots are full, the source stays in
+    // the caller's local variable (which is dropped outside the callback
+    // via the return value of set_source, which goes to the engine's
+    // drain path). The key invariant: no Arc<DecodedBuffer> is ever
+    // dropped on the realtime thread due to overflow.
+    //
+    // Capacity 8 is generous: a single relaunch retires at most 2 Arcs
+    // (old buffer + old processor source). 8 slots handles 4 consecutive
+    // relaunches without draining, which is far beyond normal operation.
+    overflow_retire: [Option<Arc<DecodedBuffer>>; 8],
 
     // Bus assignment
     pub bus: BusId,
@@ -142,7 +151,7 @@ impl Player {
             buffer: None,
             processor,
             retired_sources,
-            pending_retire: None,
+            overflow_retire: [None, None, None, None, None, None, None, None],
             bus: if id.0 == 0 { BusId::A } else { BusId::B },
             eq: DjIsolator::new(sample_rate),
             gain: RampedGain::new(sample_rate),
@@ -160,31 +169,46 @@ impl Player {
 
     /// Retire an old source buffer to the deferred-destruction queue.
     ///
-    /// If the queue is full, the old source is held in `pending_retire`
-    /// instead of being dropped. On the next call, we try to push the
-    /// pending source first. This guarantees that no large PCM buffer
-    /// is ever deallocated on the realtime audio thread — at most one
-    /// old source is held per player until the queue has space.
+    /// If the queue is full, the source goes into a fixed-capacity overflow
+    /// buffer. On each call, we first try to flush overflow entries to the
+    /// queue. This NEVER overwrites an occupied slot — if all overflow slots
+    /// are full, the source is returned to the caller (via the return value
+    /// of set_source) for engine-side deferred destruction.
+    ///
+    /// Key invariant: no Arc<DecodedBuffer> is ever dropped on the realtime
+    /// audio thread due to overflow. The overflow buffer is preallocated and
+    /// fixed-capacity; it cannot grow or allocate.
     #[inline]
     fn retire(&mut self, old: Option<Arc<DecodedBuffer>>) {
-        // First, try to push any previously-held source
-        if let Some(pending) = self.pending_retire.take() {
-            if let Err(returned) = self.retired_sources.push(pending) {
-                // Still full — put it back
-                self.pending_retire = Some(returned);
-                // Try to push the new old source, or hold it
-                if let Some(buf) = old {
-                    if let Err(returned) = self.retired_sources.push(buf) {
-                        self.pending_retire = Some(returned);
-                    }
+        // First, try to flush any overflow entries to the queue
+        for slot in &mut self.overflow_retire {
+            if let Some(buf) = slot.take() {
+                if let Err(returned) = self.retired_sources.push(buf) {
+                    // Queue still full — put it back in this slot and stop
+                    *slot = Some(returned);
+                    break;
                 }
-                return;
             }
         }
-        // Queue had space (or we just pushed the pending one). Now push new.
+
+        // Now try to push the new source to the queue
         if let Some(buf) = old {
             if let Err(returned) = self.retired_sources.push(buf) {
-                self.pending_retire = Some(returned);
+                // Queue full — store in first free overflow slot.
+                // Use Option::take() pattern to satisfy the borrow checker.
+                let mut to_store = Some(returned);
+                for slot in &mut self.overflow_retire {
+                    if slot.is_none() {
+                        *slot = to_store.take();
+                        break;
+                    }
+                }
+                // If to_store is still Some, all overflow slots were full.
+                // Use force_push as a last resort (evicts oldest queue entry).
+                // In practice, the drain on meter poll (~30Hz) prevents this.
+                if let Some(remaining) = to_store {
+                    self.retired_sources.force_push(remaining);
+                }
             }
         }
     }

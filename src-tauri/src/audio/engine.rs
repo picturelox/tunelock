@@ -538,15 +538,13 @@ impl AudioEngine {
     /// Use `io::enumerate_output_devices()` to discover available devices,
     /// then construct an `AudioDeviceConfig` with the desired settings.
     pub fn new_with_config(config: &super::io::AudioDeviceConfig) -> Result<Self, String> {
-        let (device, stream_config, sample_rate) = super::io::resolve_config(config)
+        let (device, stream_config, sample_rate, sample_format) = super::io::resolve_config(config)
             .map_err(|e| format!("Failed to resolve audio config: {}", e))?;
 
-        // We need the sample format from the device's default config.
-        // CPAL's supported_output_configs gives us this.
-        let supported_config = device
-            .default_output_config()
-            .map_err(|e| format!("Failed to get output config: {}", e))?;
-        let sample_format = supported_config.sample_format();
+        // sample_format comes from the ACTUAL selected supported config,
+        // not from re-querying default_output_config(). This ensures the
+        // callback format matches the stream config that resolve_config
+        // selected (e.g., F32 vs I16).
 
         let frame_counter = Arc::new(AtomicU64::new(0));
         let command_queue = Arc::new(CommandQueue::new(512));

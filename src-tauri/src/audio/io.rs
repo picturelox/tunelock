@@ -196,14 +196,20 @@ pub fn enumerate_output_devices() -> Result<AudioDeviceList, String> {
     })
 }
 
-/// Resolve an AudioDeviceConfig to a concrete CPAL device and stream config.
+/// Resolve an AudioDeviceConfig to a concrete CPAL device, stream config,
+/// and the sample format of the selected configuration.
 ///
 /// This selects an ACTUAL supported configuration tuple from the device
 /// rather than blindly overriding the default. Output is always stereo
 /// (2 channels) — multi-output is a future phase.
+///
+/// Returns the device, stream config, sample rate, and sample format.
+/// The caller MUST use the returned sample format to construct the
+/// callback — do NOT re-query default_output_config() for the format,
+/// as the default may differ from the selected configuration.
 pub(crate) fn resolve_config(
     config: &AudioDeviceConfig,
-) -> Result<(cpal::Device, StreamConfig, u32), String> {
+) -> Result<(cpal::Device, StreamConfig, u32, cpal::SampleFormat), String> {
     let host = cpal::default_host();
 
     let device = match &config.device_name {
@@ -290,6 +296,7 @@ pub(crate) fn resolve_config(
     };
 
     let sample_rate = supported.sample_rate().0;
+    let sample_format = supported.sample_format();
 
     // Build the stream config from the actual supported config
     let mut stream_config: StreamConfig = supported.into();
@@ -304,7 +311,7 @@ pub(crate) fn resolve_config(
         };
     }
 
-    Ok((device, stream_config, sample_rate))
+    Ok((device, stream_config, sample_rate, sample_format))
 }
 
 #[cfg(test)]
@@ -361,7 +368,7 @@ mod tests {
     fn resolve_config_with_default_falls_back_to_system_default() {
         let cfg = AudioDeviceConfig::default();
         // This may fail on headless CI; on a real machine it should succeed.
-        if let Ok((_, stream_cfg, sr)) = resolve_config(&cfg) {
+        if let Ok((_, stream_cfg, sr, _)) = resolve_config(&cfg) {
             assert!(sr > 0, "sample rate must be positive");
             // PB-3 MVP: always stereo
             assert_eq!(stream_cfg.channels, 2, "output must be stereo");
@@ -387,7 +394,7 @@ mod tests {
             buffer_size: None,
         };
         // May fail on headless CI or devices that don't support 48k stereo.
-        if let Ok((_, stream_cfg, sr)) = resolve_config(&cfg) {
+        if let Ok((_, stream_cfg, sr, _)) = resolve_config(&cfg) {
             assert_eq!(sr, 48000, "requested sample rate must be honored");
             assert_eq!(stream_cfg.channels, 2, "output must be stereo");
         }
@@ -397,7 +404,7 @@ mod tests {
     fn resolve_config_forces_stereo_even_if_device_supports_more() {
         // Many devices support 8-channel output. We should always get 2.
         let cfg = AudioDeviceConfig::default();
-        if let Ok((_, stream_cfg, _)) = resolve_config(&cfg) {
+        if let Ok((_, stream_cfg, _, _)) = resolve_config(&cfg) {
             assert_eq!(
                 stream_cfg.channels, 2,
                 "PB-3 MVP must force stereo regardless of device capability"
