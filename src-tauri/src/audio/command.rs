@@ -1,14 +1,26 @@
 // Commands from UI to the audio engine.
 //
 // All commands are frame-addressed: they specify the output frame at which
-// they should take effect. The callback processes pending commands and
-// applies them at the requested frame, not at block boundaries.
+// they should take effect. The callback applies each command at the exact
+// requested frame within the block (event-sliced rendering), not at block
+// boundaries.
 //
 // The command queue is a bounded lock-free SPSC queue (crossbeam ArrayQueue).
 // The UI thread is the producer; the audio callback is the consumer.
 // If the queue is full, the command is dropped and the UI is notified via
 // the meter snapshot (a `command_dropped` counter increments).
+//
+// Source ownership model (unequivocal):
+//   - The engine thread (non-real-time) owns the source registry:
+//     HashMap<u64, Arc<DecodedBuffer>>.
+//   - Launch commands carry an Arc<DecodedBuffer> — a reference-counted
+//     pointer clone (16 bytes), NOT a PCM buffer copy. No giant buffers
+//     travel through the command queue.
+//   - SourceHandle is the UI-facing identifier; the registry owns the
+//     shared allocation. Unregistering drops the registry's Arc; a player
+//     that still holds its own Arc keeps playing.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Maximum number of player slots in the engine.
@@ -58,12 +70,17 @@ pub enum Quantize {
 #[derive(Debug, Clone)]
 pub enum EngineCommand {
     /// Launch a player with a source at a specific position.
-    /// The player starts playing at the quantized boundary nearest
-    /// `at_frame`. `start_beat` is the position in the source in beats.
+    /// The player starts playing at `at_frame` (sample-accurate within the
+    /// block). `start_beat` is the position in the source in beats.
+    /// `buffer` is an Arc clone from the engine-thread source registry —
+    /// the callback loads it directly into the player.
+    /// Quantize is resolved by the caller into `at_frame`; the callback
+    /// treats all scheduling as frame-addressed.
     Launch {
         player: PlayerId,
         at_frame: u64,
         source: SourceHandle,
+        buffer: Arc<DecodedBuffer>,
         start_beat: f64,
         quantize: Quantize,
     },
@@ -168,17 +185,6 @@ pub enum EngineCommand {
     SetMasterGain {
         at_frame: u64,
         gain: f32,
-    },
-    /// Register a decoded source in the engine's source registry.
-    /// Returns a SourceHandle that can be used in Launch commands.
-    /// This is processed outside the audio callback (on the engine thread).
-    RegisterSource {
-        handle: SourceHandle,
-        buffer: DecodedBuffer,
-    },
-    /// Unregister a source, freeing its memory.
-    UnregisterSource {
-        handle: SourceHandle,
     },
     /// Shutdown the engine.
     Shutdown,

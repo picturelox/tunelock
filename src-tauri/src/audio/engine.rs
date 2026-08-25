@@ -17,11 +17,12 @@
 //
 // The callback NEVER allocates, locks, does I/O, or calls Tauri.
 //
-// Frame scheduling:
-//   Commands carry an `at_frame` field. The callback processes commands
-//   at the start of each block but defers application until the requested
-//   frame is reached within the block. This provides sample-accurate
-//   scheduling rather than block-boundary scheduling.
+// Frame scheduling (event-sliced rendering):
+//   Commands carry an `at_frame` field. The callback drains the queue into a
+//   sorted pending list, then renders the block in slices: render up to the
+//   next pending event frame, apply the event, continue rendering. A command
+//   scheduled for halfway through the block takes effect at that exact frame,
+//   not at the block boundary.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -46,9 +47,10 @@ pub struct AudioEngine {
     meter_snapshot: Arc<MeterSnapshot>,
     sample_rate: u32,
     stream: Option<SendStream>,
-    /// Source registry — stores decoded buffers keyed by SourceHandle.
-    /// Accessed from the engine thread (not the audio callback).
-    sources: HashMap<u64, super::command::DecodedBuffer>,
+    /// Source registry — engine thread owns Arc<DecodedBuffer> keyed by
+    /// SourceHandle. Launch commands carry an Arc clone; the callback never
+    /// touches this registry.
+    sources: HashMap<u64, Arc<super::command::DecodedBuffer>>,
     next_source_handle: u64,
 }
 
@@ -82,7 +84,9 @@ struct CallbackState {
     // Meter update counter (update snapshot every N samples)
     meter_update_counter: u64,
     meter_update_interval: u64,
-    // Pending commands waiting for their at_frame (sorted by at_frame)
+    // Pending commands waiting for their at_frame (kept sorted by at_frame).
+    // Preallocated; if full, a future command is applied immediately
+    // (fail-safe toward "happen now" rather than "never happen").
     pending: Vec<PendingCommand>,
     // Solo state
     any_soloed: bool,
@@ -136,45 +140,45 @@ impl CallbackState {
         }
     }
 
-    /// Pop commands from the queue and either apply immediately (if at_frame
-    /// is now or in the past) or defer to the pending list.
-    fn process_commands(&mut self, current_frame: u64) {
-        // Pop new commands
-        while let Some(cmd) = self.command_queue.pop() {
-            let at_frame = cmd.at_frame();
-            if at_frame <= current_frame {
-                self.apply_command(cmd, current_frame);
-            } else {
-                self.pending.push(PendingCommand { cmd, at_frame });
-            }
+    /// Insert a pending command, keeping the list sorted by at_frame.
+    /// If the preallocated capacity is exceeded, apply immediately instead
+    /// of allocating (real-time safety).
+    fn insert_pending(&mut self, pc: PendingCommand) {
+        if self.pending.len() >= self.pending.capacity() {
+            self.apply_command(pc.cmd, pc.at_frame);
+            return;
         }
+        let pos = self.pending.partition_point(|p| p.at_frame <= pc.at_frame);
+        self.pending.insert(pos, pc);
+    }
 
-        // Process pending commands whose frame has arrived
-        // Sort by at_frame so we process in order
-        self.pending.sort_by_key(|p| p.at_frame);
-        let mut i = 0;
-        while i < self.pending.len() {
-            if self.pending[i].at_frame <= current_frame {
-                let pc = self.pending.remove(i);
-                self.apply_command(pc.cmd, current_frame);
-            } else {
-                i += 1;
+    /// Apply every pending command whose at_frame has arrived (<= frame).
+    /// The pending list is sorted, so due commands form a prefix.
+    fn apply_due_commands(&mut self, frame: u64) {
+        while let Some(first) = self.pending.first() {
+            if first.at_frame > frame {
+                break;
             }
+            let pc = self.pending.remove(0);
+            self.apply_command(pc.cmd, frame);
         }
+    }
+
+    /// Frame strictly after `frame` at which the next pending command is
+    /// scheduled, or None if no future commands remain.
+    fn next_event_frame(&self, frame: u64) -> Option<u64> {
+        self.pending.first().map(|p| p.at_frame).filter(|&f| f > frame)
     }
 
     fn apply_command(&mut self, cmd: EngineCommand, _current_frame: u64) {
         match cmd {
-            EngineCommand::Launch { player, source: _, start_beat, quantize: _, .. } => {
-                // Source buffer is looked up from the source registry.
-                // For now, the buffer was already loaded via RegisterSource.
-                // The Launch command sets the start position and begins playback.
-                // Note: source lookup happens outside the callback (see AudioEngine::launch).
-                // Here we just set the start beat position.
+            EngineCommand::Launch { player, source, buffer, start_beat, quantize: _, .. } => {
+                // The buffer travels with the command as an Arc clone from the
+                // engine-thread source registry. Load it directly into the
+                // player — no callback-side registry lookup, no buffer copy.
                 let idx = player.as_index();
                 if idx < MAX_PLAYERS {
-                    self.players[idx].seek_beats(start_beat);
-                    self.players[idx].play();
+                    self.players[idx].launch(source, buffer, start_beat);
                 }
             }
             EngineCommand::Stop { player, .. } => {
@@ -276,9 +280,6 @@ impl CallbackState {
             EngineCommand::SetMasterGain { gain, .. } => {
                 self.master_gain = gain as f64;
             }
-            EngineCommand::RegisterSource { .. } | EngineCommand::UnregisterSource { .. } => {
-                // These are processed outside the callback (in AudioEngine methods).
-            }
             EngineCommand::Shutdown => {
                 for p in &mut self.players {
                     p.stop();
@@ -378,9 +379,7 @@ impl CommandFrame for EngineCommand {
             | EngineCommand::SetBusGain { at_frame, .. }
             | EngineCommand::SetBusEq { at_frame, .. }
             | EngineCommand::SetMasterGain { at_frame, .. } => *at_frame,
-            EngineCommand::RegisterSource { .. }
-            | EngineCommand::UnregisterSource { .. }
-            | EngineCommand::Shutdown => 0,
+            EngineCommand::Shutdown => 0,
         }
     }
 }
@@ -514,23 +513,25 @@ impl AudioEngine {
     }
 
     /// Register a decoded buffer as a source. Returns a SourceHandle.
-    /// The buffer is stored in the engine's source registry.
+    /// The buffer is stored in the engine thread's source registry as an Arc.
     /// This must be called from a non-audio thread (e.g., the Tauri async runtime).
     pub fn register_source(&mut self, buffer: super::command::DecodedBuffer) -> SourceHandle {
         let handle = SourceHandle(self.next_source_handle);
         self.next_source_handle += 1;
-        self.sources.insert(handle.0, buffer);
+        self.sources.insert(handle.0, Arc::new(buffer));
         handle
     }
 
-    /// Unregister a source, freeing its memory.
+    /// Unregister a source, dropping the registry's Arc. A player that still
+    /// holds its own Arc clone keeps playing; memory is freed when the last
+    /// Arc drops.
     pub fn unregister_source(&mut self, handle: SourceHandle) {
         self.sources.remove(&handle.0);
     }
 
-    /// Launch a player with a registered source. This loads the source
-    /// into the player and sends a Launch command to the audio callback.
-    /// Must be called from a non-audio thread.
+    /// Launch a player with a registered source. Sends a single Launch
+    /// command carrying an Arc clone of the buffer; the callback loads it
+    /// directly into the player. Must be called from a non-audio thread.
     pub fn launch_player(
         &mut self,
         player: PlayerId,
@@ -540,58 +541,91 @@ impl AudioEngine {
     ) -> Result<(), String> {
         let buffer = self.sources.get(&source.0)
             .ok_or("Source not found in registry")?
-            .clone();
+            .clone(); // Arc clone — pointer copy only, no PCM duplication
 
-        // Send the buffer to the player via a LoadDeck-equivalent command.
-        // We use RegisterSource to pass the buffer through the command queue.
-        // The callback will load it into the player.
         let at_frame = self.current_frame();
-        self.command_queue.push(EngineCommand::RegisterSource {
-            handle: source,
-            buffer: buffer.clone(),
-        });
-
-        // Also send the Launch command
         self.command_queue.push(EngineCommand::Launch {
             player,
             at_frame,
             source,
+            buffer,
             start_beat,
             quantize,
         });
 
         Ok(())
     }
-
-    /// Load a decoded buffer directly into a player (legacy compatibility).
-    pub fn load_player(&self, player: PlayerId, buffer: super::command::DecodedBuffer) -> bool {
-        self.command_queue.push(EngineCommand::RegisterSource {
-            handle: SourceHandle(0), // temporary handle
-            buffer,
-        })
-    }
 }
 
 /// The real-time audio callback for f32 output.
 /// This function MUST NOT allocate, lock, do I/O, or call Tauri.
+///
+/// Event-sliced rendering: the block is rendered in slices between pending
+/// command frames, so a command scheduled for halfway through the block
+/// takes effect at that exact frame.
 fn audio_callback_f32(state: &mut CallbackState, output: &mut [f32]) {
-    let current_frame = state.frame_counter.load(Ordering::Relaxed);
+    let channels = if output.len() >= 2 { 2 } else { 1 };
+    let frames = output.len() / channels;
+    let block_start = state.frame_counter.load(Ordering::Relaxed);
+    let block_end = block_start + frames as u64;
 
-    // Process pending commands (frame-scheduled)
-    state.process_commands(current_frame);
+    // Drain the command queue into the sorted pending list.
+    while let Some(cmd) = state.command_queue.pop() {
+        let at_frame = cmd.at_frame();
+        state.insert_pending(PendingCommand { cmd, at_frame });
+    }
 
     // Reset block meters
     state.reset_block_meters();
 
-    let channels = if output.len() >= 2 { 2 } else { 1 };
-    let frames = output.len() / channels;
-    let mut frame_in_block = 0u64;
+    let mut cursor_frame = block_start;
+    let mut cursor_sample = 0usize;
 
+    while cursor_sample < frames {
+        // Apply every command whose frame has arrived.
+        state.apply_due_commands(cursor_frame);
+
+        // Render up to the next event frame (or block end).
+        let next_event = state
+            .next_event_frame(cursor_frame)
+            .unwrap_or(block_end)
+            .min(block_end);
+        let n = ((next_event - cursor_frame) as usize).min(frames - cursor_sample);
+        if n == 0 {
+            break;
+        }
+
+        let start = cursor_sample * channels;
+        let end = (cursor_sample + n) * channels;
+        render_slice(state, &mut output[start..end], channels);
+
+        cursor_sample += n;
+        cursor_frame += n as u64;
+    }
+
+    // Update frame counter to block end
+    state.frame_counter.store(block_end, Ordering::Relaxed);
+    state.meter_snapshot.write_frame(block_end);
+
+    // Update meter snapshot at ~30 Hz
+    state.meter_update_counter += frames as u64;
+    if state.meter_update_counter >= state.meter_update_interval {
+        state.meter_update_counter = 0;
+        state.update_meters(frames);
+    }
+}
+
+/// Render `frames` audio frames with no command application — pure DSP.
+/// Split out so the callback can slice rendering between scheduled events.
+#[inline]
+fn render_slice(state: &mut CallbackState, output: &mut [f32], channels: usize) {
     for frame in output.chunks_mut(channels) {
         // Ramp crossfader
         state.ramp_crossfade();
 
-        // Process all players and route to buses
+        // Process all players and route to buses (or direct-to-master)
+        let mut direct_l = 0.0f64;
+        let mut direct_r = 0.0f64;
         for p in &mut state.players {
             let (l, r) = p.process_sample(state.any_soloed);
             if l != 0.0 || r != 0.0 {
@@ -599,18 +633,10 @@ fn audio_callback_f32(state: &mut CallbackState, output: &mut [f32]) {
                     BusId::A => state.buses[0].accumulate(l, r),
                     BusId::B => state.buses[1].accumulate(l, r),
                     BusId::Master => {
-                        // Direct to master — accumulate into master sum
-                        state.master_sum_sq[0] += l * l;
-                        state.master_sum_sq[1] += r * r;
-                        // We need to add this to the master output directly.
-                        // For simplicity, we store it and add after bus processing.
-                        // Actually, let's just add it to the frame output after buses.
-                        // We'll use a temporary accumulator.
-                        // TODO: This is a simplification — direct-to-master players
-                        // bypass the bus EQ/crossfade. This is correct behavior.
-                        // We accumulate into master_sum_sq for metering, but need
-                        // to also add to the actual output. Let's use a separate
-                        // accumulator.
+                        // Direct to master — bypasses bus EQ and crossfader,
+                        // but is genuinely summed into the output mix.
+                        direct_l += l;
+                        direct_r += r;
                     }
                 }
             }
@@ -620,56 +646,294 @@ fn audio_callback_f32(state: &mut CallbackState, output: &mut [f32]) {
         let (bus_a_l, bus_a_r) = state.buses[0].process_sample();
         let (bus_b_l, bus_b_r) = state.buses[1].process_sample();
 
-        // Sum buses into master
-        let mut mix_l = bus_a_l + bus_b_l;
-        let mut mix_r = bus_a_r + bus_b_r;
+        // Sum buses and direct-to-master players into the master mix
+        let mut mix_l = bus_a_l + bus_b_l + direct_l;
+        let mut mix_r = bus_a_r + bus_b_r + direct_r;
 
         // Master gain
         mix_l *= state.master_gain;
         mix_r *= state.master_gain;
 
-        // Soft clip (safety limiter)
-        mix_l = soft_clip(mix_l);
-        mix_r = soft_clip(mix_r);
-
-        // Update master meters
-        state.master_sum_sq[0] += mix_l * mix_l;
-        state.master_sum_sq[1] += mix_r * mix_r;
+        // Transparent master path: no always-on waveshaping. Clipping is
+        // detected for metering; a proper look-ahead limiter arrives with
+        // the loudness/mastering phase. Unity playback null-tests clean.
         let abs_l = mix_l.abs();
         let abs_r = mix_r.abs();
-        if abs_l > state.master_peak[0] { state.master_peak[0] = abs_l; }
-        if abs_r > state.master_peak[1] { state.master_peak[1] = abs_r; }
-        if abs_l > state.master_true_peak[0] { state.master_true_peak[0] = abs_l; }
-        if abs_r > state.master_true_peak[1] { state.master_true_peak[1] = abs_r; }
         if abs_l >= 1.0 || abs_r >= 1.0 {
             state.master_clip = true;
         }
 
-        // Write output
-        frame[0] = mix_l as f32;
+        // Update master meters (pre-output-clamp values)
+        state.master_sum_sq[0] += mix_l * mix_l;
+        state.master_sum_sq[1] += mix_r * mix_r;
+        if abs_l > state.master_peak[0] { state.master_peak[0] = abs_l; }
+        if abs_r > state.master_peak[1] { state.master_peak[1] = abs_r; }
+        if abs_l > state.master_true_peak[0] { state.master_true_peak[0] = abs_l; }
+        if abs_r > state.master_true_peak[1] { state.master_true_peak[1] = abs_r; }
+
+        // Write output — hard-clamped at the output stage only (transparent
+        // below 0 dBFS; the DAC would clip anyway).
+        frame[0] = mix_l.clamp(-1.0, 1.0) as f32;
         if channels >= 2 {
-            frame[1] = mix_r as f32;
+            frame[1] = mix_r.clamp(-1.0, 1.0) as f32;
         }
-
-        frame_in_block += 1;
-    }
-
-    // Update frame counter
-    state.frame_counter.fetch_add(frame_in_block, Ordering::Relaxed);
-    state.meter_snapshot.write_frame(
-        state.frame_counter.load(Ordering::Relaxed),
-    );
-
-    // Update meter snapshot at ~30 Hz
-    state.meter_update_counter += frame_in_block;
-    if state.meter_update_counter >= state.meter_update_interval {
-        state.meter_update_counter = 0;
-        state.update_meters(frames);
     }
 }
 
-/// Soft clipping (tanh approximation) for safety limiting.
-#[inline]
-fn soft_clip(x: f64) -> f64 {
-    x / (1.0 + x.abs())
+#[cfg(test)]
+mod tests {
+    //! Performance Engine regression harness (PB-0).
+    //!
+    //! Deterministic offline render tests — no audio device required.
+    //! These tests lock in the real-time engine contract: silence, unity
+    //! transparency, sample-accurate scheduling, routing, and crossfader
+    //! semantics. Every future DSP change must keep these passing.
+
+    use super::*;
+    use crate::audio::command::DecodedBuffer;
+    use crate::audio::meter::MeterSnapshot;
+
+    const SR: f64 = 44100.0;
+
+    fn make_state() -> CallbackState {
+        CallbackState::new(
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(CommandQueue::new(512)),
+            Arc::new(MeterSnapshot::new()),
+            SR,
+        )
+    }
+
+    /// A decoded buffer of known content: constant value on both channels.
+    fn constant_buffer(value: f32, frames: usize) -> Arc<DecodedBuffer> {
+        let mut samples = Vec::with_capacity(frames * 2);
+        for _ in 0..frames {
+            samples.push(value);
+            samples.push(value);
+        }
+        Arc::new(DecodedBuffer {
+            samples,
+            sample_rate: SR as u32,
+            channels: 2,
+            duration_sec: frames as f64 / SR,
+            bpm: Some(120.0),
+            beat_grid: None,
+        })
+    }
+
+    /// Render one block through the real callback path.
+    fn render(state: &mut CallbackState, output: &mut [f32]) {
+        audio_callback_f32(state, output);
+    }
+
+    #[test]
+    fn silence_is_silent() {
+        let mut state = make_state();
+        let mut out = vec![0.0f32; 512];
+        render(&mut state, &mut out);
+        assert!(out.iter().all(|&s| s == 0.0), "no players must produce digital silence");
+    }
+
+    #[test]
+    fn launch_plays_source() {
+        let mut state = make_state();
+        let buffer = constant_buffer(0.25, 4410); // 0.1s
+        state.command_queue.push(EngineCommand::Launch {
+            player: PlayerId(0),
+            at_frame: 0,
+            source: SourceHandle(1),
+            buffer: buffer.clone(),
+            start_beat: 0.0,
+            quantize: Quantize::Immediate,
+        });
+        // Player 0 defaults to Bus A; set crossfade fully to A and master to unity.
+        state.command_queue.push(EngineCommand::SetCrossfade { at_frame: 0, position: 0.0 });
+        state.command_queue.push(EngineCommand::SetMasterGain { at_frame: 0, gain: 1.0 });
+
+        let mut out = vec![0.0f32; 512];
+        render(&mut state, &mut out);
+
+        // The buffer must actually play — constant 0.25 through unity path.
+        // (EQ is transparent at 0 dB; small LR4 settling on DC is expected,
+        // so assert signal presence rather than exact value at block start.)
+        let non_zero = out.iter().filter(|&&s| s.abs() > 1e-6).count();
+        assert!(non_zero > 400, "launched player must produce audio (got {non_zero} non-zero samples)");
+    }
+
+    #[test]
+    fn master_path_is_transparent_at_unity() {
+        // With master gain 1.0 and a signal well below clipping, output must
+        // equal input. This is the null test that the always-on soft clipper
+        // previously broke (x/(1+|x|) at 0.5 → 0.333).
+        let mut state = make_state();
+        state.command_queue.push(EngineCommand::SetCrossfade { at_frame: 0, position: 0.0 });
+        state.command_queue.push(EngineCommand::SetMasterGain { at_frame: 0, gain: 1.0 });
+        state.command_queue.push(EngineCommand::Launch {
+            player: PlayerId(0),
+            at_frame: 0,
+            source: SourceHandle(1),
+            buffer: constant_buffer(0.5, 44100),
+            start_beat: 0.0,
+            quantize: Quantize::Immediate,
+        });
+
+        // Render a few blocks to let EQ crossovers settle on the DC signal,
+        // then measure steady-state.
+        let mut out = vec![0.0f32; 1024];
+        for _ in 0..10 {
+            render(&mut state, &mut out);
+        }
+        // Steady-state: constant 0.5 through a transparent path must be ~0.5.
+        // The old soft clipper would give 0.5/(1+0.5) = 0.333.
+        let tail = &out[out.len() - 256..];
+        for &s in tail {
+            assert!(
+                (s as f64 - 0.5).abs() < 0.01,
+                "transparent master path: expected ~0.5, got {s} (soft clipper would give 0.333)"
+            );
+        }
+    }
+
+    #[test]
+    fn commands_apply_at_exact_frame_within_block() {
+        // A mute scheduled for mid-block must take effect at that exact
+        // sample, not at the block boundary. The player routes
+        // direct-to-master so there is no bus-EQ filter tail to tolerate —
+        // a muted player emits exactly zero from the mute frame onward.
+        let mut state = make_state();
+        let block_frames = 256u64;
+        let change_frame = 100u64; // mid-block
+
+        state.command_queue.push(EngineCommand::SetMasterGain { at_frame: 0, gain: 1.0 });
+        state.command_queue.push(EngineCommand::SetBus {
+            player: PlayerId(0),
+            at_frame: 0,
+            bus: BusId::Master,
+        });
+        state.command_queue.push(EngineCommand::Launch {
+            player: PlayerId(0),
+            at_frame: 0,
+            source: SourceHandle(1),
+            buffer: constant_buffer(0.4, 44100),
+            start_beat: 0.0,
+            quantize: Quantize::Immediate,
+        });
+        // Mute the player exactly at frame 100 of the first block.
+        state.command_queue.push(EngineCommand::SetMute {
+            player: PlayerId(0),
+            at_frame: change_frame,
+            muted: true,
+        });
+
+        let mut out = vec![0.0f32; (block_frames * 2) as usize];
+        render(&mut state, &mut out);
+
+        // Frames 0..100 carry signal; frames 100..256 must be silent.
+        let pre = &out[((change_frame - 4) * 2) as usize..(change_frame * 2) as usize];
+        assert!(pre.iter().any(|&s| s.abs() > 1e-6), "signal expected before mute frame");
+        let post = &out[(change_frame * 2) as usize..];
+        assert!(
+            post.iter().all(|&s| s == 0.0),
+            "silence expected after exact mute frame; first non-zero: {:?}",
+            post.iter().position(|&s| s != 0.0)
+        );
+    }
+
+    #[test]
+    fn direct_to_master_is_audible() {
+        // A player routed to BusId::Master must reach the output.
+        let mut state = make_state();
+        state.command_queue.push(EngineCommand::SetMasterGain { at_frame: 0, gain: 1.0 });
+        state.command_queue.push(EngineCommand::SetBus {
+            player: PlayerId(0),
+            at_frame: 0,
+            bus: BusId::Master,
+        });
+        state.command_queue.push(EngineCommand::Launch {
+            player: PlayerId(0),
+            at_frame: 0,
+            source: SourceHandle(1),
+            buffer: constant_buffer(0.3, 44100),
+            start_beat: 0.0,
+            quantize: Quantize::Immediate,
+        });
+
+        let mut out = vec![0.0f32; 2048];
+        for _ in 0..5 {
+            render(&mut state, &mut out);
+        }
+        let non_zero = out.iter().filter(|&&s| s.abs() > 1e-6).count();
+        assert!(non_zero > 1000, "direct-to-master player must be audible");
+    }
+
+    #[test]
+    fn crossfade_routes_buses() {
+        // Player 0 → A with constant 0.4; player 1 → B silent (not launched).
+        let mut state = make_state();
+        state.command_queue.push(EngineCommand::SetMasterGain { at_frame: 0, gain: 1.0 });
+        state.command_queue.push(EngineCommand::Launch {
+            player: PlayerId(0),
+            at_frame: 0,
+            source: SourceHandle(1),
+            buffer: constant_buffer(0.4, 44100),
+            start_beat: 0.0,
+            quantize: Quantize::Immediate,
+        });
+        // Crossfade fully A
+        state.command_queue.push(EngineCommand::SetCrossfade { at_frame: 0, position: 0.0 });
+        let mut out_a = vec![0.0f32; 4096];
+        for _ in 0..6 { render(&mut state, &mut out_a); }
+        let level_a: f32 = out_a[out_a.len() - 512..].iter().map(|s| s.abs()).sum::<f32>() / 512.0;
+
+        // Crossfade fully B — A's contribution must vanish.
+        let frame = state.frame_counter.load(Ordering::Relaxed);
+        state.command_queue.push(EngineCommand::SetCrossfade { at_frame: frame, position: 1.0 });
+        let mut out_b = vec![0.0f32; 4096];
+        for _ in 0..6 { render(&mut state, &mut out_b); }
+        let level_b: f32 = out_b[out_b.len() - 512..].iter().map(|s| s.abs()).sum::<f32>() / 512.0;
+
+        assert!(level_a > 0.1, "bus A should be audible at crossfade=0 (got {level_a})");
+        assert!(level_b < level_a * 0.05, "bus A must be silenced at crossfade=1 (got {level_b} vs {level_a})");
+    }
+
+    #[test]
+    fn stop_halts_playback() {
+        let mut state = make_state();
+        state.command_queue.push(EngineCommand::SetMasterGain { at_frame: 0, gain: 1.0 });
+        state.command_queue.push(EngineCommand::SetBus {
+            player: PlayerId(0),
+            at_frame: 0,
+            bus: BusId::Master,
+        });
+        state.command_queue.push(EngineCommand::Launch {
+            player: PlayerId(0),
+            at_frame: 0,
+            source: SourceHandle(1),
+            buffer: constant_buffer(0.4, 44100),
+            start_beat: 0.0,
+            quantize: Quantize::Immediate,
+        });
+        let mut out = vec![0.0f32; 1024];
+        render(&mut state, &mut out);
+
+        let frame = state.frame_counter.load(Ordering::Relaxed);
+        state.command_queue.push(EngineCommand::Stop { player: PlayerId(0), at_frame: frame });
+        render(&mut state, &mut out);
+        assert!(out.iter().all(|&s| s == 0.0), "stopped player must be silent");
+    }
+
+    #[test]
+    fn queue_overflow_failsafe() {
+        // Pending capacity is preallocated; verify the fail-safe path doesn't
+        // panic when exceeded.
+        let mut state = make_state();
+        let cap = state.pending.capacity();
+        for i in 0..(cap + 10) {
+            state.insert_pending(PendingCommand {
+                cmd: EngineCommand::SetMasterGain { at_frame: 10_000 + i as u64, gain: 0.5 },
+                at_frame: 10_000 + i as u64,
+            });
+        }
+        assert!(state.pending.len() <= cap);
+    }
 }

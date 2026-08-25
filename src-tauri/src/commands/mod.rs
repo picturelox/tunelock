@@ -1944,16 +1944,15 @@ pub async fn audio_engine_load_player(state: State<'_, AppState>, player: u8, fi
     .await
     .map_err(|e| e.to_string())??;
 
-    // Register the source and launch the player
+    // Register the source and launch the player. The Launch command carries
+    // an Arc clone of the buffer; the callback loads it into the player.
     let source = engine.register_source(buffer);
-    let frame = engine.current_frame();
-    engine.send_command(crate::audio::EngineCommand::Launch {
-        player: crate::audio::PlayerId(player),
-        at_frame: frame,
+    engine.launch_player(
+        crate::audio::PlayerId(player),
         source,
-        start_beat: 0.0,
-        quantize: crate::audio::Quantize::Immediate,
-    });
+        0.0,
+        crate::audio::Quantize::Immediate,
+    )?;
     Ok(())
 }
 

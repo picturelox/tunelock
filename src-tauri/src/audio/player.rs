@@ -10,6 +10,8 @@
 // Players are assigned to buses (A, B, or Master direct). The bus handles
 // crossfader participation and bus-level EQ.
 
+use std::sync::Arc;
+
 use super::command::{PlayerId, BusId, DecodedBuffer, EqBand, LoopRegion, SourceHandle, BeatGridCompact};
 use super::eq::DjIsolator;
 
@@ -65,9 +67,9 @@ pub struct Player {
     pub muted: bool,
     pub soloed: bool,
 
-    // Source handle and buffer (set by Launch/RegisterSource)
+    // Source handle and shared buffer (set by Launch)
     source_handle: Option<SourceHandle>,
-    buffer: Option<DecodedBuffer>,
+    buffer: Option<Arc<DecodedBuffer>>,
 
     // Position in the source buffer (in samples, per channel)
     source_position: f64, // Fractional for tempo adjustment
@@ -129,7 +131,7 @@ impl Player {
         }
     }
 
-    pub fn launch(&mut self, handle: SourceHandle, buffer: DecodedBuffer, start_beat: f64) {
+    pub fn launch(&mut self, handle: SourceHandle, buffer: Arc<DecodedBuffer>, start_beat: f64) {
         self.source_handle = Some(handle);
         if let Some(bg) = &buffer.beat_grid {
             self.bpm = bg.bpm;
@@ -151,7 +153,7 @@ impl Player {
         self.eq.reset();
     }
 
-    pub fn load_buffer(&mut self, buffer: DecodedBuffer) {
+    pub fn load_buffer(&mut self, buffer: Arc<DecodedBuffer>) {
         if let Some(bg) = &buffer.beat_grid {
             self.bpm = bg.bpm;
             self.first_beat_sec = bg.first_beat_sec;

@@ -17,6 +17,7 @@ pub mod bus;
 pub mod command;
 pub mod engine;
 pub mod eq;
+pub mod intelligence;
 pub mod meter;
 pub mod player;
 pub mod ring_buffer;
@@ -29,6 +30,10 @@ pub use command::{
     MAX_PLAYERS,
 };
 pub use engine::AudioEngine;
+pub use intelligence::{
+    ConfidenceTier, KeyAlternative, TrackIntelligenceSnapshot,
+    SNAPSHOT_SCHEMA_VERSION, compatibility,
+};
 pub use meter::{MeterSnapshot, MeterReadout, PlayerMeterReadout};
 pub use player::Player;
 pub use ring_buffer::{RingBufferConsumer, RingBufferProducer, create_ring_buffer};
