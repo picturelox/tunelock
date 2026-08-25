@@ -105,6 +105,14 @@ pub enum EngineCommand {
         at_frame: u64,
         source_beat: f64,
     },
+    /// Seek a player to a position in the source (in seconds).
+    /// Used by the Listening Lab's ABX cue positioning, where the
+    /// cue is denominated in seconds rather than beats.
+    SeekSourceSeconds {
+        player: PlayerId,
+        at_frame: u64,
+        source_seconds: f64,
+    },
     /// Set player tempo rate (1.0 = original, 0.92-1.08 typical range).
     SetTempo {
         player: PlayerId,
@@ -237,6 +245,21 @@ pub enum EngineCommand {
         processor_type: ProcessorType,
         tempo_rate: f32,
         pitch_semitones: f32,
+    },
+    /// Beat Sync: tempo-match player B to player A's effective BPM and
+    /// align their nearest beat-grid beats. Both players start at the
+    /// same future frame. Used by the Listening Lab's two-deck mode.
+    BeatSync {
+        player_a: PlayerId,
+        player_b: PlayerId,
+        at_frame: u64,
+    },
+    /// Bar Sync: like BeatSync but additionally aligns downbeat/bar
+    /// boundaries rather than just beat boundaries.
+    BarSync {
+        player_a: PlayerId,
+        player_b: PlayerId,
+        at_frame: u64,
     },
 }
 

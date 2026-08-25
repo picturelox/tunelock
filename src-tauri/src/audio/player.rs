@@ -383,6 +383,55 @@ impl Player {
         }
     }
 
+    /// Source BPM (from beat grid or fallback 120).
+    pub fn source_bpm(&self) -> f64 {
+        self.bpm
+    }
+
+    /// Effective BPM = source BPM × tempo ratio.
+    pub fn effective_bpm(&self) -> f64 {
+        self.bpm * self.processor.tempo_ratio()
+    }
+
+    /// Current tempo ratio (1.0 = original speed).
+    pub fn tempo_ratio(&self) -> f64 {
+        self.processor.tempo_ratio()
+    }
+
+    /// Current pitch shift in semitones.
+    pub fn pitch_semitones(&self) -> f64 {
+        self.processor.pitch_semitones()
+    }
+
+    /// Meter numerator (e.g., 4 for 4/4).
+    pub fn meter_numerator(&self) -> i32 {
+        self.meter_numerator
+    }
+
+    /// Current beat position (fractional, relative to first beat).
+    pub fn beat_position(&self) -> f64 {
+        let pos_sec = self.get_position_sec();
+        if self.bpm > 0.0 {
+            (pos_sec - self.first_beat_sec) * self.bpm / 60.0
+        } else {
+            0.0
+        }
+    }
+
+    /// Current bar position (fractional, 0 = first bar).
+    pub fn bar_position(&self) -> f64 {
+        if self.meter_numerator > 0 {
+            self.beat_position() / self.meter_numerator as f64
+        } else {
+            0.0
+        }
+    }
+
+    /// Processor algorithmic latency in frames.
+    pub fn latency_frames(&self) -> usize {
+        self.processor.latency_frames()
+    }
+
     pub fn get_duration_sec(&self) -> f64 {
         self.buffer.as_ref().map(|b| b.duration_sec).unwrap_or(0.0)
     }

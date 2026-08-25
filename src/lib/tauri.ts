@@ -422,6 +422,15 @@ export interface PlayerMeterEntry {
   rms: number;
   peak: number;
   clip: boolean;
+  // Musical telemetry (PB-2.3)
+  sourceBpm: number;
+  effectiveBpm: number;
+  tempoRatio: number;
+  pitchSemitones: number;
+  beatPosition: number;
+  barPosition: number;
+  meterNumerator: number;
+  processorMode: number; // 0=bypass, 1=varispeed, 2=signalsmith
 }
 
 export interface AudioMeterReadout {
@@ -492,6 +501,18 @@ export async function audioEngineSetListeningCondition(
 
 export async function audioEngineLoadPlayerPaused(player: number, filePath: string): Promise<void> {
   return invoke('audio_engine_load_player_paused', { player, filePath });
+}
+
+export async function audioEngineSeekSourceSeconds(player: number, sourceSeconds: number): Promise<void> {
+  return invoke('audio_engine_seek_source_seconds', { player, sourceSeconds });
+}
+
+export async function audioEngineBeatSync(playerA: number, playerB: number): Promise<void> {
+  return invoke('audio_engine_beat_sync', { playerA, playerB });
+}
+
+export async function audioEngineBarSync(playerA: number, playerB: number): Promise<void> {
+  return invoke('audio_engine_bar_sync', { playerA, playerB });
 }
 
 export async function getGitRevision(): Promise<string> {

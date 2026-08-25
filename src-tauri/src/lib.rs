@@ -169,6 +169,9 @@ pub fn run() {
             commands::audio_engine_sync_launch,
             commands::audio_engine_set_listening_condition,
             commands::audio_engine_load_player_paused,
+            commands::audio_engine_seek_source_seconds,
+            commands::audio_engine_beat_sync,
+            commands::audio_engine_bar_sync,
             commands::get_git_revision,
         ])
         .run(tauri::generate_context!())

@@ -8,7 +8,7 @@
 // (f64 → u64 → f64) to avoid locks. The values may be slightly inconsistent
 // across fields (torn reads), but this is acceptable for meter display.
 
-use std::sync::atomic::{AtomicU64, AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicBool, AtomicI32, Ordering};
 
 use super::command::MAX_PLAYERS;
 
@@ -36,6 +36,16 @@ pub struct MeterSnapshot {
     player_rms: [AtomicU64; MAX_PLAYERS],          // f64 bits
     player_peak: [AtomicU64; MAX_PLAYERS],         // f64 bits
     player_clip: [AtomicBool; MAX_PLAYERS],
+
+    // Per-player musical telemetry (PB-2.3 Musical Time Bridge)
+    player_source_bpm: [AtomicU64; MAX_PLAYERS],      // f64 bits
+    player_effective_bpm: [AtomicU64; MAX_PLAYERS],    // f64 bits
+    player_tempo_ratio: [AtomicU64; MAX_PLAYERS],      // f64 bits
+    player_pitch_semitones: [AtomicU64; MAX_PLAYERS],  // f64 bits
+    player_beat_position: [AtomicU64; MAX_PLAYERS],    // f64 bits
+    player_bar_position: [AtomicU64; MAX_PLAYERS],     // f64 bits
+    player_meter_numerator: [AtomicI32; MAX_PLAYERS],
+    player_processor_mode: [AtomicI32; MAX_PLAYERS],   // 0=bypass, 1=varispeed, 2=signalsmith
 
     // Bus meters
     bus_a_rms: AtomicU64,
@@ -69,6 +79,14 @@ impl MeterSnapshot {
             player_rms: Default::default(),
             player_peak: Default::default(),
             player_clip: Default::default(),
+            player_source_bpm: Default::default(),
+            player_effective_bpm: Default::default(),
+            player_tempo_ratio: Default::default(),
+            player_pitch_semitones: Default::default(),
+            player_beat_position: Default::default(),
+            player_bar_position: Default::default(),
+            player_meter_numerator: Default::default(),
+            player_processor_mode: Default::default(),
             bus_a_rms: AtomicU64::new(0),
             bus_a_peak: AtomicU64::new(0),
             bus_b_rms: AtomicU64::new(0),
@@ -92,6 +110,32 @@ impl MeterSnapshot {
             store_f64(&self.player_rms[index], rms);
             store_f64(&self.player_peak[index], peak);
             self.player_clip[index].store(clip, Ordering::Relaxed);
+        }
+    }
+
+    /// Write musical telemetry for a player (PB-2.3 Musical Time Bridge).
+    /// Called from the audio callback alongside meter writes.
+    pub fn write_player_musical(
+        &self,
+        index: usize,
+        source_bpm: f64,
+        effective_bpm: f64,
+        tempo_ratio: f64,
+        pitch_semitones: f64,
+        beat_position: f64,
+        bar_position: f64,
+        meter_numerator: i32,
+        processor_mode: i32,
+    ) {
+        if index < MAX_PLAYERS {
+            store_f64(&self.player_source_bpm[index], source_bpm);
+            store_f64(&self.player_effective_bpm[index], effective_bpm);
+            store_f64(&self.player_tempo_ratio[index], tempo_ratio);
+            store_f64(&self.player_pitch_semitones[index], pitch_semitones);
+            store_f64(&self.player_beat_position[index], beat_position);
+            store_f64(&self.player_bar_position[index], bar_position);
+            self.player_meter_numerator[index].store(meter_numerator, Ordering::Relaxed);
+            self.player_processor_mode[index].store(processor_mode, Ordering::Relaxed);
         }
     }
 
@@ -127,6 +171,14 @@ impl MeterSnapshot {
                 rms: load_f64(&self.player_rms[index]),
                 peak: load_f64(&self.player_peak[index]),
                 clip: self.player_clip[index].load(Ordering::Relaxed),
+                source_bpm: load_f64(&self.player_source_bpm[index]),
+                effective_bpm: load_f64(&self.player_effective_bpm[index]),
+                tempo_ratio: load_f64(&self.player_tempo_ratio[index]),
+                pitch_semitones: load_f64(&self.player_pitch_semitones[index]),
+                beat_position: load_f64(&self.player_beat_position[index]),
+                bar_position: load_f64(&self.player_bar_position[index]),
+                meter_numerator: self.player_meter_numerator[index].load(Ordering::Relaxed),
+                processor_mode: self.player_processor_mode[index].load(Ordering::Relaxed),
             }
         } else {
             PlayerMeterReadout::default()
@@ -142,6 +194,15 @@ pub struct PlayerMeterReadout {
     pub rms: f64,
     pub peak: f64,
     pub clip: bool,
+    // Musical telemetry (PB-2.3)
+    pub source_bpm: f64,
+    pub effective_bpm: f64,
+    pub tempo_ratio: f64,
+    pub pitch_semitones: f64,
+    pub beat_position: f64,
+    pub bar_position: f64,
+    pub meter_numerator: i32,
+    pub processor_mode: i32,
 }
 
 /// A readable snapshot of all meters for the UI.

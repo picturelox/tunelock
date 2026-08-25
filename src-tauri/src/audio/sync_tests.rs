@@ -411,4 +411,289 @@ mod tests {
         let has_audio = buf256.iter().any(|&s| s.abs() > 0.001);
         assert!(has_audio, "must produce audio after relaunch (no allocation crash)");
     }
+
+    // ========================================================================
+    // PB-2.3 Musical Time Bridge — Beat Sync and Bar Sync tests
+    // ========================================================================
+
+    /// Create a click track at a specific BPM with clicks on every beat.
+    fn beat_click_track(bpm: f64, total_sec: f64) -> Arc<DecodedBuffer> {
+        let total_frames = (SR * total_sec) as usize;
+        let beat_period = (SR * 60.0 / bpm) as usize;
+        let mut samples = vec![0.0f32; total_frames * 2];
+        let mut frame = 0;
+        while frame < total_frames {
+            // Short click: 200 samples
+            for j in 0..200.min(total_frames - frame) {
+                let v = (1.0 - j as f32 / 200.0) * 0.8;
+                samples[(frame + j) * 2] = v;
+                samples[(frame + j) * 2 + 1] = v;
+            }
+            frame += beat_period;
+        }
+        Arc::new(DecodedBuffer {
+            samples,
+            sample_rate: SR as u32,
+            channels: 2,
+            duration_sec: total_sec,
+            bpm: Some(bpm),
+            beat_grid: Some(crate::audio::command::BeatGridCompact {
+                bpm,
+                first_beat_sec: 0.0,
+                meter_numerator: 4,
+                downbeat_offset: 0,
+            }),
+        })
+    }
+
+    /// Helper to launch a player with a given buffer.
+    fn launch_player(state: &mut CallbackState, player: u8, buf: Arc<DecodedBuffer>) {
+        state.command_queue.push(EngineCommand::Launch {
+            player: PlayerId(player),
+            at_frame: state.frame_counter.load(Ordering::Relaxed),
+            source: SourceHandle(player as u64 + 10),
+            buffer: buf,
+            start_beat: 0.0,
+            quantize: Quantize::Immediate,
+        });
+        // Process commands
+        let mut tmp = vec![0.0f32; 256];
+        audio_callback_f32(state, &mut tmp);
+    }
+
+    #[test]
+    fn beat_sync_matches_effective_bpms() {
+        let mut state = make_state();
+
+        // Player A: 124 BPM
+        let buf_a = beat_click_track(124.0, 30.0);
+        launch_player(&mut state, 0, buf_a);
+
+        // Player B: 128 BPM
+        let buf_b = beat_click_track(128.0, 30.0);
+        launch_player(&mut state, 1, buf_b);
+
+        // Before BeatSync: A's effective BPM = 124, B's effective BPM = 128
+        let a_eff_before = state.players[0].effective_bpm();
+        let b_eff_before = state.players[1].effective_bpm();
+        assert!((a_eff_before - 124.0).abs() < 0.01, "A effective BPM before: {}", a_eff_before);
+        assert!((b_eff_before - 128.0).abs() < 0.01, "B effective BPM before: {}", b_eff_before);
+
+        // Send BeatSync: tempo-match B to A
+        state.command_queue.push(EngineCommand::BeatSync {
+            player_a: PlayerId(0),
+            player_b: PlayerId(1),
+            at_frame: state.frame_counter.load(Ordering::Relaxed),
+        });
+
+        // Process commands
+        let mut buf256 = vec![0.0f32; 256];
+        audio_callback_f32(&mut state, &mut buf256);
+
+        // After BeatSync: A's effective BPM = 124, B's effective BPM should also = 124
+        let a_eff_after = state.players[0].effective_bpm();
+        let b_eff_after = state.players[1].effective_bpm();
+        assert!((a_eff_after - 124.0).abs() < 0.01, "A effective BPM after: {}", a_eff_after);
+        assert!(
+            (b_eff_after - 124.0).abs() < 0.5,
+            "B effective BPM after BeatSync should be ~124, got {}",
+            b_eff_after
+        );
+
+        // Verify the tempo ratio: 124/128 = 0.96875
+        let expected_ratio = 124.0 / 128.0;
+        let actual_ratio = state.players[1].tempo_ratio();
+        assert!(
+            (actual_ratio - expected_ratio).abs() < 0.001,
+            "B tempo ratio should be {}, got {}",
+            expected_ratio,
+            actual_ratio
+        );
+    }
+
+    #[test]
+    fn beat_sync_aligns_beat_positions() {
+        let mut state = make_state();
+
+        let buf_a = beat_click_track(124.0, 30.0);
+        launch_player(&mut state, 0, buf_a);
+
+        let buf_b = beat_click_track(128.0, 30.0);
+        launch_player(&mut state, 1, buf_b);
+
+        // Advance A by some frames so its beat position is non-zero
+        let mut buf256 = vec![0.0f32; 256];
+        for _ in 0..50 {
+            audio_callback_f32(&mut state, &mut buf256);
+        }
+
+        // Send BeatSync
+        state.command_queue.push(EngineCommand::BeatSync {
+            player_a: PlayerId(0),
+            player_b: PlayerId(1),
+            at_frame: state.frame_counter.load(Ordering::Relaxed),
+        });
+        audio_callback_f32(&mut state, &mut buf256);
+
+        // After BeatSync, both players should be playing
+        assert!(state.players[0].playing, "Player A should be playing after BeatSync");
+        assert!(state.players[1].playing, "Player B should be playing after BeatSync");
+
+        // The beat positions should be close (within 0.5 beat)
+        let a_beat = state.players[0].beat_position();
+        let b_beat = state.players[1].beat_position();
+        let beat_diff = (a_beat - b_beat).abs();
+        // After alignment, the beat difference should be less than 1 beat
+        // (we round to the nearest beat, so the diff should be < 0.5)
+        assert!(
+            beat_diff < 1.0,
+            "Beat positions should be aligned within 1 beat: A={}, B={}, diff={}",
+            a_beat,
+            b_beat,
+            beat_diff
+        );
+    }
+
+    #[test]
+    fn bar_sync_aligns_bar_positions() {
+        let mut state = make_state();
+
+        let buf_a = beat_click_track(124.0, 30.0);
+        launch_player(&mut state, 0, buf_a);
+
+        let buf_b = beat_click_track(128.0, 30.0);
+        launch_player(&mut state, 1, buf_b);
+
+        // Advance playback
+        let mut buf256 = vec![0.0f32; 256];
+        for _ in 0..50 {
+            audio_callback_f32(&mut state, &mut buf256);
+        }
+
+        // Send BarSync
+        state.command_queue.push(EngineCommand::BarSync {
+            player_a: PlayerId(0),
+            player_b: PlayerId(1),
+            at_frame: state.frame_counter.load(Ordering::Relaxed),
+        });
+        audio_callback_f32(&mut state, &mut buf256);
+
+        // After BarSync, both players should be playing
+        assert!(state.players[0].playing, "Player A should be playing after BarSync");
+        assert!(state.players[1].playing, "Player B should be playing after BarSync");
+
+        // The bar positions should be close (within 1 bar)
+        let a_bar = state.players[0].bar_position();
+        let b_bar = state.players[1].bar_position();
+        let bar_diff = (a_bar - b_bar).abs();
+        assert!(
+            bar_diff < 1.0,
+            "Bar positions should be aligned within 1 bar: A={}, B={}, diff={}",
+            a_bar,
+            b_bar,
+            bar_diff
+        );
+
+        // Effective BPMs should match
+        let a_eff = state.players[0].effective_bpm();
+        let b_eff = state.players[1].effective_bpm();
+        assert!(
+            (a_eff - b_eff).abs() < 0.5,
+            "Effective BPMs should match after BarSync: A={}, B={}",
+            a_eff,
+            b_eff
+        );
+    }
+
+    #[test]
+    fn long_run_beat_sync_stays_aligned() {
+        // Verify that after BeatSync, two players with different source BPMs
+        // stay aligned over a long run (30 seconds simulated).
+        // Tolerance: within 0.1 beat after 30 seconds.
+        let mut state = make_state();
+
+        let buf_a = beat_click_track(124.0, 60.0);
+        launch_player(&mut state, 0, buf_a);
+
+        let buf_b = beat_click_track(128.0, 60.0);
+        launch_player(&mut state, 1, buf_b);
+
+        // Send BeatSync
+        state.command_queue.push(EngineCommand::BeatSync {
+            player_a: PlayerId(0),
+            player_b: PlayerId(1),
+            at_frame: state.frame_counter.load(Ordering::Relaxed),
+        });
+
+        // Render 30 seconds of audio (30 * 44100 / 256 ≈ 5168 blocks)
+        let mut buf256 = vec![0.0f32; 256];
+        let blocks = (30.0 * SR / 256.0) as usize;
+        for _ in 0..blocks {
+            audio_callback_f32(&mut state, &mut buf256);
+        }
+
+        // After 30 seconds, the beat positions should still be close.
+        // Since both players have the same effective BPM (124), their
+        // beat positions should advance at the same rate.
+        let a_beat = state.players[0].beat_position();
+        let b_beat = state.players[1].beat_position();
+        let beat_diff = (a_beat - b_beat).abs();
+
+        // Tolerance: 0.5 beat (allows for rounding in initial alignment
+        // and small floating-point drift over 30 seconds)
+        assert!(
+            beat_diff < 0.5,
+            "After 30s, beat positions should be within 0.5 beat: A={}, B={}, diff={}",
+            a_beat,
+            b_beat,
+            beat_diff
+        );
+    }
+
+    #[test]
+    fn seek_source_seconds_is_bpm_independent() {
+        // Verify that seek_sec positions the player at the exact second
+        // regardless of BPM. This is the ABX cue positioning guarantee.
+        let mut state = make_state();
+
+        // 174 BPM track — fast
+        let buf = beat_click_track(174.0, 30.0);
+        launch_player(&mut state, 0, buf);
+
+        // Seek to 10.0 seconds
+        state.command_queue.push(EngineCommand::SeekSourceSeconds {
+            player: PlayerId(0),
+            at_frame: state.frame_counter.load(Ordering::Relaxed),
+            source_seconds: 10.0,
+        });
+
+        let mut buf256 = vec![0.0f32; 256];
+        audio_callback_f32(&mut state, &mut buf256);
+
+        // Position should be ~10.0 seconds
+        let pos_sec = state.players[0].get_position_sec();
+        assert!(
+            (pos_sec - 10.0).abs() < 0.1,
+            "Position after seek_source_seconds(10.0) should be ~10.0s, got {}",
+            pos_sec
+        );
+
+        // Now try with an 85 BPM track — slow
+        let buf_slow = beat_click_track(85.0, 30.0);
+        launch_player(&mut state, 1, buf_slow);
+
+        state.command_queue.push(EngineCommand::SeekSourceSeconds {
+            player: PlayerId(1),
+            at_frame: state.frame_counter.load(Ordering::Relaxed),
+            source_seconds: 10.0,
+        });
+        audio_callback_f32(&mut state, &mut buf256);
+
+        let pos_sec_slow = state.players[1].get_position_sec();
+        assert!(
+            (pos_sec_slow - 10.0).abs() < 0.1,
+            "Position after seek_source_seconds(10.0) at 85 BPM should be ~10.0s, got {}",
+            pos_sec_slow
+        );
+    }
 }

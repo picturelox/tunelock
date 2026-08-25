@@ -2040,6 +2040,67 @@ pub async fn get_git_revision() -> Result<String, String> {
     Ok(sha.to_string())
 }
 
+/// Seek a player to a position in seconds (not beats). Used by the
+/// Listening Lab's ABX cue positioning, where the cue is denominated
+/// in seconds rather than beats.
+#[command]
+pub async fn audio_engine_seek_source_seconds(
+    state: State<'_, AppState>,
+    player: u8,
+    source_seconds: f64,
+) -> Result<(), String> {
+    let engine_slot = state.audio_engine.lock().await;
+    if let Some(engine) = engine_slot.as_ref() {
+        let frame = engine.current_frame();
+        engine.send_command(crate::audio::EngineCommand::SeekSourceSeconds {
+            player: crate::audio::PlayerId(player),
+            at_frame: frame,
+            source_seconds,
+        });
+    }
+    Ok(())
+}
+
+/// Beat Sync: tempo-match player B to player A's effective BPM and
+/// align their nearest beat-grid beats. Both players start playing.
+#[command]
+pub async fn audio_engine_beat_sync(
+    state: State<'_, AppState>,
+    player_a: u8,
+    player_b: u8,
+) -> Result<(), String> {
+    let engine_slot = state.audio_engine.lock().await;
+    if let Some(engine) = engine_slot.as_ref() {
+        let frame = engine.current_frame();
+        engine.send_command(crate::audio::EngineCommand::BeatSync {
+            player_a: crate::audio::PlayerId(player_a),
+            player_b: crate::audio::PlayerId(player_b),
+            at_frame: frame,
+        });
+    }
+    Ok(())
+}
+
+/// Bar Sync: tempo-match player B to player A and align downbeat/bar
+/// boundaries. Both players start playing.
+#[command]
+pub async fn audio_engine_bar_sync(
+    state: State<'_, AppState>,
+    player_a: u8,
+    player_b: u8,
+) -> Result<(), String> {
+    let engine_slot = state.audio_engine.lock().await;
+    if let Some(engine) = engine_slot.as_ref() {
+        let frame = engine.current_frame();
+        engine.send_command(crate::audio::EngineCommand::BarSync {
+            player_a: crate::audio::PlayerId(player_a),
+            player_b: crate::audio::PlayerId(player_b),
+            at_frame: frame,
+        });
+    }
+    Ok(())
+}
+
 #[command]
 pub async fn audio_engine_set_listening_condition(
     state: State<'_, AppState>,
@@ -2071,34 +2132,111 @@ pub async fn audio_engine_set_listening_condition(
 /// Load a player with a source but do NOT start playback. The player
 /// is loaded in a paused state, ready for explicit launch via play or
 /// sync_launch. Used by the Listening Lab so load doesn't auto-play.
+///
+/// This is the Musical Time Bridge: when loading a file, the command
+/// looks up the track in the TuneLock database by path, fetches any
+/// existing beat grid analysis, and attaches it to the DecodedBuffer.
+/// If no beat grid exists, it runs the existing beat-grid detector
+/// on a background thread and attaches the result. This wires Core
+/// Intelligence's rhythmic data into the Performance Engine without
+/// reimplementing analysis.
 #[command]
 pub async fn audio_engine_load_player_paused(
     state: State<'_, AppState>,
     player: u8,
     file_path: String,
 ) -> Result<(), String> {
-    let mut engine_slot = state.audio_engine.lock().await;
-    let engine = engine_slot.as_mut().ok_or("Audio engine not initialized")?;
-    let target_sr = engine.sample_rate();
+    // Phase 1: Get the target sample rate from the engine.
+    let target_sr = {
+        let engine_slot = state.audio_engine.lock().await;
+        let engine = engine_slot.as_ref().ok_or("Audio engine not initialized")?;
+        engine.sample_rate()
+    };
 
-    let buffer = tokio::task::spawn_blocking(move || {
-        crate::audio::worker::decode_file(&file_path, target_sr)
+    // Phase 2: Look up the track in the DB by path and fetch its beat grid.
+    // Clone the DB Arc so we can use it in spawn_blocking.
+    let db_arc = state.db.clone();
+    let file_path_for_db = file_path.clone();
+    let beat_grid_info: Option<(f64, f64, i32, usize, Option<f64>)> = {
+        let db = db_arc.lock().await;
+        // Try to find the track by path.
+        if let Ok(Some(track)) = db.get_track_by_path(&file_path_for_db) {
+            // Track found — try to get its beat grid.
+            if let Ok(Some(bg)) = db.get_beat_grid(track.id) {
+                Some((
+                    bg.bpm,
+                    bg.first_beat_ms as f64 / 1000.0,
+                    bg.meter_numerator,
+                    bg.downbeat_offset_beats as usize,
+                    bg.confidence,
+                ))
+            } else if let Some(track_bpm) = track.bpm {
+                // No beat grid, but the track has a BPM from analysis.
+                // Create a minimal beat grid with default meter.
+                Some((track_bpm, 0.0, 4, 0, None))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    };
+
+    // Phase 3: Decode the audio file on a background thread.
+    let file_path_for_decode = file_path.clone();
+    let mut buffer = tokio::task::spawn_blocking(move || {
+        crate::audio::worker::decode_file(&file_path_for_decode, target_sr)
             .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| format!("Decode task failed: {}", e))??;
 
+    // Phase 4: If we have beat grid info from the DB, attach it.
+    // If not, try to run the beat-grid detector on the decoded audio.
+    if let Some((bpm, first_beat_sec, meter_numerator, downbeat_offset, _confidence)) = beat_grid_info {
+        buffer.bpm = Some(bpm);
+        buffer.beat_grid = Some(crate::audio::command::BeatGridCompact {
+            bpm,
+            first_beat_sec,
+            meter_numerator,
+            downbeat_offset,
+        });
+    } else {
+        // No existing analysis — run the beat-grid detector on the
+        // decoded audio. This uses the EXISTING analysis pipeline,
+        // not a new one. We decode to mono at the analysis sample rate.
+        let file_path_for_analysis = file_path.clone();
+        let detected = tokio::task::spawn_blocking(move || -> Result<Option<crate::analysis::beat_grid::BeatGridResult>, String> {
+            let samples = crate::media::decode_media(&file_path_for_analysis).map_err(|e| e.to_string())?;
+            crate::analysis::beat_grid::detect_beat_grid(&samples).map(Some).map_err(|e| e)
+        })
+        .await
+        .map_err(|e| format!("Beat grid detection task failed: {}", e))?;
+
+        if let Ok(Some(grid)) = detected {
+            buffer.bpm = Some(grid.bpm);
+            buffer.beat_grid = Some(crate::audio::command::BeatGridCompact {
+                bpm: grid.bpm,
+                first_beat_sec: grid.first_beat_sec,
+                meter_numerator: grid.meter_numerator,
+                downbeat_offset: grid.downbeat_offset,
+            });
+        }
+        // If detection failed, buffer.bpm and beat_grid stay None.
+        // The player will fall back to 120 BPM as before.
+    }
+
+    // Phase 5: Register the source and launch (paused).
+    let mut engine_slot = state.audio_engine.lock().await;
+    let engine = engine_slot.as_mut().ok_or("Audio engine not initialized")?;
     let source = engine.register_source(buffer);
-    // Launch with Immediate quantize, then immediately pause.
-    // This loads the buffer into the player without starting playback.
     engine.launch_player(
         crate::audio::PlayerId(player),
         source,
         0.0,
         crate::audio::Quantize::Immediate,
     )?;
-    // Immediately send a Pause command at the current frame to stop
-    // playback that launch_player just started.
+    // Immediately pause to stop playback that launch_player just started.
     let frame = engine.current_frame();
     engine.send_command(crate::audio::EngineCommand::Pause {
         player: crate::audio::PlayerId(player),
@@ -2249,6 +2387,15 @@ pub struct PlayerMeterEntry {
     pub rms: f64,
     pub peak: f64,
     pub clip: bool,
+    // Musical telemetry (PB-2.3 Musical Time Bridge)
+    pub source_bpm: f64,
+    pub effective_bpm: f64,
+    pub tempo_ratio: f64,
+    pub pitch_semitones: f64,
+    pub beat_position: f64,
+    pub bar_position: f64,
+    pub meter_numerator: i32,
+    pub processor_mode: i32,
 }
 
 #[command]
@@ -2269,6 +2416,14 @@ pub async fn audio_engine_get_meters(state: State<'_, AppState>) -> Result<Audio
         rms: p.rms,
         peak: p.peak,
         clip: p.clip,
+        source_bpm: p.source_bpm,
+        effective_bpm: p.effective_bpm,
+        tempo_ratio: p.tempo_ratio,
+        pitch_semitones: p.pitch_semitones,
+        beat_position: p.beat_position,
+        bar_position: p.bar_position,
+        meter_numerator: p.meter_numerator,
+        processor_mode: p.processor_mode,
     }).collect::<Vec<_>>().try_into().unwrap_or_default();
     Ok(AudioMeterReadout {
         playing: m.playing,

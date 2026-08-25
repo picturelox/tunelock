@@ -79,6 +79,9 @@ pub struct CallbackState {
     #[cfg(not(test))]
     command_queue: Arc<CommandQueue>,
     meter_snapshot: Arc<MeterSnapshot>,
+    #[cfg(test)]
+    pub players: [Player; MAX_PLAYERS],
+    #[cfg(not(test))]
     players: [Player; MAX_PLAYERS],
     buses: [Bus; 2], // Bus A, Bus B
     /// Deferred-destruction queue for retired source buffers. The callback
@@ -316,6 +319,12 @@ impl CallbackState {
                     self.players[idx].seek_beats(source_beat);
                 }
             }
+            EngineCommand::SeekSourceSeconds { player, source_seconds, .. } => {
+                let idx = player.as_index();
+                if idx < MAX_PLAYERS {
+                    self.players[idx].seek_sec(source_seconds);
+                }
+            }
             EngineCommand::SetTempo { player, rate, .. } => {
                 let idx = player.as_index();
                 if idx < MAX_PLAYERS {
@@ -464,6 +473,55 @@ impl CallbackState {
                     self.players[idx].set_pitch_semitones(pitch_semitones);
                 }
             }
+            EngineCommand::BeatSync { player_a, player_b, .. } => {
+                let idx_a = player_a.as_index();
+                let idx_b = player_b.as_index();
+                if idx_a < MAX_PLAYERS && idx_b < MAX_PLAYERS {
+                    // Tempo-match B to A: B's tempo ratio = A's effective BPM / B's source BPM
+                    let a_effective_bpm = self.players[idx_a].effective_bpm();
+                    let b_source_bpm = self.players[idx_b].source_bpm();
+                    if b_source_bpm > 0.0 {
+                        let tempo_ratio = a_effective_bpm / b_source_bpm;
+                        self.players[idx_b].set_tempo(tempo_ratio as f32);
+                    }
+                    // Align beats: seek B to the nearest beat that matches A's beat position.
+                    let a_beat = self.players[idx_a].beat_position();
+                    let b_beat = self.players[idx_b].beat_position();
+                    let beat_diff = a_beat - b_beat;
+                    // If B is behind A, seek B forward by beat_diff beats.
+                    // If B is ahead, seek B backward. Round to nearest beat.
+                    let target_beat_b = b_beat + beat_diff.round();
+                    self.players[idx_b].seek_beats(target_beat_b);
+                    // Start both players
+                    self.players[idx_a].play();
+                    self.players[idx_b].play();
+                }
+            }
+            EngineCommand::BarSync { player_a, player_b, .. } => {
+                let idx_a = player_a.as_index();
+                let idx_b = player_b.as_index();
+                if idx_a < MAX_PLAYERS && idx_b < MAX_PLAYERS {
+                    // Tempo-match B to A (same as BeatSync)
+                    let a_effective_bpm = self.players[idx_a].effective_bpm();
+                    let b_source_bpm = self.players[idx_b].source_bpm();
+                    if b_source_bpm > 0.0 {
+                        let tempo_ratio = a_effective_bpm / b_source_bpm;
+                        self.players[idx_b].set_tempo(tempo_ratio as f32);
+                    }
+                    // Align bars: seek B so its bar position matches A's.
+                    let a_bar = self.players[idx_a].bar_position();
+                    let b_bar = self.players[idx_b].bar_position();
+                    let bar_diff = a_bar - b_bar;
+                    let b_meter = self.players[idx_b].meter_numerator() as f64;
+                    let b_beat = self.players[idx_b].beat_position();
+                    // Convert bar difference to beat difference
+                    let target_beat_b = b_beat + (bar_diff * b_meter).round();
+                    self.players[idx_b].seek_beats(target_beat_b);
+                    // Start both players
+                    self.players[idx_a].play();
+                    self.players[idx_b].play();
+                }
+            }
         }
     }
 
@@ -497,7 +555,7 @@ impl CallbackState {
     }
 
     fn update_meters(&mut self, sample_count: usize) {
-        // Per-player meters
+        // Per-player meters + musical telemetry
         for (i, p) in self.players.iter().enumerate() {
             let (rms, peak, clip) = p.get_block_meters(sample_count);
             self.meter_snapshot.write_player(
@@ -507,6 +565,23 @@ impl CallbackState {
                 rms,
                 peak,
                 clip,
+            );
+            // Musical telemetry (PB-2.3 Musical Time Bridge)
+            let mode_i32 = match p.processor_mode() {
+                super::timepitch::ProcessorMode::Bypass => 0,
+                super::timepitch::ProcessorMode::Varispeed => 1,
+                super::timepitch::ProcessorMode::Signalsmith => 2,
+            };
+            self.meter_snapshot.write_player_musical(
+                i,
+                p.source_bpm(),
+                p.effective_bpm(),
+                p.tempo_ratio(),
+                p.pitch_semitones(),
+                p.beat_position(),
+                p.bar_position(),
+                p.meter_numerator(),
+                mode_i32,
             );
         }
 
@@ -545,6 +620,7 @@ impl CommandFrame for EngineCommand {
             | EngineCommand::Pause { at_frame, .. }
             | EngineCommand::Resume { at_frame, .. }
             | EngineCommand::Seek { at_frame, .. }
+            | EngineCommand::SeekSourceSeconds { at_frame, .. }
             | EngineCommand::SetTempo { at_frame, .. }
             | EngineCommand::SetPitch { at_frame, .. }
             | EngineCommand::SetGain { at_frame, .. }
@@ -564,7 +640,9 @@ impl CommandFrame for EngineCommand {
             | EngineCommand::SetFilterDrive { at_frame, .. }
             | EngineCommand::SetMasterGain { at_frame, .. } => *at_frame,
             | EngineCommand::SetProcessorType { at_frame, .. }
-            | EngineCommand::SetListeningCondition { at_frame, .. } => *at_frame,
+            | EngineCommand::SetListeningCondition { at_frame, .. }
+            | EngineCommand::BeatSync { at_frame, .. }
+            | EngineCommand::BarSync { at_frame, .. } => *at_frame,
             EngineCommand::Shutdown => 0,
         }
     }

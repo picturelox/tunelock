@@ -15,6 +15,9 @@ import {
   audioEngineSetProcessorType,
   audioEngineSetListeningCondition,
   audioEngineSyncLaunch,
+  audioEngineSeekSourceSeconds,
+  audioEngineBeatSync,
+  audioEngineBarSync,
   audioEngineGetMeters,
   listeningLabGetProcessorInfo,
   listeningLabSaveResult,
@@ -46,7 +49,7 @@ const MATERIAL_OPTIONS = [
 export default function ListeningLab() {
   const [ready, setReady] = useState(false);
   const [processorInfo, setProcessorInfo] = useState<ListeningLabProcessorInfo | null>(null);
-  const [, setMeters] = useState<AudioMeterReadout | null>(null);
+  const [meters, setMeters] = useState<AudioMeterReadout | null>(null);
   const [testMode, setTestMode] = useState<TestMode>('quality');
   const [tempo, setTempo] = useState(0);
   const [pitch, setPitch] = useState(0);
@@ -177,7 +180,17 @@ export default function ListeningLab() {
     try { await audioEngineSeek(0, beats); } catch (e) { console.error(e); }
   };
 
-  const handleSetLoop = async (beats: number | null) => {
+  // Meter-aware loop: bars → beats using the track's meter numerator.
+  // In 4/4: 1 bar = 4 beats, 2 bars = 8 beats, etc.
+  // In 3/4: 1 bar = 3 beats, 2 bars = 6 beats, etc.
+  const handleSetLoop = async (bars: number | null) => {
+    if (bars === null) {
+      setLoopBeats(null);
+      try { await audioEngineSetLoop(0, null, null); } catch (e) { console.error(e); }
+      return;
+    }
+    const meterNum = meters?.players[0]?.meterNumerator || 4;
+    const beats = bars * meterNum;
     setLoopBeats(beats);
     try {
       await audioEngineSetLoop(0, 0, beats);
@@ -203,9 +216,8 @@ export default function ListeningLab() {
   const abxStartTrial = (isB: boolean) => {
     // Pause first
     audioEnginePause(0);
-    // Seek to cue position (convert seconds to beats using default 120 BPM)
-    const cueBeat = (abxCueSec * 120) / 60;
-    audioEngineSeek(0, cueBeat);
+    // Seek to cue position in seconds (not beats) — no BPM assumption
+    audioEngineSeekSourceSeconds(0, abxCueSec);
     // Apply condition atomically: processor + tempo + pitch in one command
     if (isB) {
       // B = Signalsmith with current tempo/pitch
@@ -305,11 +317,23 @@ export default function ListeningLab() {
         No filters, limiter, or mastering — clean signal path only.
       </p>
 
-      {/* Processor info */}
-      <div className="mb-4 text-xs text-label-dim flex gap-6">
+      {/* Processor info + musical telemetry */}
+      <div className="mb-4 text-xs text-label-dim flex flex-wrap gap-6">
         <span>Processor: <span className="text-label-cream">{processorInfo?.processorType || 'signalsmith'}</span></span>
         <span>Sample rate: <span className="text-label-cream">{processorInfo?.sampleRate || '?'} Hz</span></span>
+        <span>Latency: <span className="text-label-cream">{processorInfo?.latencyFrames ?? '?'} frames</span></span>
         <span>Position: <span className="text-label-cream">{fmtTime(positionSec)}</span></span>
+        {meters?.players[0] && (
+          <>
+            <span>Source BPM: <span className="text-label-cream">{meters.players[0].sourceBpm > 0 ? meters.players[0].sourceBpm.toFixed(2) : '—'}</span></span>
+            <span>Effective BPM: <span className="text-label-cream">{meters.players[0].effectiveBpm > 0 ? meters.players[0].effectiveBpm.toFixed(2) : '—'}</span></span>
+            <span>Tempo: <span className="text-label-cream">{((meters.players[0].tempoRatio - 1) * 100).toFixed(2)}%</span></span>
+            <span>Pitch: <span className="text-label-cream">{meters.players[0].pitchSemitones > 0 ? '+' : ''}{meters.players[0].pitchSemitones.toFixed(1)} st</span></span>
+            <span>Beat: <span className="text-label-cream">{meters.players[0].beatPosition.toFixed(1)}</span></span>
+            <span>Bar: <span className="text-label-cream">{meters.players[0].barPosition.toFixed(1)}</span></span>
+            <span>Meter: <span className="text-label-cream">{meters.players[0].meterNumerator}/4</span></span>
+          </>
+        )}
         {isPlaying && <span className="text-cap-amber">● PLAYING</span>}
       </div>
 
@@ -442,16 +466,18 @@ export default function ListeningLab() {
         <button onClick={() => handleSeek(64)} className="px-4 py-2 bg-plate-light rounded text-sm">+64 beats</button>
       </div>
 
-      {/* Loop controls (transport mode) */}
+      {/* Loop controls (transport mode) — meter-aware */}
       {testMode === 'transport' && (
         <div className="mb-6">
-          <label className="text-xs text-label-dim block mb-1">LOOP (4/4 time)</label>
+          <label className="text-xs text-label-dim block mb-1">
+            LOOP ({meters?.players[0]?.meterNumerator || 4}/4 time — bar = {meters?.players[0]?.meterNumerator || 4} beats)
+          </label>
           <div className="flex gap-2">
             <button onClick={() => handleSetLoop(null)} className={`px-3 py-1 text-sm rounded ${loopBeats === null ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>Off</button>
-            <button onClick={() => handleSetLoop(4)} className={`px-3 py-1 text-sm rounded ${loopBeats === 4 ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>1 bar</button>
-            <button onClick={() => handleSetLoop(8)} className={`px-3 py-1 text-sm rounded ${loopBeats === 8 ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>2 bars</button>
-            <button onClick={() => handleSetLoop(16)} className={`px-3 py-1 text-sm rounded ${loopBeats === 16 ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>4 bars</button>
-            <button onClick={() => handleSetLoop(32)} className={`px-3 py-1 text-sm rounded ${loopBeats === 32 ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>8 bars</button>
+            <button onClick={() => handleSetLoop(1)} className={`px-3 py-1 text-sm rounded ${loopBeats === (meters?.players[0]?.meterNumerator || 4) * 1 ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>1 bar</button>
+            <button onClick={() => handleSetLoop(2)} className={`px-3 py-1 text-sm rounded ${loopBeats === (meters?.players[0]?.meterNumerator || 4) * 2 ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>2 bars</button>
+            <button onClick={() => handleSetLoop(4)} className={`px-3 py-1 text-sm rounded ${loopBeats === (meters?.players[0]?.meterNumerator || 4) * 4 ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>4 bars</button>
+            <button onClick={() => handleSetLoop(8)} className={`px-3 py-1 text-sm rounded ${loopBeats === (meters?.players[0]?.meterNumerator || 4) * 8 ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>8 bars</button>
           </div>
         </div>
       )}
@@ -462,21 +488,40 @@ export default function ListeningLab() {
           <div className="flex gap-4 mb-3">
             <div className="flex-1">
               <h3 className="text-sm font-bold mb-2">Deck A</h3>
-              <button onClick={() => audioEnginePause(0)} className="px-3 py-1 bg-plate-light rounded text-sm">❚❚ Pause</button>
+              <button onClick={() => audioEnginePause(0)} className="px-3 py-1 bg-plate-light rounded text-sm">❚❚ Pause A</button>
             </div>
             <div className="flex-1">
               <h3 className="text-sm font-bold mb-2">Deck B</h3>
-              <button onClick={() => audioEnginePause(1)} className="px-3 py-1 bg-plate-light rounded text-sm">❚❚ Pause</button>
+              <button onClick={() => audioEnginePause(1)} className="px-3 py-1 bg-plate-light rounded text-sm">❚❚ Pause B</button>
             </div>
           </div>
-          <button
-            onClick={() => audioEngineSyncLaunch(0, 1)}
-            className="px-4 py-2 bg-cap-amber text-black rounded text-sm font-medium mb-3"
-          >
-            ⏯ Sync Start A+B
-          </button>
+          <div className="flex gap-2 flex-wrap mb-3">
+            <button
+              onClick={() => audioEngineSyncLaunch(0, 1)}
+              className="px-3 py-2 bg-plate-lighter rounded text-sm"
+              title="Start both at the same engine frame (engineering diagnostic)"
+            >
+              Same-Frame Start
+            </button>
+            <button
+              onClick={() => audioEngineBeatSync(0, 1)}
+              className="px-4 py-2 bg-cap-amber text-black rounded text-sm font-medium"
+              title="Tempo-match B to A and align nearest beats"
+            >
+              Beat Sync
+            </button>
+            <button
+              onClick={() => audioEngineBarSync(0, 1)}
+              className="px-4 py-2 bg-cap-amber text-black rounded text-sm font-medium"
+              title="Tempo-match B to A and align downbeat/bar boundaries"
+            >
+              Bar Sync
+            </button>
+          </div>
           <p className="text-xs text-label-dim mt-3">
-            Load two beat-driven tracks, then hit Sync Start to launch both at the same engine frame.
+            <strong>Same-Frame Start</strong> = engineering diagnostic (no tempo match).
+            <strong> Beat Sync</strong> = tempo-match B→A + align nearest beats.
+            <strong> Bar Sync</strong> = tempo-match + align downbeat/bar boundaries.
             Listen for drift or phasing over 30s, 1min, 2min+.
           </p>
         </div>
