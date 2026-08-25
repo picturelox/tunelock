@@ -522,6 +522,12 @@ impl CallbackState {
                     self.players[idx_b].play();
                 }
             }
+            EngineCommand::AttachBeatGrid { player, bpm, first_beat_sec, meter_numerator, downbeat_offset, .. } => {
+                let idx = player.as_index();
+                if idx < MAX_PLAYERS {
+                    self.players[idx].attach_beat_grid(bpm, first_beat_sec, meter_numerator, downbeat_offset);
+                }
+            }
         }
     }
 
@@ -642,7 +648,8 @@ impl CommandFrame for EngineCommand {
             | EngineCommand::SetProcessorType { at_frame, .. }
             | EngineCommand::SetListeningCondition { at_frame, .. }
             | EngineCommand::BeatSync { at_frame, .. }
-            | EngineCommand::BarSync { at_frame, .. } => *at_frame,
+            | EngineCommand::BarSync { at_frame, .. }
+            | EngineCommand::AttachBeatGrid { at_frame, .. } => *at_frame,
             EngineCommand::Shutdown => 0,
         }
     }

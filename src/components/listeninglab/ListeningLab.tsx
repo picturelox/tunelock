@@ -46,8 +46,11 @@ const MATERIAL_OPTIONS = [
   { value: 'familiar', label: 'Well-known track' },
 ];
 
+type InitState = 'idle' | 'initializing' | 'ready' | 'error';
+
 export default function ListeningLab() {
-  const [ready, setReady] = useState(false);
+  const [initState, setInitState] = useState<InitState>('idle');
+  const [initError, setInitError] = useState<string>('');
   const [processorInfo, setProcessorInfo] = useState<ListeningLabProcessorInfo | null>(null);
   const [meters, setMeters] = useState<AudioMeterReadout | null>(null);
   const [testMode, setTestMode] = useState<TestMode>('quality');
@@ -89,6 +92,8 @@ export default function ListeningLab() {
   const meterRef = useRef<number | null>(null);
 
   const initEngine = useCallback(async () => {
+    setInitState('initializing');
+    setInitError('');
     try {
       await audioEngineInit();
       const info = await listeningLabGetProcessorInfo();
@@ -96,9 +101,11 @@ export default function ListeningLab() {
       await audioEngineSetMasterGain(1.0);
       await audioEngineSetBus(0, 'master');
       await audioEngineSetBus(1, 'master');
-      setReady(true);
+      setInitState('ready');
     } catch (e) {
       console.error('Listening Lab init failed:', e);
+      setInitError(String(e));
+      setInitState('error');
     }
   }, []);
 
@@ -114,7 +121,7 @@ export default function ListeningLab() {
 
   // Poll meters for position display
   useEffect(() => {
-    if (!ready) return;
+    if (initState !== 'ready') return;
     let active = true;
     const poll = async () => {
       if (!active) return;
@@ -131,7 +138,7 @@ export default function ListeningLab() {
       active = false;
       if (meterRef.current) cancelAnimationFrame(meterRef.current);
     };
-  }, [ready]);
+  }, [initState]);
 
   const handleLoadFile = async (deck: 0 | 1) => {
     const selected = await open({
@@ -299,11 +306,26 @@ export default function ListeningLab() {
     return `${m}:${s.toFixed(3).padStart(6, '0')}`;
   };
 
-  if (!ready) {
+  if (initState !== 'ready') {
     return (
       <div className="p-8 text-label-dim">
         <h2 className="text-xl font-bold text-label-cream mb-4">PB-2 Listening Lab</h2>
-        <p>Initializing audio engine...</p>
+        {initState === 'initializing' && <p>Initializing audio engine...</p>}
+        {initState === 'idle' && <p>Click to initialize the audio engine.</p>}
+        {initState === 'idle' && (
+          <button onClick={() => initEngine()} className="mt-3 px-4 py-2 bg-cap-amber text-black rounded text-sm font-medium">
+            Initialize
+          </button>
+        )}
+        {initState === 'error' && (
+          <div className="mt-3">
+            <p className="text-red-400 mb-2">Audio engine failed to start:</p>
+            <pre className="text-xs text-label-dim bg-plate-dark p-3 rounded mb-3 whitespace-pre-wrap">{initError}</pre>
+            <button onClick={() => initEngine()} className="px-4 py-2 bg-cap-amber text-black rounded text-sm font-medium">
+              Retry
+            </button>
+          </div>
+        )}
       </div>
     );
   }
@@ -323,15 +345,15 @@ export default function ListeningLab() {
         <span>Sample rate: <span className="text-label-cream">{processorInfo?.sampleRate || '?'} Hz</span></span>
         <span>Latency: <span className="text-label-cream">{processorInfo?.latencyFrames ?? '?'} frames</span></span>
         <span>Position: <span className="text-label-cream">{fmtTime(positionSec)}</span></span>
-        {meters?.players[0] && (
+        {meters?.players?.[0] && (
           <>
-            <span>Source BPM: <span className="text-label-cream">{meters.players[0].sourceBpm > 0 ? meters.players[0].sourceBpm.toFixed(2) : '—'}</span></span>
-            <span>Effective BPM: <span className="text-label-cream">{meters.players[0].effectiveBpm > 0 ? meters.players[0].effectiveBpm.toFixed(2) : '—'}</span></span>
-            <span>Tempo: <span className="text-label-cream">{((meters.players[0].tempoRatio - 1) * 100).toFixed(2)}%</span></span>
-            <span>Pitch: <span className="text-label-cream">{meters.players[0].pitchSemitones > 0 ? '+' : ''}{meters.players[0].pitchSemitones.toFixed(1)} st</span></span>
-            <span>Beat: <span className="text-label-cream">{meters.players[0].beatPosition.toFixed(1)}</span></span>
-            <span>Bar: <span className="text-label-cream">{meters.players[0].barPosition.toFixed(1)}</span></span>
-            <span>Meter: <span className="text-label-cream">{meters.players[0].meterNumerator}/4</span></span>
+            <span>Source BPM: <span className="text-label-cream">{(meters.players[0].sourceBpm ?? 0) > 0 ? meters.players[0].sourceBpm.toFixed(2) : '—'}</span></span>
+            <span>Effective BPM: <span className="text-label-cream">{(meters.players[0].effectiveBpm ?? 0) > 0 ? meters.players[0].effectiveBpm.toFixed(2) : '—'}</span></span>
+            <span>Tempo: <span className="text-label-cream">{(((meters.players[0].tempoRatio ?? 1) - 1) * 100).toFixed(2)}%</span></span>
+            <span>Pitch: <span className="text-label-cream">{(meters.players[0].pitchSemitones ?? 0) > 0 ? '+' : ''}{(meters.players[0].pitchSemitones ?? 0).toFixed(1)} st</span></span>
+            <span>Beat: <span className="text-label-cream">{(meters.players[0].beatPosition ?? 0).toFixed(1)}</span></span>
+            <span>Bar: <span className="text-label-cream">{(meters.players[0].barPosition ?? 0).toFixed(1)}</span></span>
+            <span>Meter: <span className="text-label-cream">{meters.players[0].meterNumerator ?? 4}/4</span></span>
           </>
         )}
         {isPlaying && <span className="text-cap-amber">● PLAYING</span>}
@@ -489,10 +511,24 @@ export default function ListeningLab() {
             <div className="flex-1">
               <h3 className="text-sm font-bold mb-2">Deck A</h3>
               <button onClick={() => audioEnginePause(0)} className="px-3 py-1 bg-plate-light rounded text-sm">❚❚ Pause A</button>
+              <div className="text-xs text-label-dim mt-1">
+                {(meters?.players?.[0]?.sourceBpm ?? 0) > 0 ? (
+                  <span>BPM: <span className="text-label-cream">{meters!.players![0].sourceBpm.toFixed(2)}</span></span>
+                ) : (
+                  <span className="text-yellow-500">BPM: analyzing…</span>
+                )}
+              </div>
             </div>
             <div className="flex-1">
               <h3 className="text-sm font-bold mb-2">Deck B</h3>
               <button onClick={() => audioEnginePause(1)} className="px-3 py-1 bg-plate-light rounded text-sm">❚❚ Pause B</button>
+              <div className="text-xs text-label-dim mt-1">
+                {(meters?.players?.[1]?.sourceBpm ?? 0) > 0 ? (
+                  <span>BPM: <span className="text-label-cream">{meters!.players![1].sourceBpm.toFixed(2)}</span></span>
+                ) : (
+                  <span className="text-yellow-500">BPM: analyzing…</span>
+                )}
+              </div>
             </div>
           </div>
           <div className="flex gap-2 flex-wrap mb-3">
@@ -505,15 +541,17 @@ export default function ListeningLab() {
             </button>
             <button
               onClick={() => audioEngineBeatSync(0, 1)}
-              className="px-4 py-2 bg-cap-amber text-black rounded text-sm font-medium"
-              title="Tempo-match B to A and align nearest beats"
+              disabled={(meters?.players?.[0]?.sourceBpm ?? 0) <= 0 || (meters?.players?.[1]?.sourceBpm ?? 0) <= 0}
+              className="px-4 py-2 bg-cap-amber text-black rounded text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Tempo-match B to A and align nearest beats (requires BPM on both decks)"
             >
               Beat Sync
             </button>
             <button
               onClick={() => audioEngineBarSync(0, 1)}
-              className="px-4 py-2 bg-cap-amber text-black rounded text-sm font-medium"
-              title="Tempo-match B to A and align downbeat/bar boundaries"
+              disabled={(meters?.players?.[0]?.sourceBpm ?? 0) <= 0 || (meters?.players?.[1]?.sourceBpm ?? 0) <= 0}
+              className="px-4 py-2 bg-cap-amber text-black rounded text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Tempo-match B to A and align downbeat/bar boundaries (requires BPM on both decks)"
             >
               Bar Sync
             </button>

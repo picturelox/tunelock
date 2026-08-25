@@ -261,6 +261,18 @@ pub enum EngineCommand {
         player_b: PlayerId,
         at_frame: u64,
     },
+    /// Attach a beat grid to an already-loaded player. Used when beat-grid
+    /// analysis completes asynchronously after the player is already loaded.
+    /// Updates bpm, first_beat_sec, meter_numerator on the player without
+    /// reloading the source. Does NOT affect playback position.
+    AttachBeatGrid {
+        player: PlayerId,
+        at_frame: u64,
+        bpm: f64,
+        first_beat_sec: f64,
+        meter_numerator: i32,
+        downbeat_offset: usize,
+    },
 }
 
 /// Processor type for the Listening Lab's reference comparison.

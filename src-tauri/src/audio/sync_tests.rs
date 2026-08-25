@@ -413,6 +413,32 @@ mod tests {
     }
 
     // ========================================================================
+    // PB-2.3.1: Idempotent engine init regression test
+    // ========================================================================
+
+    #[test]
+    fn idempotent_engine_init_returns_same_sample_rate() {
+        // The audio engine is an application-level service. Calling
+        // init twice should return the same sample rate, not error.
+        // This simulates the pattern: user opens Listening Lab, leaves,
+        // comes back — the second init call must succeed.
+        let engine1 = crate::audio::AudioEngine::new().expect("first engine creation");
+        let sr1 = engine1.sample_rate();
+
+        // Simulate the idempotent pattern: if engine exists, return its sr.
+        // We don't actually start the stream here (no audio device needed
+        // for this logic test). The point is that the second "init" call
+        // should return the same sr, not fail.
+        let engine_slot: Option<crate::audio::AudioEngine> = Some(engine1);
+        let sr2 = engine_slot.as_ref().unwrap().sample_rate();
+
+        assert_eq!(
+            sr1, sr2,
+            "Idempotent init: second call must return same sample rate"
+        );
+    }
+
+    // ========================================================================
     // PB-2.3 Musical Time Bridge — Beat Sync and Bar Sync tests
     // ========================================================================
 

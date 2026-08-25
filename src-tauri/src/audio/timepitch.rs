@@ -53,6 +53,19 @@ pub fn default_processor(sample_rate: f64, channels: u16) -> Box<dyn TimePitchPr
     Box::new(SignalsmithProcessor::new(sample_rate as u32, channels))
 }
 
+/// Get the Signalsmith Stretch algorithmic latency (input + output)
+/// for a given sample rate and channel count. This constructs a
+/// temporary Stretch instance to query its latency, which is
+/// deterministic for a given sample rate. Used by the Listening Lab
+/// processor info display — called once on init, not per-frame.
+pub fn signalsmith_latency(sample_rate: f64, channels: u16) -> usize {
+    let stretch = signalsmith_stretch::Stretch::preset_default(
+        channels as u32,
+        sample_rate as u32,
+    );
+    (stretch.input_latency() + stretch.output_latency()) as usize
+}
+
 /// Processor mode selector. Used by the preconstructed ProcessorSet to
 /// switch between bypass, varispeed, and signalsmith without any
 /// construction or destruction in the realtime callback.

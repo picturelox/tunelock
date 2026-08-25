@@ -383,6 +383,15 @@ impl Player {
         }
     }
 
+    /// Attach a beat grid to an already-loaded player. Called when
+    /// async beat-grid analysis completes. Updates BPM, first beat,
+    /// and meter without reloading the source or affecting position.
+    pub fn attach_beat_grid(&mut self, bpm: f64, first_beat_sec: f64, meter_numerator: i32, _downbeat_offset: usize) {
+        self.bpm = bpm;
+        self.first_beat_sec = first_beat_sec;
+        self.meter_numerator = meter_numerator;
+    }
+
     /// Source BPM (from beat grid or fallback 120).
     pub fn source_bpm(&self) -> f64 {
         self.bpm
