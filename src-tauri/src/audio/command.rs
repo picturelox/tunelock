@@ -187,6 +187,30 @@ pub enum EngineCommand {
         band: EqBand,
         gain_db: f32,
     },
+    /// Set a bus's TuneLock filter mode (bypass/lp/bp/hp).
+    SetFilterMode {
+        bus: BusId,
+        at_frame: u64,
+        mode: FilterModeParam,
+    },
+    /// Set a bus's TuneLock filter cutoff (Hz). Swept logarithmically by UI.
+    SetFilterCutoff {
+        bus: BusId,
+        at_frame: u64,
+        hz: f32,
+    },
+    /// Set a bus's TuneLock filter resonance (0.0-1.0).
+    SetFilterResonance {
+        bus: BusId,
+        at_frame: u64,
+        resonance: f32,
+    },
+    /// Set a bus's TuneLock filter pre-drive (0.0 = off).
+    SetFilterDrive {
+        bus: BusId,
+        at_frame: u64,
+        drive: f32,
+    },
     /// Set master gain.
     SetMasterGain {
         at_frame: u64,
@@ -201,6 +225,15 @@ pub enum EqBand {
     Low,
     Mid,
     High,
+}
+
+/// Filter mode parameter (serializable across the command queue).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterModeParam {
+    Bypass,
+    Lowpass,
+    Bandpass,
+    Highpass,
 }
 
 #[derive(Debug, Clone, Copy)]

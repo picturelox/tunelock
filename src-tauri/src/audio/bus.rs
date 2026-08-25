@@ -9,6 +9,7 @@
 
 use super::command::BusId;
 use super::eq::DjIsolator;
+use super::filter::{FilterMode, TuneLockFilter};
 
 /// Ramped gain to avoid clicks.
 struct RampedGain {
@@ -52,10 +53,12 @@ impl RampedGain {
     }
 }
 
-/// A mix bus with EQ and gain.
+/// A mix bus with EQ, gain, and a shared TuneLock performance filter.
+/// Filter 1 lives on Bus A; Filter 2 lives on Bus B.
 pub struct Bus {
     pub id: BusId,
     eq: DjIsolator,
+    filter: TuneLockFilter,
     gain: RampedGain,
     // Accumulated sum from all players on this bus (per block)
     block_sum_l: f64,
@@ -70,6 +73,7 @@ impl Bus {
         Self {
             id,
             eq: DjIsolator::new(sample_rate),
+            filter: TuneLockFilter::new(sample_rate),
             gain: RampedGain::new(sample_rate),
             block_sum_l: 0.0,
             block_sum_r: 0.0,
@@ -94,6 +98,10 @@ impl Bus {
         self.crossfade_gain.set_target(gain as f64);
     }
 
+    pub fn filter(&mut self) -> &mut TuneLockFilter {
+        &mut self.filter
+    }
+
     /// Accumulate a player's output into this bus.
     #[inline]
     pub fn accumulate(&mut self, l: f64, r: f64) {
@@ -113,6 +121,9 @@ impl Bus {
         // Apply bus EQ
         let (eq_l, eq_r) = self.eq.process(l, r);
 
+        // Apply the bus's TuneLock performance filter
+        let (filt_l, filt_r) = self.filter.process(eq_l, eq_r);
+
         // Apply bus gain
         let g = self.gain.tick();
 
@@ -122,7 +133,7 @@ impl Bus {
             BusId::Master => 1.0,
         };
 
-        (eq_l * g * xf_g, eq_r * g * xf_g)
+        (filt_l * g * xf_g, filt_r * g * xf_g)
     }
 
     pub fn reset_eq(&mut self) {

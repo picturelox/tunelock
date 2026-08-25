@@ -151,6 +151,10 @@ pub fn run() {
             commands::audio_engine_load_player,
             commands::audio_engine_set_master_gain,
             commands::audio_engine_set_bus_gain,
+            commands::audio_engine_set_filter_mode,
+            commands::audio_engine_set_filter_cutoff,
+            commands::audio_engine_set_filter_resonance,
+            commands::audio_engine_set_filter_drive,
             commands::audio_engine_get_meters,
             // Beat-grid DSP
             commands::detect_beat_grid,

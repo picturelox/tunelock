@@ -1999,6 +1999,76 @@ pub async fn audio_engine_set_bus_gain(state: State<'_, AppState>, bus: String, 
     Ok(())
 }
 
+fn parse_filter_bus(bus: &str) -> crate::audio::BusId {
+    match bus {
+        "a" | "A" => crate::audio::BusId::A,
+        "b" | "B" => crate::audio::BusId::B,
+        _ => crate::audio::BusId::Master,
+    }
+}
+
+#[command]
+pub async fn audio_engine_set_filter_mode(state: State<'_, AppState>, bus: String, mode: String) -> Result<(), String> {
+    let engine_slot = state.audio_engine.lock().await;
+    if let Some(engine) = engine_slot.as_ref() {
+        let mode_param = match mode.as_str() {
+            "lp" | "lowpass" | "low" => crate::audio::FilterModeParam::Lowpass,
+            "bp" | "bandpass" | "band" => crate::audio::FilterModeParam::Bandpass,
+            "hp" | "highpass" | "high" => crate::audio::FilterModeParam::Highpass,
+            _ => crate::audio::FilterModeParam::Bypass,
+        };
+        let frame = engine.current_frame();
+        engine.send_command(crate::audio::EngineCommand::SetFilterMode {
+            bus: parse_filter_bus(&bus),
+            at_frame: frame,
+            mode: mode_param,
+        });
+    }
+    Ok(())
+}
+
+#[command]
+pub async fn audio_engine_set_filter_cutoff(state: State<'_, AppState>, bus: String, hz: f32) -> Result<(), String> {
+    let engine_slot = state.audio_engine.lock().await;
+    if let Some(engine) = engine_slot.as_ref() {
+        let frame = engine.current_frame();
+        engine.send_command(crate::audio::EngineCommand::SetFilterCutoff {
+            bus: parse_filter_bus(&bus),
+            at_frame: frame,
+            hz,
+        });
+    }
+    Ok(())
+}
+
+#[command]
+pub async fn audio_engine_set_filter_resonance(state: State<'_, AppState>, bus: String, resonance: f32) -> Result<(), String> {
+    let engine_slot = state.audio_engine.lock().await;
+    if let Some(engine) = engine_slot.as_ref() {
+        let frame = engine.current_frame();
+        engine.send_command(crate::audio::EngineCommand::SetFilterResonance {
+            bus: parse_filter_bus(&bus),
+            at_frame: frame,
+            resonance,
+        });
+    }
+    Ok(())
+}
+
+#[command]
+pub async fn audio_engine_set_filter_drive(state: State<'_, AppState>, bus: String, drive: f32) -> Result<(), String> {
+    let engine_slot = state.audio_engine.lock().await;
+    if let Some(engine) = engine_slot.as_ref() {
+        let frame = engine.current_frame();
+        engine.send_command(crate::audio::EngineCommand::SetFilterDrive {
+            bus: parse_filter_bus(&bus),
+            at_frame: frame,
+            drive,
+        });
+    }
+    Ok(())
+}
+
 /// Meter readout for the UI. Uses the generalized player/bus vocabulary.
 /// Players 0 and 1 correspond to the Transition Workbench's A and B decks.
 #[derive(serde::Serialize)]

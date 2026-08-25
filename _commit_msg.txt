@@ -1,0 +1,26 @@
+Performance Build PB-5: TuneLock Filters (TPT SVF, per-bus)
+
+Two shared performance filters: Filter 1 on Bus A, Filter 2 on Bus B.
+
+DSP:
+- Zavalishin TPT state variable filter: LP/BP/HP outputs from one
+  integrator pair, unconditionally stable cutoff and resonance.
+- Mode changes crossfade between filter outputs (click-free).
+- Cutoff and resonance ramped per-sample (no zipper noise).
+- Optional pre-filter Drive stage (tanh waveshaper), separated from the
+  linear filter DSP. Clean mode never touches the drive path.
+
+Commands:
+- SetFilterMode / SetFilterCutoff / SetFilterResonance / SetFilterDrive
+- Tauri commands: audio_engine_set_filter_mode/cutoff/resonance/drive
+
+Tests (8 new):
+- bypass_is_transparent, lowpass_attenuates_highs, lowpass_passes_lows
+- highpass_attenuates_lows, bandpass_isolates_band, mode_switch_does_not_click
+- drive_adds_harmonics, resonance_boosts_cutoff_region
+
+All 113 lib tests pass. Frontend typecheck clean.
+
+Generated with [Devin](https://devin.ai)
+
+Co-Authored-By: Devin <158243242+devin-ai-integration[bot]@users.noreply.github.com>

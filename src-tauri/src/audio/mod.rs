@@ -17,6 +17,7 @@ pub mod bus;
 pub mod command;
 pub mod engine;
 pub mod eq;
+pub mod filter;
 pub mod intelligence;
 pub mod meter;
 pub mod player;
@@ -26,11 +27,12 @@ pub mod worker;
 
 pub use bus::Bus;
 pub use command::{
-    BusId, CommandQueue, EngineCommand, EqBand, LoopRegion,
+    BusId, CommandQueue, EngineCommand, EqBand, FilterModeParam, LoopRegion,
     DecodedBuffer, BeatGridCompact, PlayerId, SourceHandle, Quantize,
     MAX_PLAYERS,
 };
 pub use engine::AudioEngine;
+pub use filter::{FilterMode, TuneLockFilter};
 pub use intelligence::{
     ConfidenceTier, KeyAlternative, TrackIntelligenceSnapshot,
     SNAPSHOT_SCHEMA_VERSION, compatibility,

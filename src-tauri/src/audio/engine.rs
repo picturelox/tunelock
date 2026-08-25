@@ -283,6 +283,40 @@ impl CallbackState {
                     BusId::Master => {}
                 }
             }
+            EngineCommand::SetFilterMode { bus, mode, .. } => {
+                let filter_mode = match mode {
+                    super::command::FilterModeParam::Bypass => super::filter::FilterMode::Bypass,
+                    super::command::FilterModeParam::Lowpass => super::filter::FilterMode::Lowpass,
+                    super::command::FilterModeParam::Bandpass => super::filter::FilterMode::Bandpass,
+                    super::command::FilterModeParam::Highpass => super::filter::FilterMode::Highpass,
+                };
+                match bus {
+                    BusId::A => self.buses[0].filter().set_mode(filter_mode),
+                    BusId::B => self.buses[1].filter().set_mode(filter_mode),
+                    BusId::Master => {}
+                }
+            }
+            EngineCommand::SetFilterCutoff { bus, hz, .. } => {
+                match bus {
+                    BusId::A => self.buses[0].filter().set_cutoff_hz(hz as f64),
+                    BusId::B => self.buses[1].filter().set_cutoff_hz(hz as f64),
+                    BusId::Master => {}
+                }
+            }
+            EngineCommand::SetFilterResonance { bus, resonance, .. } => {
+                match bus {
+                    BusId::A => self.buses[0].filter().set_resonance(resonance as f64),
+                    BusId::B => self.buses[1].filter().set_resonance(resonance as f64),
+                    BusId::Master => {}
+                }
+            }
+            EngineCommand::SetFilterDrive { bus, drive, .. } => {
+                match bus {
+                    BusId::A => self.buses[0].filter().set_drive(drive as f64),
+                    BusId::B => self.buses[1].filter().set_drive(drive as f64),
+                    BusId::Master => {}
+                }
+            }
             EngineCommand::SetMasterGain { gain, .. } => {
                 self.master_gain = gain as f64;
             }
@@ -385,6 +419,10 @@ impl CommandFrame for EngineCommand {
             | EngineCommand::SetCrossfade { at_frame, .. }
             | EngineCommand::SetBusGain { at_frame, .. }
             | EngineCommand::SetBusEq { at_frame, .. }
+            | EngineCommand::SetFilterMode { at_frame, .. }
+            | EngineCommand::SetFilterCutoff { at_frame, .. }
+            | EngineCommand::SetFilterResonance { at_frame, .. }
+            | EngineCommand::SetFilterDrive { at_frame, .. }
             | EngineCommand::SetMasterGain { at_frame, .. } => *at_frame,
             EngineCommand::Shutdown => 0,
         }
