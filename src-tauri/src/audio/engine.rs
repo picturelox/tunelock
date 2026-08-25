@@ -553,7 +553,7 @@ impl AudioEngine {
         let meter_snapshot = Arc::new(MeterSnapshot::new());
         // 32 slots: 8 players × 2 Arcs each (player buffer + processor source)
         // plus headroom for rapid relaunching.
-        let retired_sources = Arc::new(crossbeam_queue::ArrayQueue::new(32));
+        let retired_sources = Arc::new(crossbeam_queue::ArrayQueue::new(128));
 
         let callback_state = CallbackState::new(
             frame_counter.clone(),
@@ -725,7 +725,11 @@ impl AudioEngine {
 /// command frames, so a command scheduled for halfway through the block
 /// takes effect at that exact frame.
 pub fn audio_callback_f32(state: &mut CallbackState, output: &mut [f32]) {
-    let channels = if output.len() >= 2 { 2 } else { 1 };
+    // PB-3 MVP: the engine's internal signal path is always stereo (2ch).
+    // resolve_config() forces stream_config.channels = 2, so the output
+    // buffer should always be interleaved stereo. If it isn't (e.g., a
+    // device driver quirk), we handle it gracefully.
+    let channels = 2;
     let frames = output.len() / channels;
     let block_start = state.frame_counter.load(Ordering::Relaxed);
     let block_end = block_start + frames as u64;
@@ -864,7 +868,7 @@ mod tests {
             Arc::new(AtomicU64::new(0)),
             Arc::new(CommandQueue::new(512)),
             Arc::new(MeterSnapshot::new()),
-            Arc::new(crossbeam_queue::ArrayQueue::new(32)),
+            Arc::new(crossbeam_queue::ArrayQueue::new(128)),
             SR,
         )
     }

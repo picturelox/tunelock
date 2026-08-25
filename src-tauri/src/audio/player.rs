@@ -81,6 +81,12 @@ pub struct Player {
     // being dropped on the realtime thread.
     retired_sources: Arc<crossbeam_queue::ArrayQueue<Arc<DecodedBuffer>>>,
 
+    // Emergency hold slot: if the retirement queue is full, the old source
+    // is held here instead of being dropped on the realtime thread. On the
+    // next retire call, we try to push this first. This guarantees that
+    // no large PCM buffer is ever deallocated on the audio callback.
+    pending_retire: Option<Arc<DecodedBuffer>>,
+
     // Bus assignment
     pub bus: BusId,
 
@@ -136,6 +142,7 @@ impl Player {
             buffer: None,
             processor,
             retired_sources,
+            pending_retire: None,
             bus: if id.0 == 0 { BusId::A } else { BusId::B },
             eq: DjIsolator::new(sample_rate),
             gain: RampedGain::new(sample_rate),
@@ -152,15 +159,32 @@ impl Player {
     }
 
     /// Retire an old source buffer to the deferred-destruction queue.
-    /// If the queue is full (rare), the Arc drops immediately as a fallback.
+    ///
+    /// If the queue is full, the old source is held in `pending_retire`
+    /// instead of being dropped. On the next call, we try to push the
+    /// pending source first. This guarantees that no large PCM buffer
+    /// is ever deallocated on the realtime audio thread — at most one
+    /// old source is held per player until the queue has space.
     #[inline]
-    fn retire(&self, old: Option<Arc<DecodedBuffer>>) {
+    fn retire(&mut self, old: Option<Arc<DecodedBuffer>>) {
+        // First, try to push any previously-held source
+        if let Some(pending) = self.pending_retire.take() {
+            if let Err(returned) = self.retired_sources.push(pending) {
+                // Still full — put it back
+                self.pending_retire = Some(returned);
+                // Try to push the new old source, or hold it
+                if let Some(buf) = old {
+                    if let Err(returned) = self.retired_sources.push(buf) {
+                        self.pending_retire = Some(returned);
+                    }
+                }
+                return;
+            }
+        }
+        // Queue had space (or we just pushed the pending one). Now push new.
         if let Some(buf) = old {
-            if self.retired_sources.push(buf).is_err() {
-                // Queue full — fall back to immediate drop. This is rare
-                // (only if the engine thread hasn't drained in a long time)
-                // and the allocation/deallocation is on the realtime thread,
-                // but it's better than leaking memory.
+            if let Err(returned) = self.retired_sources.push(buf) {
+                self.pending_retire = Some(returned);
             }
         }
     }

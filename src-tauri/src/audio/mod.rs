@@ -27,6 +27,8 @@ pub mod player;
 #[cfg(test)]
 pub mod qg_pb2;
 #[cfg(test)]
+pub mod perf_harness;
+#[cfg(test)]
 pub mod rt_audit;
 #[cfg(test)]
 pub mod sync_tests;

@@ -2104,6 +2104,13 @@ pub struct PlayerMeterEntry {
 pub async fn audio_engine_get_meters(state: State<'_, AppState>) -> Result<AudioMeterReadout, String> {
     let engine_slot = state.audio_engine.lock().await;
     let engine = engine_slot.as_ref().ok_or("Audio engine not initialized")?;
+
+    // Drain retired sources on every meter poll (~30Hz). This guarantees
+    // that old PCM buffers are destroyed on the Tauri async thread, not
+    // on the realtime audio callback. The meter poll is the ideal place
+    // because the UI calls it regularly during playback.
+    engine.drain_retired_sources();
+
     let m = engine.get_meters();
     let players = m.players.iter().map(|p| PlayerMeterEntry {
         playing: p.playing,
@@ -2225,7 +2232,6 @@ pub async fn detect_beat_grid(state: State<'_, AppState>, track_id: i64) -> Resu
 pub struct AudioDeviceEntry {
     pub name: String,
     pub sample_rates: Vec<u32>,
-    pub channel_counts: Vec<u16>,
     pub default_sample_rate: u32,
     pub default_channels: u16,
     pub is_default: bool,
@@ -2244,13 +2250,15 @@ pub async fn audio_enumerate_devices() -> Result<AudioDeviceListResponse, String
     let devices = list
         .devices
         .into_iter()
-        .map(|d| AudioDeviceEntry {
-            name: d.name,
-            sample_rates: d.sample_rates,
-            channel_counts: d.channel_counts,
-            default_sample_rate: d.default_sample_rate,
-            default_channels: d.default_channels,
-            is_default: d.is_default,
+        .map(|d| {
+            let sample_rates = d.supported_sample_rates();
+            AudioDeviceEntry {
+                name: d.name,
+                sample_rates,
+                default_sample_rate: d.default_sample_rate,
+                default_channels: d.default_channels,
+                is_default: d.is_default,
+            }
         })
         .collect();
     Ok(AudioDeviceListResponse {
@@ -2264,16 +2272,17 @@ pub async fn audio_engine_set_device(
     state: State<'_, AppState>,
     device_name: Option<String>,
     sample_rate: Option<u32>,
-    channels: Option<u16>,
     buffer_size: Option<u32>,
 ) -> Result<u32, String> {
     // Rebuild the engine with the new config. This requires stopping the
     // current stream and creating a new one. The source registry is lost;
     // the UI must re-launch sources after a device change.
+    //
+    // PB-3 MVP: output is always stereo. Channel count is NOT selectable.
+    // Multi-output routing (Master 1/2, Cue 3/4) is a future phase.
     let config = crate::audio::io::AudioDeviceConfig {
         device_name,
         sample_rate,
-        channels,
         buffer_size: buffer_size.map(crate::audio::io::BufferSizePreference::Fixed),
     };
 
