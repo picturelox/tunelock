@@ -49,3 +49,8 @@ Thumbs.db
 .vscode/
 .idea/
 node_modules
+
+# Temporary commit-message helper files — never commit these.
+# Use `git commit -F <file>` from outside the repo, or pipe via -m.
+_commit_msg.txt
+*.commit-msg.txt

@@ -12,10 +12,16 @@
 // The optional Drive stage is a separate nonlinear processor (tanh
 // waveshaper) applied BEFORE the filter. Linear filter DSP and nonlinear
 // drive DSP are deliberately separated — Clean mode never touches the
-// drive path.
+// drive path. This is NOT an analog Xone model; it is TuneLock's own clean
+// digital filter with optional saturation. A proper hardware-modeling
+// project is a separate future effort.
 //
-// Cutoff sweeps are logarithmic (musical) and all parameters are ramped
-// per-sample to avoid zipper noise.
+// Cutoff parameter smoothing is LINEAR-IN-HZ: the filter ramps linearly
+// toward the target Hz value per-sample. The UI is expected to map knob
+// position logarithmically to Hz (musical control mapping), but the
+// processor itself does not perform log-domain interpolation. This is a
+// deliberate simplicity choice; log-domain smoothing can be added later
+// if fast musical sweeps reveal audible artifacts.
 
 /// Filter mode. Bypass passes the input unaltered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,7 +56,7 @@ pub struct TuneLockFilter {
     ic2: [f64; 2],
 
     // Ramped parameters
-    cutoff_current: f64,      // Hz (log-domain sweeps are handled by the setter)
+    cutoff_current: f64,      // Hz (linear-in-Hz smoothing; UI maps log)
     cutoff_target: f64,
     resonance_current: f64,   // 0.0 - 1.0 mapped to Q
     resonance_target: f64,
@@ -95,8 +101,10 @@ impl TuneLockFilter {
         }
     }
 
-    /// Set cutoff in Hz. The caller may sweep logarithmically; this filter
-    /// ramps linearly toward the target per-sample for zipper-free motion.
+    /// Set cutoff in Hz. The filter ramps linearly toward this target
+    /// per-sample (linear-in-Hz smoothing). The UI should map knob position
+    /// logarithmically to Hz for musical control; the processor does not
+    /// perform log-domain interpolation internally.
     pub fn set_cutoff_hz(&mut self, hz: f64) {
         self.cutoff_target = hz.clamp(20.0, self.sample_rate * 0.45);
     }

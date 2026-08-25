@@ -76,6 +76,11 @@ pub struct Player {
     // position; the player never reads the buffer directly.
     processor: Box<dyn TimePitchProcessor>,
 
+    // Deferred-destruction queue for retired source buffers. When a new
+    // source replaces an old one, the old Arc is pushed here instead of
+    // being dropped on the realtime thread.
+    retired_sources: Arc<crossbeam_queue::ArrayQueue<Arc<DecodedBuffer>>>,
+
     // Bus assignment
     pub bus: BusId,
 
@@ -105,7 +110,11 @@ pub struct Player {
 }
 
 impl Player {
-    pub fn new(id: PlayerId, sample_rate: f64) -> Self {
+    pub fn new(
+        id: PlayerId,
+        sample_rate: f64,
+        retired_sources: Arc<crossbeam_queue::ArrayQueue<Arc<DecodedBuffer>>>,
+    ) -> Self {
         Self {
             id,
             playing: false,
@@ -114,6 +123,7 @@ impl Player {
             source_handle: None,
             buffer: None,
             processor: default_processor(),
+            retired_sources,
             bus: if id.0 == 0 { BusId::A } else { BusId::B },
             eq: DjIsolator::new(sample_rate),
             gain: RampedGain::new(sample_rate),
@@ -126,6 +136,20 @@ impl Player {
             block_peak: [0.0; 2],
             clip: [false; 2],
             sample_rate,
+        }
+    }
+
+    /// Retire an old source buffer to the deferred-destruction queue.
+    /// If the queue is full (rare), the Arc drops immediately as a fallback.
+    #[inline]
+    fn retire(&self, old: Option<Arc<DecodedBuffer>>) {
+        if let Some(buf) = old {
+            if self.retired_sources.push(buf).is_err() {
+                // Queue full — fall back to immediate drop. This is rare
+                // (only if the engine thread hasn't drained in a long time)
+                // and the allocation/deallocation is on the realtime thread,
+                // but it's better than leaking memory.
+            }
         }
     }
 
@@ -144,8 +168,13 @@ impl Player {
         let beat_duration_sec = 60.0 / self.bpm;
         let start_sec = self.first_beat_sec + start_beat * beat_duration_sec;
         let start_frame = start_sec * buffer.sample_rate as f64;
-        self.processor.set_source(buffer.clone(), start_frame);
+        // set_source returns the processor's old source; retire it to the
+        // deferred-destruction queue so its Vec<f32> doesn't deallocate here.
+        let old_processor_src = self.processor.set_source(buffer.clone(), start_frame);
+        let old_buffer = self.buffer.take();
         self.buffer = Some(buffer);
+        self.retire(old_processor_src);
+        self.retire(old_buffer);
         self.playing = true;
         self.eq.reset();
     }
@@ -158,8 +187,11 @@ impl Player {
         } else {
             self.bpm = buffer.bpm.unwrap_or(120.0);
         }
-        self.processor.set_source(buffer.clone(), 0.0);
+        let old_processor_src = self.processor.set_source(buffer.clone(), 0.0);
+        let old_buffer = self.buffer.take();
         self.buffer = Some(buffer);
+        self.retire(old_processor_src);
+        self.retire(old_buffer);
         self.eq.reset();
     }
 

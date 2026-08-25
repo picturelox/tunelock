@@ -33,7 +33,7 @@ use cpal::{SampleFormat, StreamConfig};
 
 use super::bus::Bus;
 use super::command::{
-    BusId, CommandQueue, EngineCommand, EqBand, MAX_PLAYERS, PlayerId,
+    BusId, CommandQueue, DecodedBuffer, EngineCommand, EqBand, MAX_PLAYERS, PlayerId,
     Quantize, SourceHandle,
 };
 use super::meter::MeterSnapshot;
@@ -50,8 +50,13 @@ pub struct AudioEngine {
     /// Source registry — engine thread owns Arc<DecodedBuffer> keyed by
     /// SourceHandle. Launch commands carry an Arc clone; the callback never
     /// touches this registry.
-    sources: HashMap<u64, Arc<super::command::DecodedBuffer>>,
+    sources: HashMap<u64, Arc<DecodedBuffer>>,
     next_source_handle: u64,
+    /// Deferred-destruction queue: retired Arc<DecodedBuffer> from the
+    /// callback are pushed here (lock-free). The engine thread drains and
+    /// drops them outside the realtime path, so large Vec<f32> deallocation
+    /// never happens inside the audio callback.
+    retired_sources: Arc<crossbeam_queue::ArrayQueue<Arc<DecodedBuffer>>>,
 }
 
 /// Wrapper around cpal::Stream to make it Send + Sync.
@@ -67,6 +72,11 @@ struct CallbackState {
     meter_snapshot: Arc<MeterSnapshot>,
     players: [Player; MAX_PLAYERS],
     buses: [Bus; 2], // Bus A, Bus B
+    /// Deferred-destruction queue for retired source buffers. The callback
+    /// pushes old Arc<DecodedBuffer> here instead of dropping them directly,
+    /// so large Vec<f32> deallocation never happens on the realtime thread.
+    /// The engine thread drains this queue periodically.
+    retired_sources: Arc<crossbeam_queue::ArrayQueue<Arc<DecodedBuffer>>>,
     master_gain: f64,
     // Crossfader state (ramped)
     crossfade_position: f64,
@@ -75,7 +85,12 @@ struct CallbackState {
     // Master metering for this block
     master_sum_sq: [f64; 2],
     master_peak: [f64; 2],
-    master_true_peak: [f64; 2],
+    // PROVISIONAL: this is sample-peak, NOT true-peak. No oversampling or
+    // inter-sample reconstruction is performed. True-peak measurement arrives
+    // with the PB-6 loudness/mastering phase. Renamed to make the provisional
+    // status explicit so nobody builds UI around a measurement that is more
+    // sophisticated than the implementation.
+    master_sample_peak_provisional: [f64; 2],
     master_clip: bool,
     // Bus metering for this block
     bus_block_sum_sq: [[f64; 2]; 2], // [bus_a, bus_b]
@@ -102,11 +117,12 @@ impl CallbackState {
         frame_counter: Arc<AtomicU64>,
         command_queue: Arc<CommandQueue>,
         meter_snapshot: Arc<MeterSnapshot>,
+        retired_sources: Arc<crossbeam_queue::ArrayQueue<Arc<DecodedBuffer>>>,
         sample_rate: f64,
     ) -> Self {
         let meter_update_interval = (sample_rate / 30.0) as u64; // 30 Hz meter updates
         let mut players: [Player; MAX_PLAYERS] = std::array::from_fn(|i| {
-            Player::new(PlayerId(i as u8), sample_rate)
+            Player::new(PlayerId(i as u8), sample_rate, retired_sources.clone())
         });
         // Default bus assignments: even → A, odd → B
         for (i, p) in players.iter_mut().enumerate() {
@@ -122,13 +138,14 @@ impl CallbackState {
                 Bus::new(BusId::A, sample_rate),
                 Bus::new(BusId::B, sample_rate),
             ],
+            retired_sources,
             master_gain: 0.8,
             crossfade_position: 0.5,
             crossfade_target: 0.5,
             crossfade_ramp_increment: 1.0 / (0.005 * sample_rate),
             master_sum_sq: [0.0; 2],
             master_peak: [0.0; 2],
-            master_true_peak: [0.0; 2],
+            master_sample_peak_provisional: [0.0; 2],
             master_clip: false,
             bus_block_sum_sq: [[0.0; 2]; 2],
             bus_block_peak: [[0.0; 2]; 2],
@@ -349,7 +366,7 @@ impl CallbackState {
     fn reset_block_meters(&mut self) {
         self.master_sum_sq = [0.0; 2];
         self.master_peak = [0.0; 2];
-        self.master_true_peak = [0.0; 2];
+        self.master_sample_peak_provisional = [0.0; 2];
         self.bus_block_sum_sq = [[0.0; 2]; 2];
         self.bus_block_peak = [[0.0; 2]; 2];
         for p in &mut self.players {
@@ -387,8 +404,8 @@ impl CallbackState {
             ((self.master_sum_sq[0] + self.master_sum_sq[1]) / (2.0 * sample_count as f64)).sqrt()
         } else { 0.0 };
         let m_peak = self.master_peak[0].max(self.master_peak[1]);
-        let m_true_peak = self.master_true_peak[0].max(self.master_true_peak[1]);
-        self.meter_snapshot.write_master(m_rms, m_peak, m_true_peak, self.master_clip);
+        let m_sample_peak = self.master_sample_peak_provisional[0].max(self.master_sample_peak_provisional[1]);
+        self.meter_snapshot.write_master(m_rms, m_peak, m_sample_peak, self.master_clip);
         self.meter_snapshot.write_crossfade(self.crossfade_position);
     }
 }
@@ -452,11 +469,15 @@ impl AudioEngine {
         let frame_counter = Arc::new(AtomicU64::new(0));
         let command_queue = Arc::new(CommandQueue::new(512));
         let meter_snapshot = Arc::new(MeterSnapshot::new());
+        // 32 slots: 8 players × 2 Arcs each (player buffer + processor source)
+        // plus headroom for rapid relaunching.
+        let retired_sources = Arc::new(crossbeam_queue::ArrayQueue::new(32));
 
         let callback_state = CallbackState::new(
             frame_counter.clone(),
             command_queue.clone(),
             meter_snapshot.clone(),
+            retired_sources.clone(),
             sample_rate as f64,
         );
 
@@ -516,6 +537,7 @@ impl AudioEngine {
             stream: Some(SendStream(stream)),
             sources: HashMap::new(),
             next_source_handle: 1,
+            retired_sources,
         })
     }
 
@@ -530,6 +552,18 @@ impl AudioEngine {
     /// Send a command to the engine.
     pub fn send_command(&self, cmd: EngineCommand) -> bool {
         self.command_queue.push(cmd)
+    }
+
+    /// Drain the deferred-destruction queue. Call this periodically from a
+    /// non-realtime thread (e.g., the Tauri async runtime) to drop retired
+    /// source buffers outside the audio callback. Returns the number of
+    /// buffers dropped.
+    pub fn drain_retired_sources(&self) -> usize {
+        let mut count = 0;
+        while self.retired_sources.pop().is_some() {
+            count += 1;
+        }
+        count
     }
 
     /// Get the current meter snapshot.
@@ -713,8 +747,11 @@ fn render_slice(state: &mut CallbackState, output: &mut [f32], channels: usize) 
         state.master_sum_sq[1] += mix_r * mix_r;
         if abs_l > state.master_peak[0] { state.master_peak[0] = abs_l; }
         if abs_r > state.master_peak[1] { state.master_peak[1] = abs_r; }
-        if abs_l > state.master_true_peak[0] { state.master_true_peak[0] = abs_l; }
-        if abs_r > state.master_true_peak[1] { state.master_true_peak[1] = abs_r; }
+        // PROVISIONAL sample-peak (same value as master_peak). True-peak
+        // requires 4x oversampling and inter-sample reconstruction — arrives
+        // with PB-6. Stored separately so the field name doesn't lie.
+        if abs_l > state.master_sample_peak_provisional[0] { state.master_sample_peak_provisional[0] = abs_l; }
+        if abs_r > state.master_sample_peak_provisional[1] { state.master_sample_peak_provisional[1] = abs_r; }
 
         // Write output — hard-clamped at the output stage only (transparent
         // below 0 dBFS; the DAC would clip anyway).
@@ -745,6 +782,7 @@ mod tests {
             Arc::new(AtomicU64::new(0)),
             Arc::new(CommandQueue::new(512)),
             Arc::new(MeterSnapshot::new()),
+            Arc::new(crossbeam_queue::ArrayQueue::new(32)),
             SR,
         )
     }
@@ -980,5 +1018,55 @@ mod tests {
             });
         }
         assert!(state.pending.len() <= cap);
+    }
+
+    #[test]
+    fn retired_sources_are_deferred_not_dropped_on_callback() {
+        // When a player is relaunched with a new source, the old buffer's
+        // Arc must be pushed to the retirement queue — NOT dropped inside
+        // the callback. We verify by checking the queue after relaunch.
+        let mut state = make_state();
+        state.command_queue.push(EngineCommand::SetMasterGain { at_frame: 0, gain: 1.0 });
+        state.command_queue.push(EngineCommand::SetBus {
+            player: PlayerId(0),
+            at_frame: 0,
+            bus: BusId::Master,
+        });
+
+        // Launch with first buffer
+        let buf1 = constant_buffer(0.4, 44100);
+        state.command_queue.push(EngineCommand::Launch {
+            player: PlayerId(0),
+            at_frame: 0,
+            source: SourceHandle(1),
+            buffer: buf1,
+            start_beat: 0.0,
+            quantize: Quantize::Immediate,
+        });
+        let mut out = vec![0.0f32; 256];
+        render(&mut state, &mut out);
+
+        // Relaunch with second buffer — old one should be retired
+        let buf2 = constant_buffer(0.5, 44100);
+        state.command_queue.push(EngineCommand::Launch {
+            player: PlayerId(0),
+            at_frame: state.frame_counter.load(Ordering::Relaxed),
+            source: SourceHandle(2),
+            buffer: buf2,
+            start_beat: 0.0,
+            quantize: Quantize::Immediate,
+        });
+        render(&mut state, &mut out);
+
+        // The retirement queue should contain the old buffer Arc(s).
+        // At least one (the player's buffer field); possibly two (processor source).
+        let mut retired_count = 0;
+        while state.retired_sources.pop().is_some() {
+            retired_count += 1;
+        }
+        assert!(
+            retired_count >= 1,
+            "old source buffer must be deferred to retirement queue (got {retired_count})"
+        );
     }
 }

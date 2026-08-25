@@ -2082,7 +2082,9 @@ pub struct AudioMeterReadout {
     pub bus_b_peak: f64,
     pub master_rms: f64,
     pub master_peak: f64,
-    pub master_true_peak: f64,
+    /// PROVISIONAL: sample-peak, not true-peak. Renamed to prevent UI from
+    /// presenting this as a true-peak measurement. True-peak arrives with PB-6.
+    pub master_sample_peak_provisional: f64,
     pub master_clip: bool,
     pub crossfade_position: f64,
     pub underruns: u64,
@@ -2120,7 +2122,7 @@ pub async fn audio_engine_get_meters(state: State<'_, AppState>) -> Result<Audio
         bus_b_peak: m.bus_b_peak,
         master_rms: m.master_rms,
         master_peak: m.master_peak,
-        master_true_peak: m.master_true_peak,
+        master_sample_peak_provisional: m.master_sample_peak_provisional,
         master_clip: m.master_clip,
         crossfade_position: m.crossfade_position,
         underruns: m.underruns,

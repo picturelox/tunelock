@@ -31,7 +31,10 @@ pub trait TimePitchProcessor: Send {
     /// Algorithmic latency in output frames (for latency compensation).
     fn latency_frames(&self) -> usize;
     /// Attach a source and set the starting position (source frames).
-    fn set_source(&mut self, source: Arc<DecodedBuffer>, start_frame: f64);
+    /// Returns the previous source if one was attached, so the caller can
+    /// defer its destruction to a non-realtime thread (avoiding large
+    /// Vec<f32> deallocation inside the audio callback).
+    fn set_source(&mut self, source: Arc<DecodedBuffer>, start_frame: f64) -> Option<Arc<DecodedBuffer>>;
     /// Produce the next output frame (left, right). None at end of source.
     fn next_frame(&mut self) -> Option<(f64, f64)>;
     /// Current position in source frames (for UI position and loop logic).
@@ -127,9 +130,11 @@ impl TimePitchProcessor for VarispeedProcessor {
         0
     }
 
-    fn set_source(&mut self, source: Arc<DecodedBuffer>, start_frame: f64) {
+    fn set_source(&mut self, source: Arc<DecodedBuffer>, start_frame: f64) -> Option<Arc<DecodedBuffer>> {
+        let old = self.source.take();
         self.source = Some(source);
         self.position = start_frame.max(0.0);
+        old
     }
 
     fn next_frame(&mut self) -> Option<(f64, f64)> {
