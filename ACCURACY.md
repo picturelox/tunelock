@@ -441,6 +441,58 @@ These genres often use sustained pad chords and arpeggios that create
 ambiguous chroma distributions — a known limitation of template methods
 on electronic music.
 
+## FMAK frozen-model benchmark (2026-08-26)
+
+The FMAK corpus (5,487 tracks after quarantine, 4,939 development) provides
+broader genre coverage than GiantSteps (which is EDM-only). All models were
+trained on GiantSteps only — this is a zero-shot evaluation on a held-out
+corpus with different genre distribution.
+
+### Per-model results
+
+| Model | n | Exact % | MIREX | Top-3 | Top-5 | ECE |
+|---|---|---|---|---|---|---|
+| Classical | 4,928 | 57.1% | 0.698 | 81.5% | 88.5% | 0.487 |
+| Myna v6 base (no TTA) | 4,919 | 61.4% | 0.736 | 84.5% | 90.3% | 0.269 |
+| Myna v8 compact | 4,919 | 65.0% | 0.758 | 87.1% | 91.7% | 0.221 |
+| S-KEY raw baseline | 4,919 | 65.5% | 0.758 | 84.9% | 90.7% | 0.046 |
+
+### Oracle ceilings
+
+| Combination | Oracle exact |
+|---|---|
+| 2-model (v8 + S-KEY) | 74.2% |
+| 3-model (+ classical) | 77.1% |
+| 4-model (all) | 78.6% |
+
+### Classical engine by genre (FMAK)
+
+| Genre | n | Exact % | MIREX |
+|---|---|---|---|
+| electronic | 540 | 64.6% | 0.738 |
+| pop | 136 | 64.0% | 0.724 |
+| other | 200 | 61.0% | 0.688 |
+| hip-hop | 136 | 52.9% | 0.651 |
+| world | 267 | 54.3% | 0.651 |
+| rock | 760 | 50.7% | 0.602 |
+| jazz | 29 | 44.8% | 0.593 |
+| classical | 51 | 39.2% | 0.606 |
+
+### Key findings
+
+1. **GiantSteps inflates accuracy estimates.** The classical engine drops
+   from 64.4% (GiantSteps, EDM-only) to 57.1% (FMAK, broad genres).
+2. **S-KEY has the best calibration** (ECE 0.046) but lower top-3 than v8
+   compact. S-KEY's posteriors are well-calibrated but less peaked.
+3. **Classical adds the most diversity.** It has 65% agreement with neural
+   models (vs 77% between v6 and v8) and contributes 353 uniquely correct
+   tracks vs S-KEY.
+4. **The S-KEY harmonic head trained on 266 GiantSteps tracks degraded to
+   0.3%** on FMAK. The raw S-KEY baseline (65.5%) is used instead. The
+   harmonic head overfit to the small GiantSteps validation set.
+5. **The 4-model oracle ceiling of 78.6%** matches the prior GiantSteps
+   oracle, suggesting the diversity ceiling is similar across corpora.
+
 ## CNN experiment status: INVALID, deferred
 
 The CNN experiment (commit c9bb494, "Phase 11 verdict: CNN trained,
