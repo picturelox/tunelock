@@ -2217,3 +2217,76 @@ pub async fn detect_beat_grid(state: State<'_, AppState>, track_id: i64) -> Resu
 
     Ok(result)
 }
+
+// ── PB-3: Professional audio I/O ─────────────────────────────────────
+
+/// A description of one available audio output device, for the UI.
+#[derive(serde::Serialize)]
+pub struct AudioDeviceEntry {
+    pub name: String,
+    pub sample_rates: Vec<u32>,
+    pub channel_counts: Vec<u16>,
+    pub default_sample_rate: u32,
+    pub default_channels: u16,
+    pub is_default: bool,
+}
+
+/// The list of available audio output devices.
+#[derive(serde::Serialize)]
+pub struct AudioDeviceListResponse {
+    pub devices: Vec<AudioDeviceEntry>,
+    pub default_device_index: Option<usize>,
+}
+
+#[command]
+pub async fn audio_enumerate_devices() -> Result<AudioDeviceListResponse, String> {
+    let list = crate::audio::io::enumerate_output_devices()?;
+    let devices = list
+        .devices
+        .into_iter()
+        .map(|d| AudioDeviceEntry {
+            name: d.name,
+            sample_rates: d.sample_rates,
+            channel_counts: d.channel_counts,
+            default_sample_rate: d.default_sample_rate,
+            default_channels: d.default_channels,
+            is_default: d.is_default,
+        })
+        .collect();
+    Ok(AudioDeviceListResponse {
+        devices,
+        default_device_index: list.default_device_index,
+    })
+}
+
+#[command]
+pub async fn audio_engine_set_device(
+    state: State<'_, AppState>,
+    device_name: Option<String>,
+    sample_rate: Option<u32>,
+    channels: Option<u16>,
+    buffer_size: Option<u32>,
+) -> Result<u32, String> {
+    // Rebuild the engine with the new config. This requires stopping the
+    // current stream and creating a new one. The source registry is lost;
+    // the UI must re-launch sources after a device change.
+    let config = crate::audio::io::AudioDeviceConfig {
+        device_name,
+        sample_rate,
+        channels,
+        buffer_size: buffer_size.map(crate::audio::io::BufferSizePreference::Fixed),
+    };
+
+    let new_engine = crate::audio::engine::AudioEngine::new_with_config(&config)?;
+    let new_sr = new_engine.sample_rate();
+
+    let mut engine_slot = state.audio_engine.lock().await;
+    // Drop the old engine (stops the old stream)
+    *engine_slot = Some(new_engine);
+    // Start the new stream
+    if let Some(engine) = engine_slot.as_ref() {
+        engine.start().map_err(|e| format!("Failed to start stream: {}", e))?;
+    }
+
+    Ok(new_sr)
+}

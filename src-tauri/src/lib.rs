@@ -156,6 +156,9 @@ pub fn run() {
             commands::audio_engine_set_filter_resonance,
             commands::audio_engine_set_filter_drive,
             commands::audio_engine_get_meters,
+            // PB-3: Professional audio I/O
+            commands::audio_enumerate_devices,
+            commands::audio_engine_set_device,
             // Beat-grid DSP
             commands::detect_beat_grid,
         ])

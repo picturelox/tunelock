@@ -19,6 +19,7 @@ pub mod engine;
 pub mod eq;
 pub mod filter;
 pub mod intelligence;
+pub mod io;
 pub mod meter;
 pub mod player;
 #[cfg(test)]

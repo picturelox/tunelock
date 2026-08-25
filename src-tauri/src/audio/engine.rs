@@ -469,19 +469,27 @@ thread_local! {
 }
 
 impl AudioEngine {
-    /// Create a new audio engine. Does not start playback.
+    /// Create a new audio engine using the system default device.
+    /// Does not start playback. Backward-compatible entry point.
     pub fn new() -> Result<Self, String> {
-        let host = cpal::default_host();
-        let device = host
-            .default_output_device()
-            .ok_or("No audio output device available")?;
+        Self::new_with_config(&super::io::AudioDeviceConfig::default())
+    }
 
+    /// Create a new audio engine with a specific device, sample rate, and
+    /// buffer size. Does not start playback.
+    ///
+    /// Use `io::enumerate_output_devices()` to discover available devices,
+    /// then construct an `AudioDeviceConfig` with the desired settings.
+    pub fn new_with_config(config: &super::io::AudioDeviceConfig) -> Result<Self, String> {
+        let (device, stream_config, sample_rate) = super::io::resolve_config(config)
+            .map_err(|e| format!("Failed to resolve audio config: {}", e))?;
+
+        // We need the sample format from the device's default config.
+        // CPAL's supported_output_configs gives us this.
         let supported_config = device
             .default_output_config()
             .map_err(|e| format!("Failed to get output config: {}", e))?;
-
         let sample_format = supported_config.sample_format();
-        let sample_rate = supported_config.sample_rate().0;
 
         let frame_counter = Arc::new(AtomicU64::new(0));
         let command_queue = Arc::new(CommandQueue::new(512));
@@ -498,7 +506,7 @@ impl AudioEngine {
             sample_rate as f64,
         );
 
-        let config: StreamConfig = supported_config.config();
+        let config = stream_config;
         let err_fn = |err| eprintln!("Audio stream error: {}", err);
 
         let stream = match sample_format {
