@@ -28,6 +28,8 @@ pub mod player;
 pub mod qg_pb2;
 #[cfg(test)]
 pub mod rt_audit;
+#[cfg(test)]
+pub mod sync_tests;
 pub mod ring_buffer;
 pub mod timepitch;
 pub mod worker;

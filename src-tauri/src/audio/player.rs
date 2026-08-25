@@ -115,7 +115,7 @@ impl Player {
         sample_rate: f64,
         retired_sources: Arc<crossbeam_queue::ArrayQueue<Arc<DecodedBuffer>>>,
     ) -> Self {
-        Self::new_with_processor(id, sample_rate, retired_sources, default_processor())
+        Self::new_with_processor(id, sample_rate, retired_sources, default_processor(sample_rate, 2))
     }
 
     /// Create a player with a specific time/pitch processor. Used in tests

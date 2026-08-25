@@ -45,12 +45,12 @@ pub trait TimePitchProcessor: Send {
     fn reset(&mut self);
 }
 
-/// Create the default processor. Uses Signalsmith Stretch for
-/// pitch-preserving time stretching (independent tempo and pitch).
-/// Falls back to VarispeedProcessor if Signalsmith cannot be configured
-/// (e.g., no source attached yet).
-pub fn default_processor() -> Box<dyn TimePitchProcessor> {
-    Box::new(SignalsmithProcessor::new())
+/// Create the default processor, pre-configured for the engine's sample
+/// rate and channel count. Uses Signalsmith Stretch for pitch-preserving
+/// time stretching (independent tempo and pitch). The Stretch instance is
+/// fully configured HERE — no allocation occurs later in the audio callback.
+pub fn default_processor(sample_rate: f64, channels: u16) -> Box<dyn TimePitchProcessor> {
+    Box::new(SignalsmithProcessor::new(sample_rate as u32, channels))
 }
 
 /// Create a varispeed-only processor (reference/fallback). Pitch and
@@ -198,16 +198,30 @@ impl TimePitchProcessor for VarispeedProcessor {
 //   - Pitch is set independently via set_transpose_factor_semitones().
 //
 // Realtime safety:
-//   - All buffers (input block, output block, ring) are preallocated.
-//   - process() does not allocate after initial configure() (Signalsmith
-//     preallocates internally in presetDefault/configure).
+//   - The Stretch instance is configured at CONSTRUCTION time, never
+//     inside the audio callback. set_source() only swaps the source
+//     reference, resets, and pre-rolls — no allocation.
+//   - All buffers (input block, output block, ring, pre-roll buffer)
+//     are preallocated to maximum capacity at construction.
+//   - process() does not allocate after construction.
 //   - No locks, no I/O, no Tauri calls.
 //   - The Stretch instance is Send (the colinmarc wrapper unsafely
 //     implements Send because the C++ object has no thread-local state).
 //
-// Latency:
+// Latency and audible timing:
 //   - input_latency() + output_latency() frames of algorithmic delay.
-//   - Reported through latency_frames() for beat/transport compensation.
+//   - On launch/seek, Signalsmith's seek() method is used to pre-roll
+//     the internal state so the first process() output is immediately
+//     audible (not silence).
+//   - position_frames() returns the AUDIBLE source position (what the
+//     listener is hearing), not the input feed position. This is
+//     critical for loop detection, waveform cursor, and beat sync.
+//   - feed_position_frames() returns the internal read-ahead position.
+//
+// Tempo range:
+//   - Clamped to 0.5x–2.0x (covers all realistic DJ use).
+//   - Signalsmith sounds best in 0.75x–1.5x; extreme values are
+//     permitted but may produce artifacts.
 
 /// Output block size in frames. Small enough for low latency, large
 /// enough for efficient processing. 256 frames ≈ 5.8ms at 44.1kHz.
@@ -218,13 +232,36 @@ const OUTPUT_BLOCK_FRAMES: usize = 256;
 /// to absorb process() jitter without underrunning.
 const RING_CAPACITY: usize = 16384;
 
+/// Maximum supported tempo ratio. Input buffers are preallocated for
+/// this ratio so process_block() never needs to resize.
+const MAX_TEMPO: f64 = 2.0;
+
+/// Minimum supported tempo ratio.
+const MIN_TEMPO: f64 = 0.5;
+
+/// Maximum input frames in a single block (at MAX_TEMPO).
+/// 256 * 2 + 1 = 513. We round up to 520 for safety.
+const MAX_INPUT_FRAMES: usize = (OUTPUT_BLOCK_FRAMES as f64 * MAX_TEMPO) as usize + 8;
+
 pub struct SignalsmithProcessor {
     source: Option<Arc<DecodedBuffer>>,
-    source_position: f64,  // read position in source frames (fractional)
-    stretch: Option<signalsmith_stretch::Stretch>,
-    // Preallocated interleaved buffers
-    input_block: Vec<f32>,   // sized to max_input_frames * channels
-    output_block: Vec<f32>,  // sized to OUTPUT_BLOCK_FRAMES * channels
+    /// Input feed position: how far ahead we've read from the source
+    /// and fed into Signalsmith. This is NOT what the listener hears.
+    feed_position: f64,
+    /// Audible position: the source frame the listener is currently
+    /// hearing. Drives UI cursor, loop detection, and beat sync.
+    /// Computed as: start_frame + output_frames_served * tempo
+    audible_position: f64,
+    /// The source frame where playback started (for audible position calc).
+    start_frame: f64,
+    /// Number of output frames served via next_frame().
+    output_frames_served: u64,
+    /// The Stretch instance, configured at construction time.
+    stretch: signalsmith_stretch::Stretch,
+    // Preallocated interleaved buffers (sized at construction, never resized)
+    input_block: Vec<f32>,   // MAX_INPUT_FRAMES * channels
+    output_block: Vec<f32>,  // OUTPUT_BLOCK_FRAMES * channels
+    pre_roll_buffer: Vec<f32>, // for seek() pre-roll
     output_ring: Vec<f32>,   // power-of-2 ring buffer
     ring_read: usize,
     ring_write: usize,
@@ -236,50 +273,92 @@ pub struct SignalsmithProcessor {
     channels: u16,
     // State
     source_exhausted: bool,
-    fractional_accum: f64,  // carries fractional input frames between blocks
-    configured: bool,
-    // Buffered latency (in output frames) — set after configure
+    fractional_accum: f64,
     cached_latency: usize,
 }
 
 impl SignalsmithProcessor {
-    pub fn new() -> Self {
-        let ring_mask = RING_CAPACITY - 1;  // RING_CAPACITY is power of 2
+    /// Create a fully configured processor. The Stretch instance is
+    /// constructed and configured HERE, before the audio stream starts.
+    /// This is the only place allocation occurs. After construction,
+    /// set_source(), seek_frames(), and process_block() never allocate.
+    pub fn new(sample_rate: u32, channels: u16) -> Self {
+        let mut stretch = signalsmith_stretch::Stretch::preset_default(
+            channels as u32,
+            sample_rate,
+        );
+        stretch.set_transpose_factor_semitones(0.0, None);
+        let cached_latency = (stretch.input_latency() + stretch.output_latency()) as usize;
+
+        let ch = channels as usize;
+        let ring_mask = RING_CAPACITY - 1;
+
         Self {
             source: None,
-            source_position: 0.0,
-            stretch: None,
-            input_block: Vec::with_capacity(OUTPUT_BLOCK_FRAMES * 4 * 2),  // max 4x tempo, stereo
-            output_block: vec![0.0f32; OUTPUT_BLOCK_FRAMES * 2],  // stereo
+            feed_position: 0.0,
+            audible_position: 0.0,
+            start_frame: 0.0,
+            output_frames_served: 0,
+            stretch,
+            input_block: vec![0.0f32; MAX_INPUT_FRAMES * ch],
+            output_block: vec![0.0f32; OUTPUT_BLOCK_FRAMES * ch],
+            pre_roll_buffer: vec![0.0f32; cached_latency * ch * 2], // generous
             output_ring: vec![0.0f32; RING_CAPACITY],
             ring_read: 0,
             ring_write: 0,
             ring_mask,
             tempo: 1.0,
             semitones: 0.0,
-            sample_rate: 44100,
-            channels: 2,
+            sample_rate,
+            channels,
             source_exhausted: false,
             fractional_accum: 0.0,
-            configured: false,
-            cached_latency: 0,
+            cached_latency,
         }
     }
 
-    /// Configure the stretcher for the current sample rate and channel count.
-    /// Called lazily on first source attach or when sample rate changes.
-    fn ensure_configured(&mut self) {
-        if self.configured {
-            return;
+    /// Pre-roll the stretcher using seek(). This feeds source content
+    /// through the stretcher's internal pipeline without producing output,
+    /// so that the first process() call immediately produces audible content.
+    /// Called from set_source() and seek_frames() — never allocates.
+    fn pre_roll(&mut self) {
+        let source = match self.source.as_ref() {
+            Some(s) => s,
+            None => return,
+        };
+        let ch = self.channels as usize;
+        let total_frames = source.samples.len() / ch;
+
+        // Number of input frames to feed as pre-roll.
+        // We need enough to fill the latency pipeline.
+        let pre_roll_input_frames = (self.cached_latency as f64 * self.tempo) as usize + 1;
+        let pre_roll_samples = pre_roll_input_frames * ch;
+
+        // Ensure pre_roll_buffer is large enough (should be preallocated,
+        // but clamp to avoid any chance of indexing error)
+        let buf_len = self.pre_roll_buffer.len().min(pre_roll_samples);
+        let frames_to_feed = buf_len / ch;
+
+        // Read source content into pre_roll_buffer
+        let start = self.feed_position as usize;
+        for i in 0..frames_to_feed {
+            let src_frame = start + i;
+            if src_frame < total_frames {
+                for c in 0..ch {
+                    self.pre_roll_buffer[i * ch + c] = source.samples[src_frame * ch + c];
+                }
+            } else {
+                for c in 0..ch {
+                    self.pre_roll_buffer[i * ch + c] = 0.0;
+                }
+            }
         }
-        let mut stretch = signalsmith_stretch::Stretch::preset_default(
-            self.channels as u32,
-            self.sample_rate,
+
+        // Feed through seek() — warms up internal state, no output produced
+        self.stretch.seek(
+            &self.pre_roll_buffer[..frames_to_feed * ch],
+            self.tempo,
         );
-        stretch.set_transpose_factor_semitones(self.semitones as f32, None);
-        self.cached_latency = (stretch.input_latency() + stretch.output_latency()) as usize;
-        self.stretch = Some(stretch);
-        self.configured = true;
     }
 
     /// Number of samples currently in the ring buffer.
@@ -288,8 +367,7 @@ impl SignalsmithProcessor {
         (self.ring_write.wrapping_sub(self.ring_read)) & self.ring_mask
     }
 
-    /// Read one sample from the ring. Returns 0.0 if empty (shouldn't happen
-    /// if called after ensuring the ring has data).
+    /// Read one sample from the ring.
     #[inline]
     fn ring_pop(&mut self) -> f32 {
         let s = self.output_ring[self.ring_read];
@@ -297,83 +375,63 @@ impl SignalsmithProcessor {
         s
     }
 
-    /// Write samples to the ring. Caller must ensure there's space.
-    #[inline]
-    fn ring_push(&mut self, samples: &[f32]) {
-        for &s in samples {
-            self.output_ring[self.ring_write] = s;
-            self.ring_write = (self.ring_write + 1) & self.ring_mask;
-        }
-    }
-
     /// Read a block from the source into input_block, then process through
     /// the stretcher and write output to the ring buffer.
-    /// Returns the number of output frames written to the ring.
+    /// Returns the number of output samples written to the ring.
     fn process_block(&mut self) -> usize {
-        let stretch = match self.stretch.as_mut() {
-            Some(s) => s,
-            None => return 0,
-        };
         let source = match self.source.as_ref() {
             Some(s) => s,
             None => return 0,
         };
 
-        let channels = self.channels as usize;
-        let total_source_frames = source.samples.len() / channels;
+        let ch = self.channels as usize;
+        let total_source_frames = source.samples.len() / ch;
 
         // Calculate how many input frames to read for this output block.
-        // tempo > 1 = faster playback = consume more source per output frame.
         let needed_input_f = OUTPUT_BLOCK_FRAMES as f64 * self.tempo + self.fractional_accum;
         let input_frames = needed_input_f.floor() as usize;
         self.fractional_accum = needed_input_f - input_frames as f64;
 
-        // Ensure input_block is large enough
-        let needed_input_samples = (input_frames + 1) * channels;  // +1 for safety
-        if self.input_block.len() < needed_input_samples {
-            self.input_block.resize(needed_input_samples, 0.0);
-        }
+        // Clamp to preallocated capacity (should never exceed with clamped tempo)
+        let input_frames = input_frames.min(MAX_INPUT_FRAMES);
 
         // Read input from source (with zero-padding at end)
         let mut frames_read = 0;
-        let start = self.source_position as usize;
+        let start = self.feed_position as usize;
         for i in 0..input_frames {
             let src_frame = start + i;
             if src_frame < total_source_frames {
-                for ch in 0..channels {
-                    self.input_block[i * channels + ch] = source.samples[src_frame * channels + ch];
+                for c in 0..ch {
+                    self.input_block[i * ch + c] = source.samples[src_frame * ch + c];
                 }
                 frames_read += 1;
             } else {
-                // Zero-pad past end of source
-                for ch in 0..channels {
-                    self.input_block[i * channels + ch] = 0.0;
+                for c in 0..ch {
+                    self.input_block[i * ch + c] = 0.0;
                 }
             }
         }
 
-        if frames_read == 0 && self.source_position >= total_source_frames as f64 {
+        if frames_read == 0 && self.feed_position >= total_source_frames as f64 {
             self.source_exhausted = true;
             return 0;
         }
 
-        // Advance source position
-        self.source_position += input_frames as f64;
+        // Advance feed position
+        self.feed_position += input_frames as f64;
 
         // Process: input has `input_frames * channels` samples,
         // output has `OUTPUT_BLOCK_FRAMES * channels` samples.
-        let input_len = input_frames * channels;
-        let output_len = OUTPUT_BLOCK_FRAMES * channels;
-        stretch.process(
+        let input_len = input_frames * ch;
+        let output_len = OUTPUT_BLOCK_FRAMES * ch;
+        self.stretch.process(
             &self.input_block[..input_len],
             &mut self.output_block[..output_len],
         );
 
-        // Write output to ring (check space first)
+        // Write output to ring (inline to avoid borrow conflict, no allocation)
         let space = RING_CAPACITY - self.ring_available();
         if space >= output_len {
-            // Inline the ring write to avoid borrowing self mutably (ring_push)
-            // while immutably borrowing self.output_block. No allocation.
             let mask = self.ring_mask;
             let mut write_pos = self.ring_write;
             for i in 0..output_len {
@@ -382,14 +440,11 @@ impl SignalsmithProcessor {
             }
             self.ring_write = write_pos;
         }
-        // If not enough space, we drop the block — this should never happen
-        // if the ring is large enough relative to the output block size.
 
         output_len
     }
 
-    /// Ensure the ring has at least `needed` samples. Processes blocks
-    /// until the ring is sufficiently full or the source is exhausted.
+    /// Ensure the ring has at least `needed` samples.
     fn fill_ring(&mut self, needed: usize) {
         while self.ring_available() < needed && !self.source_exhausted {
             let written = self.process_block();
@@ -398,18 +453,22 @@ impl SignalsmithProcessor {
             }
         }
     }
+
+    /// Update the audible position based on output frames served.
+    #[inline]
+    fn update_audible_position(&mut self) {
+        self.audible_position = self.start_frame + self.output_frames_served as f64 * self.tempo;
+    }
 }
 
 impl TimePitchProcessor for SignalsmithProcessor {
     fn set_tempo_ratio(&mut self, ratio: f64) {
-        self.tempo = ratio.clamp(0.25, 4.0);
+        self.tempo = ratio.clamp(MIN_TEMPO, MAX_TEMPO);
     }
 
     fn set_pitch_semitones(&mut self, semitones: f64) {
         self.semitones = semitones.clamp(-24.0, 24.0);
-        if let Some(stretch) = self.stretch.as_mut() {
-            stretch.set_transpose_factor_semitones(self.semitones as f32, None);
-        }
+        self.stretch.set_transpose_factor_semitones(self.semitones as f32, None);
     }
 
     fn tempo_ratio(&self) -> f64 {
@@ -427,34 +486,30 @@ impl TimePitchProcessor for SignalsmithProcessor {
     fn set_source(&mut self, source: Arc<DecodedBuffer>, start_frame: f64) -> Option<Arc<DecodedBuffer>> {
         let old = self.source.take();
         self.source = Some(source);
-        self.source_position = start_frame.max(0.0);
+        self.feed_position = start_frame.max(0.0);
+        self.start_frame = start_frame.max(0.0);
+        self.audible_position = start_frame.max(0.0);
+        self.output_frames_served = 0;
         self.source_exhausted = false;
         self.fractional_accum = 0.0;
 
-        // Configure stretcher if sample rate changed
-        let src = self.source.as_ref().unwrap();
-        if src.sample_rate != self.sample_rate || src.channels != self.channels || !self.configured {
-            self.sample_rate = src.sample_rate;
-            self.channels = src.channels;
-            self.configured = false;
-            self.ensure_configured();
-        }
-
-        // Reset stretcher state for new source
-        if let Some(stretch) = self.stretch.as_mut() {
-            stretch.reset();
-        }
+        // Reset stretcher state for new source (no allocation — just clears
+        // internal buffers)
+        self.stretch.reset();
 
         // Clear ring
         self.ring_read = 0;
         self.ring_write = 0;
 
+        // Pre-roll: warm up the stretcher so the first output is audible
+        self.pre_roll();
+
         old
     }
 
     fn next_frame(&mut self) -> Option<(f64, f64)> {
-        let channels = self.channels as usize;
-        let needed = channels;  // one frame = `channels` samples
+        let ch = self.channels as usize;
+        let needed = ch;  // one frame = `channels` samples
 
         // Ensure ring has enough data
         self.fill_ring(needed);
@@ -465,17 +520,22 @@ impl TimePitchProcessor for SignalsmithProcessor {
         }
 
         let l = self.ring_pop() as f64;
-        let r = if channels >= 2 {
+        let r = if ch >= 2 {
             self.ring_pop() as f64
         } else {
             l
         };
 
+        self.output_frames_served += 1;
+        self.update_audible_position();
+
         Some((l, r))
     }
 
+    /// Returns the AUDIBLE source position — what the listener is hearing.
+    /// This drives UI cursor, loop detection, and beat sync.
     fn position_frames(&self) -> f64 {
-        self.source_position
+        self.audible_position
     }
 
     fn seek_frames(&mut self, frame: f64) {
@@ -484,26 +544,35 @@ impl TimePitchProcessor for SignalsmithProcessor {
             .as_ref()
             .map(|s| (s.samples.len() / s.channels as usize) as f64)
             .unwrap_or(0.0);
-        self.source_position = frame.clamp(0.0, max);
+        let clamped = frame.clamp(0.0, max);
+        self.feed_position = clamped;
+        self.start_frame = clamped;
+        self.audible_position = clamped;
+        self.output_frames_served = 0;
         self.source_exhausted = false;
         self.fractional_accum = 0.0;
 
         // Reset stretcher and clear ring
-        if let Some(stretch) = self.stretch.as_mut() {
-            stretch.reset();
-        }
+        self.stretch.reset();
         self.ring_read = 0;
         self.ring_write = 0;
+
+        // Pre-roll at the new position
+        self.pre_roll();
     }
 
     fn reset(&mut self) {
-        if let Some(stretch) = self.stretch.as_mut() {
-            stretch.reset();
-        }
+        self.stretch.reset();
         self.ring_read = 0;
         self.ring_write = 0;
         self.fractional_accum = 0.0;
         self.source_exhausted = false;
+        self.output_frames_served = 0;
+        self.start_frame = self.feed_position;
+        self.audible_position = self.feed_position;
+
+        // Pre-roll after reset
+        self.pre_roll();
     }
 }
 
@@ -631,7 +700,7 @@ mod tests {
     // ── SignalsmithProcessor tests ───────────────────────────────────
 
     fn make_signalsmith() -> SignalsmithProcessor {
-        SignalsmithProcessor::new()
+        SignalsmithProcessor::new(44100, 2)
     }
 
     #[test]

@@ -98,7 +98,7 @@ mod tests {
         // close to the input frequency, not 2% higher.
         let sr = 44100.0;
         let buf = sine_buffer(440.0, sr, 44100); // 1 second
-        let mut p = SignalsmithProcessor::new();
+        let mut p = SignalsmithProcessor::new(44100, 2);
         p.set_tempo_ratio(1.02);
         p.set_source(buf, 0.0);
 
@@ -122,7 +122,7 @@ mod tests {
     fn qg_tempo_plus_6_percent_produces_valid_audio() {
         let sr = 44100.0;
         let buf = sine_buffer(440.0, sr, 44100);
-        let mut p = SignalsmithProcessor::new();
+        let mut p = SignalsmithProcessor::new(44100, 2);
         p.set_tempo_ratio(1.06);
         p.set_source(buf, 0.0);
 
@@ -145,7 +145,7 @@ mod tests {
     fn qg_tempo_plus_10_percent_produces_valid_audio() {
         let sr = 44100.0;
         let buf = sine_buffer(440.0, sr, 44100);
-        let mut p = SignalsmithProcessor::new();
+        let mut p = SignalsmithProcessor::new(44100, 2);
         p.set_tempo_ratio(1.10);
         p.set_source(buf, 0.0);
 
@@ -165,7 +165,7 @@ mod tests {
     fn qg_tempo_minus_10_percent_produces_valid_audio() {
         let sr = 44100.0;
         let buf = sine_buffer(440.0, sr, 44100);
-        let mut p = SignalsmithProcessor::new();
+        let mut p = SignalsmithProcessor::new(44100, 2);
         p.set_tempo_ratio(0.90);
         p.set_source(buf, 0.0);
 
@@ -187,7 +187,7 @@ mod tests {
     fn qg_pitch_plus_1_semitone_preserves_duration() {
         let sr = 44100.0;
         let buf = sine_buffer(440.0, sr, 44100);
-        let mut p = SignalsmithProcessor::new();
+        let mut p = SignalsmithProcessor::new(44100, 2);
         p.set_pitch_semitones(1.0);
         p.set_source(buf, 0.0);
 
@@ -203,7 +203,7 @@ mod tests {
     fn qg_pitch_plus_3_semitones_preserves_duration() {
         let sr = 44100.0;
         let buf = sine_buffer(440.0, sr, 44100);
-        let mut p = SignalsmithProcessor::new();
+        let mut p = SignalsmithProcessor::new(44100, 2);
         p.set_pitch_semitones(3.0);
         p.set_source(buf, 0.0);
 
@@ -218,7 +218,7 @@ mod tests {
     fn qg_pitch_minus_3_semitones_preserves_duration() {
         let sr = 44100.0;
         let buf = sine_buffer(440.0, sr, 44100);
-        let mut p = SignalsmithProcessor::new();
+        let mut p = SignalsmithProcessor::new(44100, 2);
         p.set_pitch_semitones(-3.0);
         p.set_source(buf, 0.0);
 
@@ -237,7 +237,7 @@ mod tests {
         // channels should still have distinct energy (not collapsed to mono).
         let sr = 44100.0;
         let buf = stereo_sine_buffer(220.0, 660.0, sr, 44100);
-        let mut p = SignalsmithProcessor::new();
+        let mut p = SignalsmithProcessor::new(44100, 2);
         p.set_tempo_ratio(1.06);
         p.set_source(buf, 0.0);
 
@@ -279,7 +279,7 @@ mod tests {
     fn qg_combined_plus_6_percent_tempo_plus_2_semitones() {
         let sr = 44100.0;
         let buf = sine_buffer(440.0, sr, 44100);
-        let mut p = SignalsmithProcessor::new();
+        let mut p = SignalsmithProcessor::new(44100, 2);
         p.set_tempo_ratio(1.06);
         p.set_pitch_semitones(2.0);
         p.set_source(buf, 0.0);
@@ -308,7 +308,7 @@ mod tests {
         // CPU and verify it's well under the 2-deck budget.
         let sr = 44100.0;
         let buf = sine_buffer(440.0, sr, 44100);
-        let mut p = SignalsmithProcessor::new();
+        let mut p = SignalsmithProcessor::new(44100, 2);
         p.set_tempo_ratio(1.06);
         p.set_pitch_semitones(2.0);
         p.set_source(buf, 0.0);
@@ -339,7 +339,7 @@ mod tests {
     fn qg_latency_is_reported_and_reasonable() {
         let sr = 44100.0;
         let buf = sine_buffer(440.0, sr, 44100);
-        let mut p = SignalsmithProcessor::new();
+        let mut p = SignalsmithProcessor::new(44100, 2);
         p.set_source(buf, 0.0);
 
         let lat = p.latency_frames();

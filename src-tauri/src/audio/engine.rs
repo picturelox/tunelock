@@ -252,6 +252,15 @@ impl CallbackState {
         self.retired_sources.pop()
     }
 
+    #[cfg(test)]
+    pub fn player_position_sec(&self, index: usize) -> f64 {
+        if index < self.players.len() {
+            self.players[index].get_position_sec()
+        } else {
+            0.0
+        }
+    }
+
     fn apply_command(&mut self, cmd: EngineCommand, _current_frame: u64) {
         match cmd {
             EngineCommand::Launch { player, source, buffer, start_beat, quantize: _, .. } => {
