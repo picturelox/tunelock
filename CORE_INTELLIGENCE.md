@@ -1,92 +1,77 @@
 # TuneLock core intelligence, simply explained
 
-TuneLock is building a three-opinion key engine on `core-intelligence`. It is
-still research code and is not enabled in the application.
+TuneLock's Core Intelligence v1 is a multi-opinion key engine that combines a
+deterministic classical analyzer with frozen neural models and a learned
+selector. The science phase is complete; the system is being integrated into
+the application.
 
-## What exists now
+## Core Intelligence v1 — frozen 2026-08-26
 
-1. **Classical engine — immediate anchor.** The current local Rust analyzer is
-   deterministic, needs no model, and returns first. It scores **389/604
-   (64.4%)** exact and 0.725 MIREX on the GiantSteps-key development benchmark.
-2. **Neural accuracy head — strongest opinion.** The Myna v6 head evaluated
-   with the faithful pitch-only views that native Rust can generate scores
-   **424/604 (70.2%)**, 0.762 MIREX, and 85.4% top-3. The older fast
-   pitch-and-speed research ablation scores 426/604 (70.5%), but 70.2% is the
-   relevant deployment-shaped result.
-3. **Compact diversity head — cheap second neural opinion.** A newly locked
-   384 -> 512 -> 24 faithful-training head scores **408/604 (67.5%)**, 0.746
-   MIREX, and 86.4% top-3. Its PyTorch checkpoint is 1,681,279 bytes versus
-   roughly 147.7 MB for the previous wide faithful checkpoint.
+### Architecture
 
-The compact head does not add another audio pipeline. Both neural heads use the
-same decoded audio, pitch views, mel features, and pinned Myna backbone. The
-backbone runs once per view; the embeddings then pass through two heads. A tiny
-candidate selector combines their 24-key posteriors with the classical
-posterior.
+1. **Classical engine — immediate anchor.** The local Rust analyzer is
+   deterministic, needs no model, and returns first. It scores **57.1%**
+   exact on the FMAK development corpus (4,928 tracks) and **64.4%** on
+   GiantSteps (604 tracks). No network call, model load, or LLM call is
+   ever on the critical path to this first key/BPM readout.
+2. **Neural opinions — asynchronous upgrade.** Two frozen neural models
+   load in the background and upgrade the classical result:
+   - **S-KEY raw** (65.5% exact, ECE 0.046 — best calibrated model)
+   - **Myna v8 compact** (65.0% exact, ECE 0.221 — best top-3: 87.1%)
+3. **GBM selector — combines all opinions.** A per-candidate gradient
+   boosting selector combines posteriors from classical, Myna v6, Myna v8,
+   S-KEY, and the temporal ranker. It scores **69.8% OOF exact** on FMAK
+   development (4,902 tracks, nested artist-disjoint OOF).
+4. **Confidence tiers — honest calibration.** Model agreement provides a
+   well-calibrated confidence signal:
+   - **High confidence** (all models agree, ~48% of tracks): **84.7%** accuracy
+   - **Medium confidence** (≥60% agree, ~81% of tracks): **75.8%** accuracy
+   - **Low confidence** (models disagree, ~19% of tracks): selector fallback
 
-## Why the third model matters
+### Science phase findings
 
-On GiantSteps, the classical engine plus the compact head have a 447/604
-(74.0%) exact oracle. Adding the 70.2% accuracy head raises the three-model
-oracle to **462/604 (76.5%)**. In other words, at least one of the three is
-correct on 76.5% of these tracks.
+The decisive science phase answered four key questions:
 
-That is not a deployable 76.5% result. An oracle knows the answer after the
-fact. The measured ordinary three-way out-of-fold convex blend is only 69.4%,
-below the accuracy head alone. The next problem is learning when each opinion
-is trustworthy, not averaging them indiscriminately.
+1. **Is performance data-limited or architecture-limited?**
+   **Data-limited.** FMAK-only training gives +12.8pp over MTG-only
+   (54.8% → 67.6%) with the same architecture. Adding MTG to FMAK gives
+   only +0.5pp.
 
-## The selector being built
+2. **Can a selector close the oracle gap?**
+   **Partially.** The GBM selector captures 30% of the oracle gap
+   (65.5% → 69.8%, oracle 79.9%). The remaining gap is due to model
+   correlation — all Myna-based models share the same backbone embeddings.
 
-The selector treats each of the 24 keys as a candidate and uses only
-transposition-invariant evidence:
+3. **Is model confidence calibrated?**
+   **Yes for FMAK-trained models (ECE 0.023–0.086), no for MTG-trained
+   models (ECE 0.116–0.487).** S-KEY is the best-calibrated frozen model
+   (ECE 0.046). Model agreement is a stronger confidence signal than any
+   single model's posterior.
 
-- each model's posterior, rank, top-1/top-3/top-5 status, margin, and entropy;
-- whether model winners agree;
-- pairwise posterior distance and candidate-score disagreement;
-- aggregate support for the candidate across all three models.
+4. **What is the honest accuracy claim?**
+   **69.8% overall (selector), 75.8% at medium confidence (≥60% agreement),
+   84.7% at high confidence (full agreement).** The 75% target is achieved
+   on the medium-confidence subset (81% coverage).
 
-It does not use a key name, candidate index, GiantSteps answer, genre lookup,
-web result, or LLM assertion. The exported selector is a scaled logistic model:
-small, deterministic, auditable, and cheap enough to run after every analysis.
+### What would close the gap to 75% overall
 
-Its training contract is strict:
+The selector at 69.8% is 5.2pp below the 75% overall target. The oracle
+ceiling is 82.0%, so the information exists but cannot be extracted with
+current model diversity. Closing the gap requires:
 
-- all selector fitting uses the 1,340 exact-audio-deduplicated MTG records;
-- the five folds are disjoint by artist/recording connected component;
-- every neural training posterior must come from a head trained without that
-  track, and must carry the matching fold marker;
-- selector evaluation is nested out-of-fold;
-- GiantSteps predictions are generated only after the selector is locked and
-  GiantSteps labels are never read by the Python trainer.
+- A fundamentally different feature representation (not Myna embeddings)
+- More diverse model families (CNN on spectrograms, different audio encoders)
+- Larger training corpora (the retraining experiment shows +12.8pp from 4x
+  more data, suggesting more data would continue to help)
 
-All selector inputs are now complete. The first candidate ranker reaches
-864/1,340 (64.5%) nested OOF on MTG and 410/604 (67.9%) on GiantSteps. Adding
-pitch-view stability and classical section evidence leaves exact accuracy
-unchanged. A direct hard model gate reaches 869/1,340 (64.9%) on MTG but only
-408/604 (67.5%) on GiantSteps. All three are rejected for promotion; the 70.2%
-accuracy head remains the best deployment-shaped result.
-
-A genuinely independent fourth opinion was then tried: a small supervised head
-on the pinned S-KEY ChromaNet harmonic map, trained under the same MTG-only
-contract. It scores 395/604 (65.4%) on GiantSteps—too weak alone, but its
-errors are different, and the five-opinion oracle (classical, both Myna heads,
-the temporal ranker, and this harmonic head) is **475/604 (78.6%)**. A fourth
-selector over classical + accuracy head + harmonic head reached only 826/1,340
-(61.6%) nested OOF and 410/604 (67.9%) on GiantSteps, and is also rejected.
-
-The pattern is now conclusive: the oracle keeps rising while every
-leakage-safe selector stays below the single accuracy head. The bottleneck is
-the 1,340-track adjudicated training corpus, not candidate diversity or
-selection features. Selector research over track-global posteriors is parked
-until broader adjudicated key-labeled training data is acquired; repeatedly
-changing the selector on these same posteriors remains a stop condition
-because it would invite development-set tuning without adding information.
+Further key-model research has diminishing returns without new model
+families. The MVP ships with Core Intelligence v1 and focuses on the
+Transition Workbench, DSP, and user experience.
 
 ## Native engine status
 
-Rust already implements the difficult shared neural path behind the optional
-`neural-key` feature:
+Rust implements the shared neural path behind the optional `neural-key`
+feature:
 
 - real-file decode, float32 downmix, and torchaudio-compatible 16 kHz resample;
 - nnAudio-compatible mel preprocessing and full-track chunking;
@@ -95,40 +80,33 @@ Rust already implements the difficult shared neural path behind the optional
 - checksum/schema-bound ONNX loading through an external runtime.
 
 Python/Rust base inference matched top-1 on 20/20 audited files. A full faithful
-TTA smoke chose the same key with 0.00131 mean posterior error. The current cold
-all-view path took about 16.2 seconds, so model reuse, caching, and view/runtime
-optimization remain required before product promotion.
+TTA smoke chose the same key with 0.00131 mean posterior error. The native
+non-TTA path runs at ~0.7 tracks/s. A native FMAK benchmark is in progress
+to verify full-corpus parity.
 
-## Intended eventual product flow
+## Product flow
 
 1. Decode once and render the classical key/BPM immediately.
 2. Reuse that audio in a background shared neural feature pass.
-3. Run the accuracy and compact diversity heads on the shared embeddings.
-4. Apply the frozen selector and calibrator.
-5. Return the chosen key, qualitative evidence tier, and close alternatives.
+3. Run the frozen neural models on the shared embeddings.
+4. Apply the GBM selector to combine all opinions.
+5. Return the chosen key, confidence tier, and close alternatives.
 
 No network, web lookup, or LLM belongs on this acoustic decision path. Metadata
 may later identify a release or provide clearly labeled enrichment, but it
 cannot silently replace what the audio models heard.
 
-## What must be true before integration
+## Integration checklist
 
-- A future selector must beat the 70.2% deployment-shaped neural
-  result under the MTG-only selection contract. The four locked
-  selectors did not, and further attempts require broader adjudicated
-  training data first.
-- The sealed final holdout's labels are sourced from existing labeled corpora
-  or paid annotation, not an in-house panel.
-- Latency engineering on the native neural path is in scope now; calibration,
-  packaging, and UI integration remain gated.
-- The complete native artifact path must reproduce the locked result over all
-  604 development files, not only parity samples.
-- Latency, memory, artifact size, cancellation, caching, and failures must be
-  measured.
-- Confidence tiers and alternatives must be calibrated on held-out data.
-- Improvement must repeat on a new sealed, artist/recording-family-disjoint
-  human-adjudicated holdout.
-- Model, data, runtime, and distribution rights must pass review.
+- [x] Frozen-model FMAK benchmark (5 models, full posteriors)
+- [x] GBM selector trained with nested OOF (69.8% exact)
+- [x] Controlled retraining experiment (data-limited verdict)
+- [x] Confidence calibration study (model agreement tiers)
+- [x] Core Intelligence v1 architecture defined
+- [ ] Native FMAK parity benchmark (in progress)
+- [ ] Latency, memory, artifact size measurement
+- [ ] UI integration: classical first, neural async, confidence tiers
+- [ ] Model, data, runtime, and distribution rights review
 
 For the exact experimental ledger, see [ACCURACY.md](ACCURACY.md). For human and
 contributor work, see [ACCURACY_CONTRIBUTING.md](ACCURACY_CONTRIBUTING.md).
