@@ -47,6 +47,14 @@ Corpus audit results (2026-08-24, verified against primary sources):
   train on the rights-cleared subset—so FMAK answers the scientific question
   "does more adjudicated data unlock selection?" before it can answer the
   product question.
+  **Audio verification (2026-08-25):** all 10 pinned Zenodo archives
+  downloaded, MD5-verified, and extracted. 5,489/5,489 MP3s on disk (zero
+  missing). Recording MD5 backfill found 5,442 unique recordings, 47 duplicate
+  groups (same-audio re-uploads, mostly Kevin MacLeod and Derek Clegg), and 1
+  label conflict (The Polish Ambassador: same audio labeled E minor vs B minor
+  — needs adjudication). **Zero recording-MD5 overlap with GiantSteps** — the
+  corpora are completely recording-disjoint, ideal for artist/recording-
+  disjoint fold computation.
 - **GiantSteps+ (Zenodo 1095691, CC BY-SA 4.0)** — expanded variant with 500
   key-change/modal tracks; audit as supplementary training and
   modulation-behavior material.
