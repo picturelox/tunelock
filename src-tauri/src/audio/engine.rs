@@ -66,8 +66,14 @@ unsafe impl Sync for SendStream {}
 
 /// Internal state owned by the callback closure. Not shared — all
 /// communication is through lock-free channels.
-struct CallbackState {
+pub struct CallbackState {
+    #[cfg(test)]
+    pub frame_counter: Arc<AtomicU64>,
+    #[cfg(not(test))]
     frame_counter: Arc<AtomicU64>,
+    #[cfg(test)]
+    pub command_queue: Arc<CommandQueue>,
+    #[cfg(not(test))]
     command_queue: Arc<CommandQueue>,
     meter_snapshot: Arc<MeterSnapshot>,
     players: [Player; MAX_PLAYERS],
@@ -113,7 +119,7 @@ struct PendingCommand {
 }
 
 impl CallbackState {
-    fn new(
+    pub fn new(
         frame_counter: Arc<AtomicU64>,
         command_queue: Arc<CommandQueue>,
         meter_snapshot: Arc<MeterSnapshot>,
@@ -185,6 +191,17 @@ impl CallbackState {
     /// scheduled, or None if no future commands remain.
     fn next_event_frame(&self, frame: u64) -> Option<u64> {
         self.pending.first().map(|p| p.at_frame).filter(|&f| f > frame)
+    }
+
+    // ── Test helpers (only compiled in test builds) ───────────────────
+    #[cfg(test)]
+    pub fn pending_capacity_for_test(&self) -> usize {
+        self.pending.capacity()
+    }
+
+    #[cfg(test)]
+    pub fn retired_sources_pop_for_test(&self) -> Option<Arc<DecodedBuffer>> {
+        self.retired_sources.pop()
     }
 
     fn apply_command(&mut self, cmd: EngineCommand, _current_frame: u64) {
@@ -642,7 +659,7 @@ impl AudioEngine {
 /// Event-sliced rendering: the block is rendered in slices between pending
 /// command frames, so a command scheduled for halfway through the block
 /// takes effect at that exact frame.
-fn audio_callback_f32(state: &mut CallbackState, output: &mut [f32]) {
+pub fn audio_callback_f32(state: &mut CallbackState, output: &mut [f32]) {
     let channels = if output.len() >= 2 { 2 } else { 1 };
     let frames = output.len() / channels;
     let block_start = state.frame_counter.load(Ordering::Relaxed);
