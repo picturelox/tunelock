@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use super::command::{PlayerId, BusId, DecodedBuffer, EqBand, LoopRegion, SourceHandle, BeatGridCompact};
 use super::eq::DjIsolator;
-use super::timepitch::{TimePitchProcessor, default_processor};
+use super::timepitch::{TimePitchProcessor, ProcessorSet, ProcessorMode};
 
 /// Ramped gain to avoid clicks.
 struct RampedGain {
@@ -72,9 +72,11 @@ pub struct Player {
     source_handle: Option<SourceHandle>,
     buffer: Option<Arc<DecodedBuffer>>,
 
-    // Time/pitch engine — the replaceable abstraction. Owns the source
-    // position; the player never reads the buffer directly.
-    processor: Box<dyn TimePitchProcessor>,
+    // Time/pitch engine — preconstructed set of all three processor types
+    // (bypass, varispeed, signalsmith). All allocation happens at Player
+    // construction. Mode switching in the realtime callback only changes
+    // the enum — no construction or destruction.
+    processor: ProcessorSet,
 
     // Deferred-destruction queue for retired source buffers. When a new
     // source replaces an old one, the old Arc is pushed here instead of
@@ -130,17 +132,30 @@ impl Player {
         sample_rate: f64,
         retired_sources: Arc<crossbeam_queue::ArrayQueue<Arc<DecodedBuffer>>>,
     ) -> Self {
-        Self::new_with_processor(id, sample_rate, retired_sources, default_processor(sample_rate, 2))
+        Self::new_with_mode(id, sample_rate, retired_sources, ProcessorMode::Signalsmith)
     }
 
-    /// Create a player with a specific time/pitch processor. Used in tests
-    /// to use VarispeedProcessor (zero latency, sample-exact) instead of
-    /// the default SignalsmithProcessor (which has STFT latency).
+    /// Create a player with a specific processor mode. Used in tests
+    /// to use Varispeed (zero latency, sample-exact) instead of
+    /// the default Signalsmith (which has STFT latency).
     pub fn new_with_processor(
         id: PlayerId,
         sample_rate: f64,
         retired_sources: Arc<crossbeam_queue::ArrayQueue<Arc<DecodedBuffer>>>,
-        processor: Box<dyn TimePitchProcessor>,
+        _processor: Box<dyn TimePitchProcessor>,
+    ) -> Self {
+        // Legacy: the processor argument is ignored. We preconstruct all
+        // three processors and default to Varispeed for test compatibility.
+        Self::new_with_mode(id, sample_rate, retired_sources, ProcessorMode::Varispeed)
+    }
+
+    /// Create a player with a specific processor mode. All three processors
+    /// are preconstructed here — no allocation occurs later in the callback.
+    pub fn new_with_mode(
+        id: PlayerId,
+        sample_rate: f64,
+        retired_sources: Arc<crossbeam_queue::ArrayQueue<Arc<DecodedBuffer>>>,
+        mode: ProcessorMode,
     ) -> Self {
         Self {
             id,
@@ -149,7 +164,7 @@ impl Player {
             soloed: false,
             source_handle: None,
             buffer: None,
-            processor,
+            processor: ProcessorSet::new(sample_rate, 2, mode),
             retired_sources,
             overflow_retire: [None, None, None, None, None, None, None, None],
             bus: if id.0 == 0 { BusId::A } else { BusId::B },
@@ -268,24 +283,20 @@ impl Player {
         self.source_handle = Some(handle);
     }
 
-    /// Swap the time/pitch processor. The old processor's source Arc is
-    /// retired through the deferred-destruction queue. The new processor
-    /// gets the current source re-attached at the current audible position.
-    /// Used by the Listening Lab to switch between bypass, varispeed, and
-    /// signalsmith.
-    pub fn swap_processor(&mut self, new_processor: Box<dyn TimePitchProcessor>) {
-        let old_processor = std::mem::replace(&mut self.processor, new_processor);
-        // Re-attach the current source to the new processor at the current
-        // audible position. set_source returns the new processor's old
-        // source (None for a fresh processor), which we retire.
-        if let Some(buf) = &self.buffer {
-            let audible_pos = old_processor.position_frames();
-            let old_src = self.processor.set_source(buf.clone(), audible_pos);
-            let _ = self.retire(old_src);
-        }
-        // The old processor Box itself drops here. It's small (no large PCM
-        // buffers — those are in the source Arcs, which are handled above).
-        drop(old_processor);
+    /// Switch the active processor mode (bypass/varispeed/signalsmith).
+    /// All three processors are preconstructed — no allocation or
+    /// deallocation in the realtime callback. The source is re-attached
+    /// to the newly active processor at the current audible position.
+    /// The incoming processor's stale source (if any) is retired.
+    pub fn set_processor_mode(&mut self, mode: ProcessorMode) {
+        let source = self.buffer.clone();
+        let stale = self.processor.switch_mode(mode, source);
+        let _ = self.retire(stale);
+    }
+
+    /// Get the current processor mode.
+    pub fn processor_mode(&self) -> ProcessorMode {
+        self.processor.mode()
     }
 
     pub fn play(&mut self) {

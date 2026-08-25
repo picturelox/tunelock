@@ -180,11 +180,11 @@ impl CallbackState {
         let meter_update_interval = (sample_rate / 30.0) as u64; // 30 Hz meter updates
         let mut players: [Player; MAX_PLAYERS] = std::array::from_fn(|i| {
             if use_varispeed {
-                Player::new_with_processor(
+                Player::new_with_mode(
                     PlayerId(i as u8),
                     sample_rate,
                     retired_sources.clone(),
-                    super::timepitch::varispeed_processor(),
+                    super::timepitch::ProcessorMode::Varispeed,
                 )
             } else {
                 Player::new(PlayerId(i as u8), sample_rate, retired_sources.clone())
@@ -439,13 +439,29 @@ impl CallbackState {
             EngineCommand::SetProcessorType { player, processor_type, .. } => {
                 let idx = player.as_index();
                 if idx < MAX_PLAYERS {
-                    let sr = self.sample_rate;
-                    let new_processor: Box<dyn super::timepitch::TimePitchProcessor> = match processor_type {
-                        super::command::ProcessorType::Bypass => super::timepitch::bypass_processor(),
-                        super::command::ProcessorType::Varispeed => super::timepitch::varispeed_processor(),
-                        super::command::ProcessorType::Signalsmith => super::timepitch::default_processor(sr, 2),
+                    let mode = match processor_type {
+                        super::command::ProcessorType::Bypass => super::timepitch::ProcessorMode::Bypass,
+                        super::command::ProcessorType::Varispeed => super::timepitch::ProcessorMode::Varispeed,
+                        super::command::ProcessorType::Signalsmith => super::timepitch::ProcessorMode::Signalsmith,
                     };
-                    self.players[idx].swap_processor(new_processor);
+                    // No construction or destruction — all three processors
+                    // are preconstructed at Player init. This only changes
+                    // the mode enum and re-attaches the source.
+                    self.players[idx].set_processor_mode(mode);
+                }
+            }
+            EngineCommand::SetListeningCondition { player, processor_type, tempo_rate, pitch_semitones, .. } => {
+                let idx = player.as_index();
+                if idx < MAX_PLAYERS {
+                    let mode = match processor_type {
+                        super::command::ProcessorType::Bypass => super::timepitch::ProcessorMode::Bypass,
+                        super::command::ProcessorType::Varispeed => super::timepitch::ProcessorMode::Varispeed,
+                        super::command::ProcessorType::Signalsmith => super::timepitch::ProcessorMode::Signalsmith,
+                    };
+                    // Atomic: mode + tempo + pitch all change in one command.
+                    self.players[idx].set_processor_mode(mode);
+                    self.players[idx].set_tempo(tempo_rate);
+                    self.players[idx].set_pitch_semitones(pitch_semitones);
                 }
             }
         }
@@ -547,7 +563,8 @@ impl CommandFrame for EngineCommand {
             | EngineCommand::SetFilterResonance { at_frame, .. }
             | EngineCommand::SetFilterDrive { at_frame, .. }
             | EngineCommand::SetMasterGain { at_frame, .. } => *at_frame,
-            EngineCommand::SetProcessorType { at_frame, .. } => *at_frame,
+            | EngineCommand::SetProcessorType { at_frame, .. }
+            | EngineCommand::SetListeningCondition { at_frame, .. } => *at_frame,
             EngineCommand::Shutdown => 0,
         }
     }

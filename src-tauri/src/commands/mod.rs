@@ -1716,6 +1716,28 @@ pub async fn audio_engine_init(state: State<'_, AppState>) -> Result<u32, String
     let sr = engine.sample_rate();
     engine.start().map_err(|e| e)?;
     *engine_slot = Some(engine);
+    drop(engine_slot);
+
+    // Spawn an engine-owned non-realtime drain task that periodically
+    // drains retired source buffers. This is independent of UI meter
+    // polling — it runs even when the UI is hidden, minimized, or not
+    // polling meters. Drains every 100ms (10Hz), which is far faster
+    // than any realistic source retirement rate.
+    let engine_arc = state.audio_engine.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(100));
+        loop {
+            interval.tick().await;
+            let engine_slot = engine_arc.lock().await;
+            if let Some(engine) = engine_slot.as_ref() {
+                engine.drain_retired_sources();
+            } else {
+                // Engine was dropped — stop the drain task.
+                break;
+            }
+        }
+    });
+
     Ok(sr)
 }
 
@@ -2002,6 +2024,86 @@ pub async fn audio_engine_sync_launch(
             at_frame: target_frame,
         });
     }
+    Ok(())
+}
+
+/// Get the current git revision (short SHA) for the running build.
+/// Used by the Listening Lab to record which DSP revision produced
+/// each human rating. Falls back to the Cargo package version if git
+/// is not available.
+#[command]
+pub async fn get_git_revision() -> Result<String, String> {
+    // Try to get the git SHA from the build-time environment variable.
+    // This is set by a build script if present, or falls back to the
+    // Cargo package version.
+    let sha = option_env!("TUNELOCK_GIT_SHA").unwrap_or(env!("CARGO_PKG_VERSION"));
+    Ok(sha.to_string())
+}
+
+#[command]
+pub async fn audio_engine_set_listening_condition(
+    state: State<'_, AppState>,
+    player: u8,
+    processor_type: String,
+    tempo_rate: f32,
+    pitch_semitones: f32,
+) -> Result<(), String> {
+    let pt = match processor_type.as_str() {
+        "bypass" => crate::audio::command::ProcessorType::Bypass,
+        "varispeed" => crate::audio::command::ProcessorType::Varispeed,
+        "signalsmith" => crate::audio::command::ProcessorType::Signalsmith,
+        other => return Err(format!("Unknown processor type: {}", other)),
+    };
+    let engine_slot = state.audio_engine.lock().await;
+    if let Some(engine) = engine_slot.as_ref() {
+        let frame = engine.current_frame();
+        engine.send_command(crate::audio::EngineCommand::SetListeningCondition {
+            player: crate::audio::PlayerId(player),
+            at_frame: frame,
+            processor_type: pt,
+            tempo_rate,
+            pitch_semitones,
+        });
+    }
+    Ok(())
+}
+
+/// Load a player with a source but do NOT start playback. The player
+/// is loaded in a paused state, ready for explicit launch via play or
+/// sync_launch. Used by the Listening Lab so load doesn't auto-play.
+#[command]
+pub async fn audio_engine_load_player_paused(
+    state: State<'_, AppState>,
+    player: u8,
+    file_path: String,
+) -> Result<(), String> {
+    let mut engine_slot = state.audio_engine.lock().await;
+    let engine = engine_slot.as_mut().ok_or("Audio engine not initialized")?;
+    let target_sr = engine.sample_rate();
+
+    let buffer = tokio::task::spawn_blocking(move || {
+        crate::audio::worker::decode_file(&file_path, target_sr)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("Decode task failed: {}", e))??;
+
+    let source = engine.register_source(buffer);
+    // Launch with Immediate quantize, then immediately pause.
+    // This loads the buffer into the player without starting playback.
+    engine.launch_player(
+        crate::audio::PlayerId(player),
+        source,
+        0.0,
+        crate::audio::Quantize::Immediate,
+    )?;
+    // Immediately send a Pause command at the current frame to stop
+    // playback that launch_player just started.
+    let frame = engine.current_frame();
+    engine.send_command(crate::audio::EngineCommand::Pause {
+        player: crate::audio::PlayerId(player),
+        at_frame: frame,
+    });
     Ok(())
 }
 

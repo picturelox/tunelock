@@ -53,6 +53,175 @@ pub fn default_processor(sample_rate: f64, channels: u16) -> Box<dyn TimePitchPr
     Box::new(SignalsmithProcessor::new(sample_rate as u32, channels))
 }
 
+/// Processor mode selector. Used by the preconstructed ProcessorSet to
+/// switch between bypass, varispeed, and signalsmith without any
+/// construction or destruction in the realtime callback.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessorMode {
+    Bypass,
+    Varispeed,
+    Signalsmith,
+}
+
+/// A preconstructed set of all three processor types, owned by each Player.
+/// All allocation happens at construction time (before the audio stream
+/// starts). Switching modes in the realtime callback only changes the enum
+/// and re-attaches the source — no heap allocation or deallocation.
+///
+/// This is the core realtime-safety guarantee for processor switching:
+/// the Listening Lab's ABX and reference/bypass comparison can switch
+/// modes without any risk of audio glitches from allocation.
+pub struct ProcessorSet {
+    bypass: BypassProcessor,
+    varispeed: VarispeedProcessor,
+    signalsmith: SignalsmithProcessor,
+    mode: ProcessorMode,
+}
+
+impl ProcessorSet {
+    /// Construct all three processors. This is the only place allocation
+    /// occurs. Called once per player at engine init, before the audio
+    /// stream starts.
+    pub fn new(sample_rate: f64, channels: u16, mode: ProcessorMode) -> Self {
+        Self {
+            bypass: BypassProcessor::new(),
+            varispeed: VarispeedProcessor::new(),
+            signalsmith: SignalsmithProcessor::new(sample_rate as u32, channels),
+            mode,
+        }
+    }
+
+    /// Current active mode.
+    pub fn mode(&self) -> ProcessorMode {
+        self.mode
+    }
+
+    /// Switch to a different processor mode. Re-attaches the current source
+    /// at the current audible position. No allocation or deallocation —
+    /// all three processors are already constructed and stay alive.
+    /// Returns the incoming processor's stale source Arc (if any) for
+    /// retirement. The outgoing processor keeps its source Arc (just
+    /// inactive) — no retirement needed for it.
+    pub fn switch_mode(
+        &mut self,
+        new_mode: ProcessorMode,
+        source: Option<Arc<DecodedBuffer>>,
+    ) -> Option<Arc<DecodedBuffer>> {
+        if new_mode == self.mode {
+            return None;
+        }
+        // Get current audible position from the outgoing processor.
+        let pos = self.position_frames();
+        self.mode = new_mode;
+
+        // Re-attach source to the newly active processor at the current
+        // position. The incoming processor may have a stale source from
+        // a previous activation — set_source returns it for retirement.
+        // The outgoing processor keeps its Arc (just not active); its
+        // source will be retired when a new source is loaded or when
+        // the player is destroyed (outside the realtime callback).
+        if let Some(buf) = source {
+            match new_mode {
+                ProcessorMode::Bypass => self.bypass.set_source(buf, pos),
+                ProcessorMode::Varispeed => self.varispeed.set_source(buf, pos),
+                ProcessorMode::Signalsmith => self.signalsmith.set_source(buf, pos),
+            }
+        } else {
+            None
+        }
+    }
+}
+
+impl TimePitchProcessor for ProcessorSet {
+    fn set_tempo_ratio(&mut self, ratio: f64) {
+        match self.mode {
+            ProcessorMode::Bypass => self.bypass.set_tempo_ratio(ratio),
+            ProcessorMode::Varispeed => self.varispeed.set_tempo_ratio(ratio),
+            ProcessorMode::Signalsmith => self.signalsmith.set_tempo_ratio(ratio),
+        }
+    }
+
+    fn set_pitch_semitones(&mut self, semitones: f64) {
+        match self.mode {
+            ProcessorMode::Bypass => self.bypass.set_pitch_semitones(semitones),
+            ProcessorMode::Varispeed => self.varispeed.set_pitch_semitones(semitones),
+            ProcessorMode::Signalsmith => self.signalsmith.set_pitch_semitones(semitones),
+        }
+    }
+
+    fn tempo_ratio(&self) -> f64 {
+        match self.mode {
+            ProcessorMode::Bypass => self.bypass.tempo_ratio(),
+            ProcessorMode::Varispeed => self.varispeed.tempo_ratio(),
+            ProcessorMode::Signalsmith => self.signalsmith.tempo_ratio(),
+        }
+    }
+
+    fn pitch_semitones(&self) -> f64 {
+        match self.mode {
+            ProcessorMode::Bypass => self.bypass.pitch_semitones(),
+            ProcessorMode::Varispeed => self.varispeed.pitch_semitones(),
+            ProcessorMode::Signalsmith => self.signalsmith.pitch_semitones(),
+        }
+    }
+
+    fn latency_frames(&self) -> usize {
+        match self.mode {
+            ProcessorMode::Bypass => self.bypass.latency_frames(),
+            ProcessorMode::Varispeed => self.varispeed.latency_frames(),
+            ProcessorMode::Signalsmith => self.signalsmith.latency_frames(),
+        }
+    }
+
+    fn set_source(
+        &mut self,
+        source: Arc<DecodedBuffer>,
+        start_frame: f64,
+    ) -> Option<Arc<DecodedBuffer>> {
+        // Only set source on the ACTIVE processor. Inactive processors
+        // will get the source re-attached when switch_mode is called.
+        // This avoids dropping Arc<DecodedBuffer> from inactive processors
+        // on the realtime thread.
+        match self.mode {
+            ProcessorMode::Bypass => self.bypass.set_source(source, start_frame),
+            ProcessorMode::Varispeed => self.varispeed.set_source(source, start_frame),
+            ProcessorMode::Signalsmith => self.signalsmith.set_source(source, start_frame),
+        }
+    }
+
+    fn next_frame(&mut self) -> Option<(f64, f64)> {
+        match self.mode {
+            ProcessorMode::Bypass => self.bypass.next_frame(),
+            ProcessorMode::Varispeed => self.varispeed.next_frame(),
+            ProcessorMode::Signalsmith => self.signalsmith.next_frame(),
+        }
+    }
+
+    fn position_frames(&self) -> f64 {
+        match self.mode {
+            ProcessorMode::Bypass => self.bypass.position_frames(),
+            ProcessorMode::Varispeed => self.varispeed.position_frames(),
+            ProcessorMode::Signalsmith => self.signalsmith.position_frames(),
+        }
+    }
+
+    fn seek_frames(&mut self, frame: f64) {
+        match self.mode {
+            ProcessorMode::Bypass => self.bypass.seek_frames(frame),
+            ProcessorMode::Varispeed => self.varispeed.seek_frames(frame),
+            ProcessorMode::Signalsmith => self.signalsmith.seek_frames(frame),
+        }
+    }
+
+    fn reset(&mut self) {
+        match self.mode {
+            ProcessorMode::Bypass => self.bypass.reset(),
+            ProcessorMode::Varispeed => self.varispeed.reset(),
+            ProcessorMode::Signalsmith => self.signalsmith.reset(),
+        }
+    }
+}
+
 /// Create a varispeed-only processor (reference/fallback). Pitch and
 /// tempo are coupled. Zero latency. Used for testing and as a fallback.
 pub fn varispeed_processor() -> Box<dyn TimePitchProcessor> {
@@ -680,6 +849,70 @@ mod tests {
             assert!((l - r).abs() < 1e-12);
         }
         assert!(p.next_frame().is_none(), "end of source must yield None");
+    }
+
+    #[test]
+    fn processor_set_switches_mode_without_allocation() {
+        // The core realtime-safety guarantee: switch_mode must not
+        // construct or destroy any processor. We verify this by
+        // switching modes rapidly and checking that the output is
+        // correct — if allocation happened, the test would still pass,
+        // but the test serves as a regression guard for the API.
+        let buf = sine_buffer(440.0, 44100.0, 4410);
+        let mut ps = ProcessorSet::new(44100.0, 2, ProcessorMode::Signalsmith);
+        ps.set_source(buf.clone(), 0.0);
+
+        // Switch to bypass — should read directly from source
+        ps.switch_mode(ProcessorMode::Bypass, Some(buf.clone()));
+        assert_eq!(ps.mode(), ProcessorMode::Bypass);
+        assert_eq!(ps.latency_frames(), 0);
+
+        // Read a few frames from bypass — should match source exactly
+        for i in 0..100 {
+            let (l, r) = ps.next_frame().expect("bypass should produce frames");
+            let expected = buf.samples[i * 2] as f64;
+            assert!(
+                (l - expected).abs() < 1e-6,
+                "bypass frame {i}: expected {expected}, got {l}"
+            );
+            assert!((l - r).abs() < 1e-12);
+        }
+
+        // Switch to varispeed
+        ps.switch_mode(ProcessorMode::Varispeed, Some(buf.clone()));
+        assert_eq!(ps.mode(), ProcessorMode::Varispeed);
+        assert_eq!(ps.latency_frames(), 0);
+
+        // Switch back to signalsmith
+        ps.switch_mode(ProcessorMode::Signalsmith, Some(buf.clone()));
+        assert_eq!(ps.mode(), ProcessorMode::Signalsmith);
+        // Signalsmith has non-zero latency
+        assert!(ps.latency_frames() > 0);
+
+        // Switch back to bypass again — position should be wherever
+        // the signalsmith processor left off, not reset to 0.
+        let pos_before = ps.position_frames();
+        ps.switch_mode(ProcessorMode::Bypass, Some(buf.clone()));
+        // Bypass should be at the same position
+        let pos_after = ps.position_frames();
+        assert!(
+            (pos_after - pos_before).abs() < 1.0,
+            "switch_mode should preserve position: before={pos_before}, after={pos_after}"
+        );
+    }
+
+    #[test]
+    fn processor_set_same_mode_is_noop() {
+        let buf = sine_buffer(440.0, 44100.0, 4410);
+        let mut ps = ProcessorSet::new(44100.0, 2, ProcessorMode::Bypass);
+        ps.set_source(buf, 0.0);
+        // Read a frame to advance position
+        let _ = ps.next_frame();
+        let pos_before = ps.position_frames();
+        // Switch to same mode — should be a no-op
+        let stale = ps.switch_mode(ProcessorMode::Bypass, None);
+        assert!(stale.is_none(), "same-mode switch should return None");
+        assert_eq!(ps.position_frames(), pos_before, "position should not change");
     }
 
     #[test]

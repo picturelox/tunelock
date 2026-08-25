@@ -481,6 +481,23 @@ export async function audioEngineSyncLaunch(playerA: number, playerB: number): P
   return invoke('audio_engine_sync_launch', { playerA, playerB });
 }
 
+export async function audioEngineSetListeningCondition(
+  player: number,
+  processorType: 'bypass' | 'varispeed' | 'signalsmith',
+  tempoRate: number,
+  pitchSemitones: number,
+): Promise<void> {
+  return invoke('audio_engine_set_listening_condition', { player, processorType, tempoRate, pitchSemitones });
+}
+
+export async function audioEngineLoadPlayerPaused(player: number, filePath: string): Promise<void> {
+  return invoke('audio_engine_load_player_paused', { player, filePath });
+}
+
+export async function getGitRevision(): Promise<string> {
+  return invoke('get_git_revision');
+}
+
 export async function audioEngineSetPlayerGain(player: number, gain: number): Promise<void> {
   return invoke('audio_engine_set_player_gain', { player, gain });
 }

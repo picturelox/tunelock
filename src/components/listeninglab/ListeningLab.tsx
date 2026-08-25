@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
 import {
   audioEngineInit,
-  audioEngineLoadPlayer,
+  audioEngineLoadPlayerPaused,
   audioEnginePlay,
   audioEnginePause,
   audioEngineStop,
@@ -13,11 +13,13 @@ import {
   audioEngineSetBus,
   audioEngineSetMasterGain,
   audioEngineSetProcessorType,
+  audioEngineSetListeningCondition,
   audioEngineSyncLaunch,
   audioEngineGetMeters,
   listeningLabGetProcessorInfo,
   listeningLabSaveResult,
   listeningLabGetResults,
+  getGitRevision,
   type AudioMeterReadout,
   type ListeningLabProcessorInfo,
   type ListeningLabResult,
@@ -26,7 +28,7 @@ import {
 type ProcessorMode = 'original' | 'signalsmith';
 type TestMode = 'quality' | 'transport' | 'twodeck' | 'abx';
 
-// App version for tracking which DSP revision produced each result.
+// Fallback version if git SHA is not available.
 const APP_VERSION = '0.1.0-pb2-listening-lab';
 
 const TEMPO_PRESETS = [-10, -6, -2, 0, 2, 6, 10];
@@ -63,6 +65,8 @@ export default function ListeningLab() {
   const [abxTrials, setAbxTrials] = useState(0);
   const [abxLastAnswer, setAbxLastAnswer] = useState<string>('');
   const [gitRevision, setGitRevision] = useState<string>('');
+  // ABX cue position (in seconds). Each trial restarts from this position.
+  const [abxCueSec, setAbxCueSec] = useState(0);
 
   // Ratings
   const [transients, setTransients] = useState(0);
@@ -98,9 +102,8 @@ export default function ListeningLab() {
   useEffect(() => {
     initEngine();
     listeningLabGetResults().then(setSavedResults).catch(() => {});
-    // Get git revision for saving with results
-    // Use the Tauri app version as a fallback
-    setGitRevision(APP_VERSION);
+    // Fetch the actual git SHA for saving with results
+    getGitRevision().then(setGitRevision).catch(() => setGitRevision(APP_VERSION));
     return () => {
       if (meterRef.current) cancelAnimationFrame(meterRef.current);
     };
@@ -134,7 +137,7 @@ export default function ListeningLab() {
     });
     if (!selected || typeof selected !== 'string') return;
     try {
-      await audioEngineLoadPlayer(deck, selected);
+      await audioEngineLoadPlayerPaused(deck, selected);
       const name = selected.split(/[\\/]/).pop() || selected;
       if (deck === 0) {
         setFilePath(selected);
@@ -193,28 +196,36 @@ export default function ListeningLab() {
   };
 
   // ABX: randomly switch between original (tempo=0, pitch=0) and processed
-  // ABX: actually route X to bypass (A) or signalsmith (B) based on abxIsB.
-  // The processor switch happens via audioEngineSetProcessorType.
-  const abxApplyProcessor = (isB: boolean) => {
+  // ABX: each trial restarts from the cue position with the selected
+  // processor applied atomically (processor + tempo + pitch in one
+  // command). No hot-swapping mid-playback — the switch itself would
+  // reveal which processor was selected.
+  const abxStartTrial = (isB: boolean) => {
+    // Pause first
+    audioEnginePause(0);
+    // Seek to cue position (convert seconds to beats using default 120 BPM)
+    const cueBeat = (abxCueSec * 120) / 60;
+    audioEngineSeek(0, cueBeat);
+    // Apply condition atomically: processor + tempo + pitch in one command
     if (isB) {
-      // B = Signalsmith with current tempo/pitch settings
-      audioEngineSetProcessorType(0, 'signalsmith');
-      audioEngineSetTempo(0, 1 + tempo / 100);
-      audioEngineSetPitch(0, pitch);
+      // B = Signalsmith with current tempo/pitch
+      audioEngineSetListeningCondition(0, 'signalsmith', 1 + tempo / 100, pitch);
     } else {
-      // A = bypass (true original, no processing)
-      audioEngineSetProcessorType(0, 'bypass');
+      // A = bypass (true original)
+      audioEngineSetListeningCondition(0, 'bypass', 1.0, 0);
     }
+    // Start playback from the cue
+    audioEnginePlay(0);
   };
 
   const abxStart = () => {
     setAbxHidden(true);
     const initialIsB = Math.random() < 0.5;
     setAbxIsB(initialIsB);
-    abxApplyProcessor(initialIsB);
     setAbxCorrect(0);
     setAbxTrials(0);
     setAbxLastAnswer('');
+    abxStartTrial(initialIsB);
   };
 
   const abxReveal = (guess: 'a' | 'b') => {
@@ -225,16 +236,16 @@ export default function ListeningLab() {
     setAbxCorrect(newCorrect);
     setAbxTrials(newTrials);
     setAbxLastAnswer(correct ? 'Correct!' : 'Wrong.');
-    // Next trial: randomly switch processor
+    // Next trial: randomly select, restart from cue
     const nextIsB = Math.random() < 0.5;
     setAbxIsB(nextIsB);
-    abxApplyProcessor(nextIsB);
+    abxStartTrial(nextIsB);
   };
 
   const abxStop = () => {
     setAbxHidden(false);
-    // Restore signalsmith processor
-    audioEngineSetProcessorType(0, 'signalsmith');
+    // Restore signalsmith processor at unity
+    audioEngineSetListeningCondition(0, 'signalsmith', 1 + tempo / 100, pitch);
   };
 
   const handleSave = async () => {
@@ -477,9 +488,24 @@ export default function ListeningLab() {
           {!abxHidden ? (
             <>
               <p className="text-sm text-label-dim mb-3">
-                Blind A/B/X test. X is randomly the original or Signalsmith-processed playback.
-                Listen and guess which one it is.
+                Blind A/B/X test. Each trial restarts from the cue position with
+                the processor applied atomically. No hot-swapping — the switch
+                itself won't reveal the answer.
               </p>
+              <div className="mb-3">
+                <label className="text-xs text-label-dim block mb-1">
+                  CUE POSITION (seconds): {abxCueSec.toFixed(1)}
+                </label>
+                <input
+                  type="range"
+                  min={0}
+                  max={300}
+                  step={0.5}
+                  value={abxCueSec}
+                  onChange={(e) => setAbxCueSec(parseFloat(e.target.value))}
+                  className="w-full"
+                />
+              </div>
               <button onClick={abxStart} className="px-4 py-2 bg-cap-amber text-black rounded text-sm font-medium">
                 Start ABX Test
               </button>

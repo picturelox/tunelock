@@ -220,12 +220,23 @@ pub enum EngineCommand {
     Shutdown,
     /// Set the processor type for a player. Used by the Listening Lab to
     /// switch between bypass (true reference), varispeed, and signalsmith.
-    /// The callback creates the new processor — this is a user-initiated
-    /// mode switch, not per-block allocation.
+    /// All three processors are preconstructed — no allocation in the
+    /// callback. This only changes the mode enum and re-attaches source.
     SetProcessorType {
         player: PlayerId,
         at_frame: u64,
         processor_type: ProcessorType,
+    },
+    /// Atomic listening condition: set processor mode, tempo, and pitch
+    /// in a single command. Used by the Listening Lab's ABX mode so all
+    /// three parameters change deterministically at the same frame,
+    /// with no IPC ordering ambiguity.
+    SetListeningCondition {
+        player: PlayerId,
+        at_frame: u64,
+        processor_type: ProcessorType,
+        tempo_rate: f32,
+        pitch_semitones: f32,
     },
 }
 
