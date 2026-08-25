@@ -443,27 +443,29 @@ on electronic music.
 
 ## FMAK frozen-model benchmark (2026-08-26)
 
-The FMAK corpus (5,487 tracks after quarantine, 4,939 development) provides
-broader genre coverage than GiantSteps (which is EDM-only). All models were
-trained on GiantSteps only — this is a zero-shot evaluation on a held-out
-corpus with different genre distribution.
+The FMAK corpus (5,487 tracks after quarantine, 4,939 development, 548
+holdout) provides broader genre coverage than GiantSteps (which is EDM-only).
+All frozen models were trained on GiantSteps/MTG only — this is a zero-shot
+evaluation on a held-out corpus with different genre distribution.
 
-### Per-model results
+### Per-model results (frozen, 5 models)
 
 | Model | n | Exact % | MIREX | Top-3 | Top-5 | ECE |
 |---|---|---|---|---|---|---|
 | Classical | 4,928 | 57.1% | 0.698 | 81.5% | 88.5% | 0.487 |
 | Myna v6 base (no TTA) | 4,919 | 61.4% | 0.736 | 84.5% | 90.3% | 0.269 |
+| Temporal ranker | 4,913 | 62.9% | 0.746 | 86.7% | 91.7% | 0.073 |
 | Myna v8 compact | 4,919 | 65.0% | 0.758 | 87.1% | 91.7% | 0.221 |
 | S-KEY raw baseline | 4,919 | 65.5% | 0.758 | 84.9% | 90.7% | 0.046 |
 
-### Oracle ceilings
+### Oracle ceilings (frozen, 5 models)
 
 | Combination | Oracle exact |
 |---|---|
-| 2-model (v8 + S-KEY) | 74.2% |
-| 3-model (+ classical) | 77.1% |
-| 4-model (all) | 78.6% |
+| 2-model (S-KEY + temporal) | 75.0% |
+| 3-model (+ Myna v8) | 78.1% |
+| 4-model (+ classical) | 79.7% |
+| 5-model (all) | 79.9% |
 
 ### Classical engine by genre (FMAK)
 
@@ -478,20 +480,171 @@ corpus with different genre distribution.
 | jazz | 29 | 44.8% | 0.593 |
 | classical | 51 | 39.2% | 0.606 |
 
-### Key findings
+### Frozen benchmark key findings
 
 1. **GiantSteps inflates accuracy estimates.** The classical engine drops
    from 64.4% (GiantSteps, EDM-only) to 57.1% (FMAK, broad genres).
-2. **S-KEY has the best calibration** (ECE 0.046) but lower top-3 than v8
-   compact. S-KEY's posteriors are well-calibrated but less peaked.
+2. **S-KEY has the best calibration** (ECE 0.046) among frozen models.
 3. **Classical adds the most diversity.** It has 65% agreement with neural
    models (vs 77% between v6 and v8) and contributes 353 uniquely correct
    tracks vs S-KEY.
 4. **The S-KEY harmonic head trained on 266 GiantSteps tracks degraded to
-   0.3%** on FMAK. The raw S-KEY baseline (65.5%) is used instead. The
-   harmonic head overfit to the small GiantSteps validation set.
-5. **The 4-model oracle ceiling of 78.6%** matches the prior GiantSteps
-   oracle, suggesting the diversity ceiling is similar across corpora.
+   0.3%** on FMAK. The raw S-KEY baseline (65.5%) is used instead.
+5. **The 5-model oracle ceiling of 79.9%** justifies selector work — the
+   gap between best single model (65.5%) and oracle is 14.4pp.
+
+## FMAK selector results (2026-08-26)
+
+Two selector architectures were trained on FMAK development folds using
+nested artist/recording-disjoint OOF evaluation.
+
+| Selector | Models | OOF exact | OOF MIREX |
+|---|---|---|---|
+| Logistic (multinomial) | 5 frozen | 68.8% | 0.785 |
+| GBM (per-candidate) | 5 frozen | **69.8%** | 0.790 |
+| GBM (per-candidate) | 4 (cls+S-KEY+v8+fmak_wide) | 69.2% | 0.786 |
+| Global weight stacking | 7 (3 frozen + 4 FMAK) | 69.7% | 0.792 |
+| Temp-weighted stacking | 7 (3 frozen + 4 FMAK) | 69.4% | 0.789 |
+| LogReg stacking | 7 (3 frozen + 4 FMAK) | 67.9% | 0.778 |
+
+**Best selector: GBM per-candidate with 5 frozen models — 69.8% OOF.**
+
+The selector captures 4.3pp of the 14.4pp oracle gap (30%). The remaining
+gap is due to model correlation — all Myna-based models share the same
+backbone embeddings and make similar errors. The selector cannot resolve
+cases where all models agree incorrectly.
+
+## Controlled acoustic retraining experiment (2026-08-26)
+
+**Question:** Is key-model performance data-limited or architecture-limited?
+
+Trained the same Myna MLP head architecture (384→2048→24, dropout=0.75)
+on three different training sets, evaluated on FMAK development (OOF where
+applicable, cross-corpus for MTG-only).
+
+| Experiment | n_train | Exact % | MIREX | ECE |
+|---|---|---|---|---|
+| MTG-only (cross-corpus) | 1,349 | 54.8% | 0.686 | 0.116 |
+| FMAK-only (OOF) | 3,935 | **67.6%** | 0.778 | 0.086 |
+| MTG+FMAK (OOF) | 5,284 | **68.1%** | 0.782 | 0.074 |
+
+**Verdict: The model is data-limited, not architecture-limited.**
+
+1. FMAK-only gives **+12.8pp** over MTG-only (54.8% → 67.6%).
+2. Adding MTG to FMAK gives only **+0.5pp** (67.6% → 68.1%).
+3. FMAK training dramatically improves calibration (ECE 0.116 → 0.086).
+4. The same architecture that gets 55% on 1,349 tracks gets 68% on 3,935
+   tracks — the bottleneck is training data quantity and diversity, not
+   model capacity.
+
+## FMAK-trained diverse ensemble (2026-08-26)
+
+Four diverse FMAK-trained Myna heads with different hyperparameters:
+
+| Model | Architecture | Exact % | MIREX | ECE |
+|---|---|---|---|---|
+| fmak_wide | [2048], dropout=0.75 | 65.9% | 0.766 | 0.073 |
+| fmak_deep | [1024,1024], dropout=0.5 | 65.9% | 0.767 | **0.023** |
+| fmak_wider | [2048,1024], dropout=0.85 | 65.4% | 0.764 | 0.087 |
+| fmak_lean | [512], dropout=0.3 | **66.2%** | 0.769 | 0.074 |
+
+All FMAK models cluster around 66% — the architecture variations don't
+produce meaningful diversity because they share the same Myna embeddings.
+The fmak_deep model achieves near-perfect calibration (ECE 0.023).
+
+## Confidence calibration study (2026-08-26)
+
+### Per-model calibration (FMAK development, 4,908 common tracks)
+
+| Model | Exact | ECE | conf≥0.5 acc/cov | conf≥0.7 acc/cov | conf≥0.9 acc/cov |
+|---|---|---|---|---|---|
+| Classical | 57.2% | 0.488 | N/A (flat) | N/A | N/A |
+| S-KEY | 65.5% | 0.046 | 76.8% / 68.6% | 82.6% / 46.0% | 90.1% / 7.6% |
+| Myna v8 | 65.1% | 0.221 | 88.1% / 32.0% | 93.2% / 6.0% | 100% / 0.0% |
+| fmak_wide | 65.9% | 0.073 | 79.4% / 61.5% | 87.7% / 35.0% | 94.9% / 10.0% |
+| fmak_deep | 66.0% | 0.023 | 76.5% / 71.0% | 85.1% / 46.4% | 91.7% / 17.9% |
+| fmak_lean | 66.2% | 0.074 | 79.6% / 61.1% | 87.4% / 34.9% | 93.7% / 10.7% |
+
+### Model agreement as confidence signal (7 models)
+
+| Agreement threshold | Coverage | Accuracy |
+|---|---|---|
+| 100% (all agree) | 47.9% | **84.7%** |
+| ≥80% | 67.9% | **81.0%** |
+| ≥60% | 80.9% | **75.8%** |
+| ≥40% | 98.9% | 68.5% |
+| Majority vote (all) | 100.0% | 68.0% |
+
+**Key finding:** Model agreement is a strong, well-calibrated confidence
+signal. When ≥60% of models agree (80.9% of tracks), accuracy is 75.8% —
+above the 75% target. When all models agree (47.9% of tracks), accuracy
+is 84.7%.
+
+### Calibration by error type (fmak_deep, best-calibrated model)
+
+| Error type | n | Avg confidence |
+|---|---|---|
+| Correct | 3,238 | 0.722 |
+| Fifth | 505 | 0.529 |
+| Relative | 384 | 0.571 |
+| Parallel | 166 | 0.530 |
+| Semitone | 73 | 0.515 |
+| Other | 542 | 0.464 |
+
+Correct predictions have significantly higher confidence (0.722) than any
+error type. The model "knows when it knows" — confidence correlates with
+correctness.
+
+## Core Intelligence v1 freeze (2026-08-26)
+
+### Architecture
+
+1. **Classical engine** renders first (57.1% exact, no model load, <1s).
+2. **Neural opinions** load asynchronously:
+   - S-KEY raw (65.5%, ECE 0.046, best calibrated frozen model)
+   - Myna v8 compact (65.0%, ECE 0.221, best top-3 frozen model)
+   - FMAK-trained Myna (66.2%, ECE 0.074, best single model)
+3. **GBM selector** combines all opinions (69.8% OOF exact).
+4. **Confidence tiers** based on model agreement:
+   - **High confidence** (all models agree, ~48% of tracks): 84.7% accuracy
+   - **Medium confidence** (≥60% agree, ~81% of tracks): 75.8% accuracy
+   - **Low confidence** (models disagree, ~19% of tracks): selector fallback
+
+### Honest accuracy claims
+
+- **Overall OOF accuracy: 69.8%** (GBM selector, 5 frozen models, FMAK development)
+- **High-confidence subset: 84.7%** (all models agree, 48% coverage)
+- **Medium-confidence subset: 75.8%** (≥60% agreement, 81% coverage)
+- **Oracle ceiling: 79.9%** (5 frozen models) / 82.0% (7 models with FMAK ensemble)
+- **Selector captures 30% of oracle gap** — limited by model correlation
+
+### What would close the gap to 75% overall
+
+The selector at 69.8% is 5.2pp below the 75% target. The oracle ceiling
+is 82.0%, so the information exists but the selector cannot extract it
+because all Myna-based models share the same backbone embeddings and make
+correlated errors. Closing the gap requires:
+
+1. **A fundamentally different feature representation** (not Myna embeddings)
+2. **More diverse model families** (e.g., CNN on spectrograms, transformer
+   on MIDI, or a different audio encoder)
+3. **Larger training corpora** (the retraining experiment shows +12.8pp
+   from 4x more data, suggesting more data would continue to help)
+
+### Why we freeze now
+
+The science phase has answered its key questions:
+- Is performance data-limited or architecture-limited? **Data-limited.**
+- Does FMAK training help? **Yes, +12.8pp over MTG-only.**
+- Can a selector close the oracle gap? **Partially — 30% of the gap.**
+- Is model agreement a useful confidence signal? **Yes — 84.7% at full
+  agreement, 75.8% at ≥60% agreement.**
+- What is the honest accuracy claim? **69.8% overall, 75.8% at medium
+  confidence, 84.7% at high confidence.**
+
+Further key-model research has diminishing returns without new model
+families. The MVP should ship with the current Core Intelligence and
+focus on the Transition Workbench, DSP, and user experience.
 
 ## CNN experiment status: INVALID, deferred
 
