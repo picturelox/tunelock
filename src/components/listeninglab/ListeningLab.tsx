@@ -650,29 +650,51 @@ export default function ListeningLab() {
                     Δ = {loudnessComp.deltaLu !== null ? `${loudnessComp.deltaLu.toFixed(1)} LU` : '—'}
                   </div>
                   <div className="text-xs text-label-dim">
-                    Match gain: {loudnessComp.matchGain !== null ? `${loudnessComp.matchGain.toFixed(3)}` : '—'}
+                    Match: {loudnessComp.matchGainDb !== null ? `${loudnessComp.matchGainDb >= 0 ? '+' : ''}${loudnessComp.matchGainDb.toFixed(1)} dB` : '—'}
                   </div>
+                  {loudnessComp.predictedTruePeakB !== null && (
+                    <div className="text-xs text-label-dim">
+                      Pred TP: {loudnessComp.predictedTruePeakB.toFixed(1)} dBTP
+                    </div>
+                  )}
                 </div>
               </div>
+              {/* PB-6.1.1: Headroom warning */}
+              {loudnessComp.headroomStatus === 'warning' && (
+                <div className="mb-3 p-2 bg-amber-900/40 border border-amber-600/50 rounded text-xs text-amber-300">
+                  ⚠ Insufficient headroom. Predicted true peak of B after match exceeds 0 dBTP.
+                  The safety limiter (PB-6.3) is not yet active — clipping may occur.
+                  Consider reducing master gain or match manually.
+                </div>
+              )}
+              {loudnessComp.headroomStatus === 'excessive' && (
+                <div className="mb-3 p-2 bg-red-900/40 border border-red-600/50 rounded text-xs text-red-300">
+                  ⚠ Excessive match gain ({loudnessComp.matchGainDb?.toFixed(1)} dB).
+                  This is likely too large for normal mastered music.
+                  Verify both tracks have correct LUFS values before applying.
+                </div>
+              )}
               <div className="flex items-center gap-3">
                 <button
                   onClick={toggleMatchLevel}
-                  disabled={loudnessComp.matchGain === null}
+                  disabled={loudnessComp.matchGain === null || loudnessComp.headroomStatus === 'excessive'}
                   className={`px-4 py-2 rounded text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed ${
                     matchLevelOn
                       ? 'bg-cap-amber text-black'
                       : 'bg-plate-lighter text-label-cream'
                   }`}
-                  title="Level-match Deck B to Deck A using stored Integrated LUFS. User trim is preserved separately."
+                  title="Level-match Deck B to Deck A using stored Integrated LUFS. User trim is preserved separately. Ramped over 15ms to avoid clicks."
                 >
                   {matchLevelOn ? 'Match Level: ON' : 'Match B → A'}
                 </button>
                 <span className="text-xs text-label-dim">
                   {loudnessComp.matchGain === null
                     ? 'Both tracks need Integrated LUFS to compute match.'
-                    : matchLevelOn
-                      ? `B gain ×${loudnessComp.matchGain.toFixed(3)} (${loudnessComp.deltaLu! >= 0 ? '+' : ''}${loudnessComp.deltaLu!.toFixed(1)} dB)`
-                      : 'Reversible. User trim is not modified.'}
+                    : loudnessComp.headroomStatus === 'excessive'
+                      ? 'Gain excessive — not auto-applied. Check LUFS values.'
+                      : matchLevelOn
+                        ? `B gain ×${loudnessComp.matchGain.toFixed(3)} (${loudnessComp.matchGainDb! >= 0 ? '+' : ''}${loudnessComp.matchGainDb!.toFixed(1)} dB)`
+                        : 'Reversible. Ramped 15ms. User trim is not modified.'}
                 </span>
               </div>
             </div>

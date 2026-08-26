@@ -1956,7 +1956,7 @@ pub async fn audio_engine_compute_loudness_match(
     track_id_a: i64,
     track_id_b: i64,
 ) -> Result<LoudnessMatchResult, String> {
-    let (lufs_a, lufs_b) = {
+    let (lufs_a, lufs_b, true_peak_b) = {
         let db = state.db.lock().await;
         let a = db.get_loudness(track_id_a)
             .map_err(|e| e.to_string())?
@@ -1967,18 +1967,33 @@ pub async fn audio_engine_compute_loudness_match(
         (
             a.integrated_lufs.ok_or("Track A has no Integrated LUFS (too quiet)")?,
             b.integrated_lufs.ok_or("Track B has no Integrated LUFS (too quiet)")?,
+            Some(b.true_peak_dbtp),
         )
     };
     // To match B to A: B needs gain = 10^((LUFS_A - LUFS_B) / 20)
-    // If B is quieter (lower LUFS), gain > 1 (boost B).
-    // If B is louder (higher LUFS), gain < 1 (attenuate B).
     let delta_lu = lufs_a - lufs_b;
     let gain = 10f64.powf(delta_lu / 20.0);
+    let gain_db = 20.0 * gain.log10();
+
+    // Predicted true peak of B after match gain
+    let predicted_true_peak = true_peak_b.map(|tp| tp + gain_db);
+
+    // Headroom status: warn if predicted TP approaches or exceeds 0 dBTP
+    let headroom_status = match predicted_true_peak {
+        Some(tp) if tp > 6.0 => "excessive".to_string(),
+        Some(tp) if tp > 0.0 => "warning".to_string(),
+        _ => "ok".to_string(),
+    };
+
     Ok(LoudnessMatchResult {
         lufs_a,
         lufs_b,
         delta_lu,
         gain,
+        gain_db,
+        true_peak_b,
+        predicted_true_peak,
+        headroom_status,
     })
 }
 
@@ -1991,6 +2006,16 @@ pub struct LoudnessMatchResult {
     pub delta_lu: f64,
     /// Linear gain to apply to B to match A's loudness.
     pub gain: f64,
+    /// Match gain in dB (20 * log10(gain)).
+    pub gain_db: f64,
+    /// True peak of track B in dBTP (if available).
+    pub true_peak_b: Option<f64>,
+    /// Predicted true peak of B after match gain (dBTP).
+    /// = true_peak_b + gain_db. If this exceeds 0 dBTP, headroom is
+    /// insufficient and the user should be warned.
+    pub predicted_true_peak: Option<f64>,
+    /// Headroom warning level: "ok" | "warning" | "excessive"
+    pub headroom_status: String,
 }
 
 /// PB-6.1: Get loudness comparison for two file paths (used by Listening Lab).
@@ -2004,10 +2029,17 @@ pub struct LoudnessComparison {
     pub true_peak_b: Option<f64>,
     pub sample_peak_a: Option<f64>,
     pub sample_peak_b: Option<f64>,
-    /// Match gain for B→A, if both tracks have Integrated LUFS.
+    /// Match gain for B→A (linear), if both tracks have Integrated LUFS
+    /// and the gain is within sane bounds.
     pub match_gain: Option<f64>,
+    /// Match gain in dB.
+    pub match_gain_db: Option<f64>,
     /// LUFS difference (A - B), if both have Integrated LUFS.
     pub delta_lu: Option<f64>,
+    /// Predicted true peak of B after match gain (dBTP).
+    pub predicted_true_peak_b: Option<f64>,
+    /// Headroom status: "ok" | "warning" | "excessive"
+    pub headroom_status: String,
 }
 
 /// PB-6.1: Get loudness comparison for two file paths.
@@ -2036,13 +2068,35 @@ pub async fn get_loudness_comparison(
     let sample_peak_a = loud_a.as_ref().map(|l| l.sample_peak_dbfs);
     let sample_peak_b = loud_b.as_ref().map(|l| l.sample_peak_dbfs);
 
-    let (match_gain, delta_lu) = if let (Some(a), Some(b)) = (lufs_a, lufs_b) {
-        let delta = a - b;
-        let gain = 10f64.powf(delta / 20.0);
-        (Some(gain), Some(delta))
-    } else {
-        (None, None)
-    };
+    let (match_gain, match_gain_db, delta_lu, predicted_true_peak_b, headroom_status) =
+        if let (Some(a), Some(b)) = (lufs_a, lufs_b) {
+            let delta = a - b;
+            let gain_db = delta; // dB = LU since LUFS is logarithmic
+            let gain = 10f64.powf(gain_db / 20.0);
+
+            // PB-6.1.1: Bounds checking.
+            // ±6 dB: normal (auto-apply allowed)
+            // ±6-12 dB: warning (user should be informed)
+            // >12 dB: excessive (don't auto-apply; user must explicitly accept)
+            // We still compute the gain, but the UI uses headroom_status
+            // to decide whether to auto-apply or require confirmation.
+            let predicted_tp = true_peak_b.map(|tp| tp + gain_db);
+
+            let status = {
+                let abs_db = gain_db.abs();
+                if abs_db > 12.0 {
+                    "excessive".to_string()
+                } else if abs_db > 6.0 || predicted_tp.map(|tp| tp > 0.0).unwrap_or(false) {
+                    "warning".to_string()
+                } else {
+                    "ok".to_string()
+                }
+            };
+
+            (Some(gain), Some(gain_db), Some(delta), predicted_tp, status)
+        } else {
+            (None, None, None, None, "ok".to_string())
+        };
 
     Ok(LoudnessComparison {
         lufs_a,
@@ -2052,7 +2106,10 @@ pub async fn get_loudness_comparison(
         sample_peak_a,
         sample_peak_b,
         match_gain,
+        match_gain_db,
         delta_lu,
+        predicted_true_peak_b,
+        headroom_status,
     })
 }
 

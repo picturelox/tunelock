@@ -106,11 +106,12 @@ pub struct Player {
 
     // Gains
     gain: RampedGain,
-    /// PB-6.1: Loudness match gain (linear, separate from user gain).
+    /// PB-6.1: Loudness match gain (ramped, separate from user gain).
     /// Computed from stored LUFS values to level-match this player to
     /// another. Total gain = user_gain * loudness_match_gain.
     /// Default 1.0 (no match). Toggled off restores exact previous gain.
-    loudness_match_gain: f64,
+    /// Ramped over ~15ms to avoid discontinuity clicks when toggled.
+    loudness_match_gain: RampedGain,
 
     // Pan (-1.0 to 1.0)
     pan: f64,
@@ -175,7 +176,7 @@ impl Player {
             bus: if id.0 == 0 { BusId::A } else { BusId::B },
             eq: DjIsolator::new(sample_rate),
             gain: RampedGain::new(sample_rate),
-            loudness_match_gain: 1.0,
+            loudness_match_gain: RampedGain::new(sample_rate),
             pan: 0.0,
             loop_region: None,
             bpm: 120.0,
@@ -355,16 +356,23 @@ impl Player {
 
     /// PB-6.1: Set the loudness match gain (linear). This is separate
     /// from the user gain/trim. Setting to 1.0 disables match level.
-    /// The match gain is applied immediately (not ramped) because it
-    /// changes only when the user toggles Match Level, and a ramp
-    /// would delay the level change unnecessarily.
+    /// The gain is ramped over ~15ms to avoid discontinuity clicks
+    /// when Match Level is toggled during playback.
+    /// Rejects NaN, infinite, or non-positive values.
     pub fn set_loudness_match_gain(&mut self, gain: f64) {
-        self.loudness_match_gain = gain;
+        if !gain.is_finite() || gain <= 0.0 {
+            // Reject invalid gain — leave current value unchanged.
+            return;
+        }
+        self.loudness_match_gain.set_target(gain);
+        // 15ms ramp — enough to avoid clicks, short enough to feel instant
+        let ramp_frames = (0.015 * self.sample_rate) as u32;
+        self.loudness_match_gain.set_ramp(self.sample_rate, ramp_frames);
     }
 
-    /// PB-6.1: Get the current loudness match gain (linear).
+    /// PB-6.1: Get the current loudness match gain target (linear).
     pub fn loudness_match_gain(&self) -> f64 {
-        self.loudness_match_gain
+        self.loudness_match_gain.target
     }
 
     pub fn set_pan(&mut self, pan: f32) {
@@ -539,8 +547,8 @@ impl Player {
         // Apply per-player EQ
         let (eq_l, eq_r) = self.eq.process(src_l, src_r);
 
-        // Apply gain (ramped user gain × loudness match gain)
-        let g = self.gain.tick() * self.loudness_match_gain;
+        // Apply gain (ramped user gain × ramped loudness match gain)
+        let g = self.gain.tick() * self.loudness_match_gain.tick();
 
         // Apply pan (constant power)
         let (pan_l, pan_r) = if self.pan == 0.0 {
@@ -588,7 +596,7 @@ mod tests {
         assert!((p.loudness_match_gain() - 1.0).abs() < 1e-9);
     }
 
-    /// PB-6.1: Setting loudness match gain changes it.
+    /// PB-6.1: Setting loudness match gain changes the target.
     #[test]
     fn set_loudness_match_gain_changes_value() {
         let mut p = make_player();
@@ -596,6 +604,21 @@ mod tests {
         assert!((p.loudness_match_gain() - 1.5).abs() < 1e-9);
         p.set_loudness_match_gain(0.7);
         assert!((p.loudness_match_gain() - 0.7).abs() < 1e-9);
+    }
+
+    /// PB-6.1.1: Invalid gains (NaN, inf, non-positive) are rejected.
+    #[test]
+    fn invalid_match_gains_are_rejected() {
+        let mut p = make_player();
+        p.set_loudness_match_gain(1.5);
+        p.set_loudness_match_gain(f64::NAN);
+        assert!((p.loudness_match_gain() - 1.5).abs() < 1e-9, "NaN should not change gain");
+        p.set_loudness_match_gain(f64::INFINITY);
+        assert!((p.loudness_match_gain() - 1.5).abs() < 1e-9, "inf should not change gain");
+        p.set_loudness_match_gain(0.0);
+        assert!((p.loudness_match_gain() - 1.5).abs() < 1e-9, "zero should not change gain");
+        p.set_loudness_match_gain(-1.0);
+        assert!((p.loudness_match_gain() - 1.5).abs() < 1e-9, "negative should not change gain");
     }
 
     /// PB-6.1: Toggling match off (gain=1.0) restores exact previous
@@ -610,14 +633,12 @@ mod tests {
         // Toggle off
         p.set_loudness_match_gain(1.0);
         // User gain should be unchanged
-        // (gain.target is still 0.8 — we read it indirectly via the ramp)
-        // After ramp completes (1 frame), gain.tick() returns target.
         p.gain.set_ramp(48000.0, 1);
         let g = p.gain.tick();
         assert!((g - 0.8).abs() < 1e-5, "user gain should be 0.8, got {}", g);
     }
 
-    /// PB-6.1: The total gain is user_gain * loudness_match_gain.
+    /// PB-6.1: The total gain target is user_gain * loudness_match_gain.
     /// This is the core invariant: match level and user trim are
     /// independent and multiplicative.
     #[test]
@@ -629,6 +650,37 @@ mod tests {
         let user_g = p.gain.tick();
         let total = user_g * p.loudness_match_gain();
         assert!((total - 1.0).abs() < 1e-9, "total should be 1.0, got {}", total);
+    }
+
+    /// PB-6.1.1: Toggling Match Level during playback does not create
+    /// a discontinuity. The gain ramps smoothly from 1.0 to the match
+    /// target over ~15ms. This test verifies that consecutive samples
+    /// never jump by more than the ramp increment.
+    #[test]
+    fn toggling_match_during_playback_no_discontinuity() {
+        let mut p = make_player();
+        p.set_gain(1.0, 1);
+        p.gain.set_ramp(48000.0, 1);
+        // Let user gain settle
+        for _ in 0..10 { p.gain.tick(); }
+
+        // Enable match — ramp from 1.0 to 1.5 over 15ms (720 frames at 48k)
+        p.set_loudness_match_gain(1.5);
+        let mut prev_match_gain = 1.0f64;
+        for i in 0..1000 {
+            let g = p.loudness_match_gain.tick();
+            let delta = (g - prev_match_gain).abs();
+            // The per-sample change must never exceed the ramp increment.
+            // 15ms at 48kHz = 720 frames. Ramp from 1.0 to 1.5 = 0.5/720 ≈ 0.000694
+            assert!(
+                delta <= 0.001,
+                "frame {}: match gain jumped by {} (from {} to {}), expected ramp ≤ 0.001",
+                i, delta, prev_match_gain, g
+            );
+            prev_match_gain = g;
+        }
+        // After enough frames, gain should reach target
+        assert!((prev_match_gain - 1.5).abs() < 1e-3, "should reach 1.5, got {}", prev_match_gain);
     }
 
     /// PB-6.1: Match gain computation from LUFS values.

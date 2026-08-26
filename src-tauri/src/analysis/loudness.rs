@@ -1,7 +1,11 @@
 // PB-6.0: Loudness analysis foundation.
 //
-// Offline whole-track Integrated LUFS (BS.1770-4) and true peak (dBTP)
-// using the ebur128-stream crate (pure Rust, no FFI).
+// Offline whole-track Integrated LUFS and true peak (dBTP) using the
+// ebur128-stream crate (pure Rust, no FFI). The algorithm implements
+// ITU-R BS.1770, which is currently in force as BS.1770-5 (Nov 2023).
+// For ordinary stereo use, the Annex 1 loudness and Annex 2 true-peak
+// behavior used here is unchanged from BS.1770-4; the -5 revision
+// primarily addresses multi-channel layouts beyond 5.1.
 //
 // The analysis runs on a worker thread, not the realtime audio callback.
 // Results are persisted with the track's intelligence record and versioned
@@ -250,18 +254,21 @@ mod tests {
     }
 
     // ========================================================================
-    // EBU Tech 3341 (v3.0) compliance validation
+    // EBU Tech 3341 (v3.0) conformance-style validation
     //
     // These tests synthesise the stimuli described in §3 of EBU Tech 3341
     // and assert the analyzer's output matches the expected values within
     // the spec tolerance. The stimuli are generated, not vendored from the
-    // EBU sample pack (which is not redistributable). The spec describes
-    // the signals precisely enough that reproduction is unambiguous.
+    // official EBU sample pack (which is not redistributable). The spec
+    // describes the signals precisely enough that reproduction is
+    // unambiguous. This is conformance-style validation, not official
+    // compliance certification — independent verification against the
+    // official EBU test vectors is a future task.
     //
     // References:
     // - EBU Tech 3341 v3.0 (2016), §3 "Test signals for loudness meters"
-    // - ITU-R BS.1770-4, §5 (gating algorithm)
-    // - ITU-R BS.1770-4 Annex 2 (true-peak measurement)
+    // - ITU-R BS.1770-5 (2023), §5 (gating algorithm)
+    // - ITU-R BS.1770-5 Annex 2 (true-peak measurement)
     // ========================================================================
 
     const FS: u32 = 48_000;

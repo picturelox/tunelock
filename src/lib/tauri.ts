@@ -540,6 +540,10 @@ export interface LoudnessMatchResult {
   lufsB: number;
   deltaLu: number;
   gain: number;
+  gainDb: number;
+  truePeakB: number | null;
+  predictedTruePeak: number | null;
+  headroomStatus: string;
 }
 
 export async function audioEngineSetLoudnessMatchGain(player: number, gain: number): Promise<void> {
@@ -561,7 +565,10 @@ export interface LoudnessComparison {
   samplePeakA: number | null;
   samplePeakB: number | null;
   matchGain: number | null;
+  matchGainDb: number | null;
   deltaLu: number | null;
+  predictedTruePeakB: number | null;
+  headroomStatus: string;
 }
 
 export async function getLoudnessComparison(
