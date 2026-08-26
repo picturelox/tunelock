@@ -102,12 +102,10 @@ pub struct CallbackState {
     // Master metering for this block
     master_sum_sq: [f64; 2],
     master_peak: [f64; 2],
-    // PROVISIONAL: this is sample-peak, NOT true-peak. No oversampling or
-    // inter-sample reconstruction is performed. True-peak measurement arrives
-    // with the PB-6 loudness/mastering phase. Renamed to make the provisional
-    // status explicit so nobody builds UI around a measurement that is more
-    // sophisticated than the implementation.
-    master_sample_peak_provisional: [f64; 2],
+    // PB-6.2: Realtime true-peak meter (BS.1770 Annex 2, 4x oversampling).
+    // Replaces the provisional sample-peak-only meter. Tracks sample peak,
+    // true peak (dBTP), and RMS independently. Allocation-free in the callback.
+    master_meter: super::master_meter::RealtimeMasterMeter,
     master_clip: bool,
     // Bus metering for this block
     bus_block_sum_sq: [[f64; 2]; 2], // [bus_a, bus_b]
@@ -215,7 +213,7 @@ impl CallbackState {
             crossfade_ramp_increment: 1.0 / (0.005 * sample_rate),
             master_sum_sq: [0.0; 2],
             master_peak: [0.0; 2],
-            master_sample_peak_provisional: [0.0; 2],
+            master_meter: super::master_meter::RealtimeMasterMeter::new(sample_rate as u32),
             master_clip: false,
             bus_block_sum_sq: [[0.0; 2]; 2],
             bus_block_peak: [[0.0; 2]; 2],
@@ -558,7 +556,6 @@ impl CallbackState {
     fn reset_block_meters(&mut self) {
         self.master_sum_sq = [0.0; 2];
         self.master_peak = [0.0; 2];
-        self.master_sample_peak_provisional = [0.0; 2];
         self.bus_block_sum_sq = [[0.0; 2]; 2];
         self.bus_block_peak = [[0.0; 2]; 2];
         for p in &mut self.players {
@@ -613,8 +610,12 @@ impl CallbackState {
             ((self.master_sum_sq[0] + self.master_sum_sq[1]) / (2.0 * sample_count as f64)).sqrt()
         } else { 0.0 };
         let m_peak = self.master_peak[0].max(self.master_peak[1]);
-        let m_sample_peak = self.master_sample_peak_provisional[0].max(self.master_sample_peak_provisional[1]);
-        self.meter_snapshot.write_master(m_rms, m_peak, m_sample_peak, self.master_clip);
+        // PB-6.2: Finalize true-peak meter for this block.
+        // Returns (sample_peak_linear, true_peak_dbtp, rms_linear).
+        // We use the meter's sample_peak and true_peak; the engine's
+        // master_peak and master_sum_sq are kept for bus-level metering.
+        let (meter_sample_peak, meter_true_peak, _meter_rms) = self.master_meter.finalize_block();
+        self.meter_snapshot.write_master(m_rms, m_peak, meter_sample_peak, meter_true_peak, self.master_clip);
         self.meter_snapshot.write_crossfade(self.crossfade_position);
     }
 }
@@ -980,11 +981,9 @@ fn render_slice(state: &mut CallbackState, output: &mut [f32], channels: usize) 
         state.master_sum_sq[1] += mix_r * mix_r;
         if abs_l > state.master_peak[0] { state.master_peak[0] = abs_l; }
         if abs_r > state.master_peak[1] { state.master_peak[1] = abs_r; }
-        // PROVISIONAL sample-peak (same value as master_peak). True-peak
-        // requires 4x oversampling and inter-sample reconstruction — arrives
-        // with PB-6. Stored separately so the field name doesn't lie.
-        if abs_l > state.master_sample_peak_provisional[0] { state.master_sample_peak_provisional[0] = abs_l; }
-        if abs_r > state.master_sample_peak_provisional[1] { state.master_sample_peak_provisional[1] = abs_r; }
+        // PB-6.2: Feed master output to the realtime true-peak meter.
+        // The meter buffers samples and computes true peak at block end.
+        state.master_meter.process(mix_l, mix_r);
 
         // Write output — hard-clamped at the output stage only (transparent
         // below 0 dBFS; the DAC would clip anyway).

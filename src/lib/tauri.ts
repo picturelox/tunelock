@@ -443,7 +443,8 @@ export interface AudioMeterReadout {
   busBPeak: number;
   masterRms: number;
   masterPeak: number;
-  masterTruePeak: number;
+  masterSamplePeak: number;
+  masterTruePeakDbtp: number;
   masterClip: boolean;
   crossfadePosition: number;
   underruns: number;

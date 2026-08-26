@@ -56,9 +56,10 @@ pub struct MeterSnapshot {
     // Master meters
     master_rms: AtomicU64,
     master_peak: AtomicU64,
-    // PROVISIONAL: sample-peak, not true-peak. No oversampling yet.
-    // True-peak measurement arrives with PB-6 loudness/mastering.
-    master_sample_peak_provisional: AtomicU64,
+    // PB-6.2: Sample peak (linear, max absolute sample value)
+    master_sample_peak: AtomicU64,
+    // PB-6.2: True peak in dBTP (BS.1770 Annex 2, 4x oversampling)
+    master_true_peak_dbtp: AtomicU64,
     master_clip: AtomicBool,
 
     // Crossfader position (0.0 = full A, 1.0 = full B)
@@ -93,7 +94,8 @@ impl MeterSnapshot {
             bus_b_peak: AtomicU64::new(0),
             master_rms: AtomicU64::new(0),
             master_peak: AtomicU64::new(0),
-            master_sample_peak_provisional: AtomicU64::new(0),
+            master_sample_peak: AtomicU64::new(0),
+            master_true_peak_dbtp: AtomicU64::new(f64::NEG_INFINITY.to_bits()),
             master_clip: AtomicBool::new(false),
             crossfade_position: AtomicU64::new((0.5f64).to_bits()),
             underruns: AtomicU64::new(0),
@@ -146,10 +148,18 @@ impl MeterSnapshot {
         store_f64(&self.bus_b_peak, b_peak);
     }
 
-    pub fn write_master(&self, rms: f64, peak: f64, sample_peak_provisional: f64, clip: bool) {
+    /// PB-6.2: Write master meter values.
+    /// - rms: root mean square level (linear)
+    /// - peak: max absolute sample value this block (linear)
+    /// - sample_peak: same as peak (kept for clarity in the readout)
+    /// - true_peak_dbtp: true peak in dBTP (None for silence)
+    /// - clip: whether any sample exceeded 0 dBFS
+    pub fn write_master(&self, rms: f64, peak: f64, sample_peak: f64, true_peak_dbtp: Option<f64>, clip: bool) {
         store_f64(&self.master_rms, rms);
         store_f64(&self.master_peak, peak);
-        store_f64(&self.master_sample_peak_provisional, sample_peak_provisional);
+        store_f64(&self.master_sample_peak, sample_peak);
+        let tp = true_peak_dbtp.unwrap_or(f64::NEG_INFINITY);
+        store_f64(&self.master_true_peak_dbtp, tp);
         self.master_clip.store(clip, Ordering::Relaxed);
     }
 
@@ -218,9 +228,11 @@ pub struct MeterReadout {
     pub bus_b_peak: f64,
     pub master_rms: f64,
     pub master_peak: f64,
-    /// PROVISIONAL: sample-peak, not true-peak. No oversampling yet.
-    /// True-peak arrives with PB-6 loudness/mastering.
-    pub master_sample_peak_provisional: f64,
+    /// PB-6.2: Sample peak (linear, max absolute sample value)
+    pub master_sample_peak: f64,
+    /// PB-6.2: True peak in dBTP (BS.1770 Annex 2, 4x oversampling).
+    /// None (NEG_INFINITY) for silence.
+    pub master_true_peak_dbtp: f64,
     pub master_clip: bool,
     pub crossfade_position: f64,
     pub underruns: u64,
@@ -239,7 +251,8 @@ impl Default for MeterReadout {
             bus_b_peak: 0.0,
             master_rms: 0.0,
             master_peak: 0.0,
-            master_sample_peak_provisional: 0.0,
+            master_sample_peak: 0.0,
+            master_true_peak_dbtp: f64::NEG_INFINITY,
             master_clip: false,
             crossfade_position: 0.5,
             underruns: 0,
@@ -265,7 +278,8 @@ impl MeterSnapshot {
             bus_b_peak: load_f64(&self.bus_b_peak),
             master_rms: load_f64(&self.master_rms),
             master_peak: load_f64(&self.master_peak),
-            master_sample_peak_provisional: load_f64(&self.master_sample_peak_provisional),
+            master_sample_peak: load_f64(&self.master_sample_peak),
+            master_true_peak_dbtp: load_f64(&self.master_true_peak_dbtp),
             master_clip: self.master_clip.load(Ordering::Relaxed),
             crossfade_position: load_f64(&self.crossfade_position),
             underruns: self.underruns.load(Ordering::Relaxed),
