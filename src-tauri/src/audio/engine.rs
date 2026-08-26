@@ -343,6 +343,12 @@ impl CallbackState {
                     self.players[idx].set_gain(gain, ramp_frames);
                 }
             }
+            EngineCommand::SetLoudnessMatchGain { player, gain } => {
+                let idx = player.as_index();
+                if idx < MAX_PLAYERS {
+                    self.players[idx].set_loudness_match_gain(gain);
+                }
+            }
             EngineCommand::SetPan { player, pan, .. } => {
                 let idx = player.as_index();
                 if idx < MAX_PLAYERS {
@@ -650,6 +656,7 @@ impl CommandFrame for EngineCommand {
             | EngineCommand::BeatSync { at_frame, .. }
             | EngineCommand::BarSync { at_frame, .. }
             | EngineCommand::AttachBeatGrid { at_frame, .. } => *at_frame,
+            EngineCommand::SetLoudnessMatchGain { .. } => 0,
             EngineCommand::Shutdown => 0,
         }
     }

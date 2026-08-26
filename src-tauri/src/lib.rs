@@ -174,6 +174,9 @@ pub fn run() {
             commands::audio_engine_bar_sync,
             commands::get_git_revision,
             commands::get_track_loudness,
+            commands::audio_engine_set_loudness_match_gain,
+            commands::audio_engine_compute_loudness_match,
+            commands::get_loudness_comparison,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

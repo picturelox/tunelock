@@ -1927,6 +1927,135 @@ pub async fn audio_engine_set_player_gain(state: State<'_, AppState>, player: u8
     Ok(())
 }
 
+/// PB-6.1: Set loudness match gain for a player. This is separate from
+/// the user gain/trim. 1.0 = no match. The gain is linear and applied
+/// immediately. Used by Match Level B→A to level-match deck B to deck A
+/// based on stored Integrated LUFS values.
+#[command]
+pub async fn audio_engine_set_loudness_match_gain(
+    state: State<'_, AppState>,
+    player: u8,
+    gain: f64,
+) -> Result<(), String> {
+    let engine_slot = state.audio_engine.lock().await;
+    if let Some(engine) = engine_slot.as_ref() {
+        engine.send_command(crate::audio::EngineCommand::SetLoudnessMatchGain {
+            player: crate::audio::PlayerId(player),
+            gain,
+        });
+    }
+    Ok(())
+}
+
+/// PB-6.1: Compute the loudness match gain to match player B to player A.
+/// Returns the linear gain factor and the LUFS difference.
+/// If either track lacks Integrated LUFS, returns an error.
+#[command]
+pub async fn audio_engine_compute_loudness_match(
+    state: State<'_, AppState>,
+    track_id_a: i64,
+    track_id_b: i64,
+) -> Result<LoudnessMatchResult, String> {
+    let (lufs_a, lufs_b) = {
+        let db = state.db.lock().await;
+        let a = db.get_loudness(track_id_a)
+            .map_err(|e| e.to_string())?
+            .ok_or("Track A has no loudness analysis")?;
+        let b = db.get_loudness(track_id_b)
+            .map_err(|e| e.to_string())?
+            .ok_or("Track B has no loudness analysis")?;
+        (
+            a.integrated_lufs.ok_or("Track A has no Integrated LUFS (too quiet)")?,
+            b.integrated_lufs.ok_or("Track B has no Integrated LUFS (too quiet)")?,
+        )
+    };
+    // To match B to A: B needs gain = 10^((LUFS_A - LUFS_B) / 20)
+    // If B is quieter (lower LUFS), gain > 1 (boost B).
+    // If B is louder (higher LUFS), gain < 1 (attenuate B).
+    let delta_lu = lufs_a - lufs_b;
+    let gain = 10f64.powf(delta_lu / 20.0);
+    Ok(LoudnessMatchResult {
+        lufs_a,
+        lufs_b,
+        delta_lu,
+        gain,
+    })
+}
+
+/// PB-6.1: Result of computing a loudness match between two tracks.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LoudnessMatchResult {
+    pub lufs_a: f64,
+    pub lufs_b: f64,
+    /// LUFS_A - LUFS_B. Positive means B is quieter and needs boost.
+    pub delta_lu: f64,
+    /// Linear gain to apply to B to match A's loudness.
+    pub gain: f64,
+}
+
+/// PB-6.1: Get loudness comparison for two file paths (used by Listening Lab).
+/// Looks up tracks by path, fetches stored loudness, and computes match gain.
+/// Returns None for either track's LUFS if not yet analyzed or too quiet.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct LoudnessComparison {
+    pub lufs_a: Option<f64>,
+    pub lufs_b: Option<f64>,
+    pub true_peak_a: Option<f64>,
+    pub true_peak_b: Option<f64>,
+    pub sample_peak_a: Option<f64>,
+    pub sample_peak_b: Option<f64>,
+    /// Match gain for B→A, if both tracks have Integrated LUFS.
+    pub match_gain: Option<f64>,
+    /// LUFS difference (A - B), if both have Integrated LUFS.
+    pub delta_lu: Option<f64>,
+}
+
+/// PB-6.1: Get loudness comparison for two file paths.
+/// Used by the Listening Lab which works with file paths, not track IDs.
+#[command]
+pub async fn get_loudness_comparison(
+    state: State<'_, AppState>,
+    path_a: String,
+    path_b: String,
+) -> Result<LoudnessComparison, String> {
+    let db = state.db.lock().await;
+    let track_a = db.get_track_by_path(&path_a).map_err(|e| e.to_string())?;
+    let track_b = db.get_track_by_path(&path_b).map_err(|e| e.to_string())?;
+
+    let loud_a = if let Some(t) = &track_a {
+        db.get_loudness(t.id).map_err(|e| e.to_string())?
+    } else { None };
+    let loud_b = if let Some(t) = &track_b {
+        db.get_loudness(t.id).map_err(|e| e.to_string())?
+    } else { None };
+
+    let lufs_a = loud_a.as_ref().and_then(|l| l.integrated_lufs);
+    let lufs_b = loud_b.as_ref().and_then(|l| l.integrated_lufs);
+    let true_peak_a = loud_a.as_ref().map(|l| l.true_peak_dbtp);
+    let true_peak_b = loud_b.as_ref().map(|l| l.true_peak_dbtp);
+    let sample_peak_a = loud_a.as_ref().map(|l| l.sample_peak_dbfs);
+    let sample_peak_b = loud_b.as_ref().map(|l| l.sample_peak_dbfs);
+
+    let (match_gain, delta_lu) = if let (Some(a), Some(b)) = (lufs_a, lufs_b) {
+        let delta = a - b;
+        let gain = 10f64.powf(delta / 20.0);
+        (Some(gain), Some(delta))
+    } else {
+        (None, None)
+    };
+
+    Ok(LoudnessComparison {
+        lufs_a,
+        lufs_b,
+        true_peak_a,
+        true_peak_b,
+        sample_peak_a,
+        sample_peak_b,
+        match_gain,
+        delta_lu,
+    })
+}
+
 #[command]
 pub async fn audio_engine_set_pan(state: State<'_, AppState>, player: u8, pan: f32) -> Result<(), String> {
     let engine_slot = state.audio_engine.lock().await;

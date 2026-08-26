@@ -106,6 +106,11 @@ pub struct Player {
 
     // Gains
     gain: RampedGain,
+    /// PB-6.1: Loudness match gain (linear, separate from user gain).
+    /// Computed from stored LUFS values to level-match this player to
+    /// another. Total gain = user_gain * loudness_match_gain.
+    /// Default 1.0 (no match). Toggled off restores exact previous gain.
+    loudness_match_gain: f64,
 
     // Pan (-1.0 to 1.0)
     pan: f64,
@@ -170,6 +175,7 @@ impl Player {
             bus: if id.0 == 0 { BusId::A } else { BusId::B },
             eq: DjIsolator::new(sample_rate),
             gain: RampedGain::new(sample_rate),
+            loudness_match_gain: 1.0,
             pan: 0.0,
             loop_region: None,
             bpm: 120.0,
@@ -347,6 +353,20 @@ impl Player {
         self.gain.set_ramp(self.sample_rate, ramp_frames);
     }
 
+    /// PB-6.1: Set the loudness match gain (linear). This is separate
+    /// from the user gain/trim. Setting to 1.0 disables match level.
+    /// The match gain is applied immediately (not ramped) because it
+    /// changes only when the user toggles Match Level, and a ramp
+    /// would delay the level change unnecessarily.
+    pub fn set_loudness_match_gain(&mut self, gain: f64) {
+        self.loudness_match_gain = gain;
+    }
+
+    /// PB-6.1: Get the current loudness match gain (linear).
+    pub fn loudness_match_gain(&self) -> f64 {
+        self.loudness_match_gain
+    }
+
     pub fn set_pan(&mut self, pan: f32) {
         self.pan = pan as f64;
     }
@@ -519,8 +539,8 @@ impl Player {
         // Apply per-player EQ
         let (eq_l, eq_r) = self.eq.process(src_l, src_r);
 
-        // Apply gain (ramped)
-        let g = self.gain.tick();
+        // Apply gain (ramped user gain × loudness match gain)
+        let g = self.gain.tick() * self.loudness_match_gain;
 
         // Apply pan (constant power)
         let (pan_l, pan_r) = if self.pan == 0.0 {
@@ -544,5 +564,90 @@ impl Player {
         if abs_r >= 1.0 { self.clip[1] = true; }
 
         (out_l, out_r)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_player() -> Player {
+        let retired = Arc::new(crossbeam_queue::ArrayQueue::new(8));
+        Player::new_with_mode(
+            PlayerId(0),
+            48000.0,
+            retired,
+            ProcessorMode::Varispeed,
+        )
+    }
+
+    /// PB-6.1: Loudness match gain defaults to 1.0 (no match).
+    #[test]
+    fn loudness_match_gain_defaults_to_unity() {
+        let p = make_player();
+        assert!((p.loudness_match_gain() - 1.0).abs() < 1e-9);
+    }
+
+    /// PB-6.1: Setting loudness match gain changes it.
+    #[test]
+    fn set_loudness_match_gain_changes_value() {
+        let mut p = make_player();
+        p.set_loudness_match_gain(1.5);
+        assert!((p.loudness_match_gain() - 1.5).abs() < 1e-9);
+        p.set_loudness_match_gain(0.7);
+        assert!((p.loudness_match_gain() - 0.7).abs() < 1e-9);
+    }
+
+    /// PB-6.1: Toggling match off (gain=1.0) restores exact previous
+    /// user gain. The user gain is never modified by match level.
+    #[test]
+    fn toggling_match_off_restores_user_gain_exactly() {
+        let mut p = make_player();
+        // Set a user gain
+        p.set_gain(0.8, 1);
+        // Apply loudness match
+        p.set_loudness_match_gain(1.25);
+        // Toggle off
+        p.set_loudness_match_gain(1.0);
+        // User gain should be unchanged
+        // (gain.target is still 0.8 — we read it indirectly via the ramp)
+        // After ramp completes (1 frame), gain.tick() returns target.
+        p.gain.set_ramp(48000.0, 1);
+        let g = p.gain.tick();
+        assert!((g - 0.8).abs() < 1e-5, "user gain should be 0.8, got {}", g);
+    }
+
+    /// PB-6.1: The total gain is user_gain * loudness_match_gain.
+    /// This is the core invariant: match level and user trim are
+    /// independent and multiplicative.
+    #[test]
+    fn total_gain_is_user_times_match() {
+        let mut p = make_player();
+        p.set_gain(0.5, 1); // user gain = 0.5
+        p.set_loudness_match_gain(2.0); // match gain = 2.0
+        p.gain.set_ramp(48000.0, 1);
+        let user_g = p.gain.tick();
+        let total = user_g * p.loudness_match_gain();
+        assert!((total - 1.0).abs() < 1e-9, "total should be 1.0, got {}", total);
+    }
+
+    /// PB-6.1: Match gain computation from LUFS values.
+    /// To match B to A: gain = 10^((LUFS_A - LUFS_B) / 20)
+    #[test]
+    fn match_gain_formula_is_correct() {
+        // A = -23 LUFS, B = -20 LUFS (B is louder by 3 LU)
+        // To match B to A, B needs -3 dB gain = 10^(-3/20) ≈ 0.7079
+        let lufs_a = -23.0f64;
+        let lufs_b = -20.0f64;
+        let delta = lufs_a - lufs_b; // -3.0
+        let gain = 10f64.powf(delta / 20.0);
+        assert!((gain - 0.7079).abs() < 0.01, "gain should be ~0.708, got {}", gain);
+
+        // A = -23, B = -26 (B is quieter by 3 LU)
+        // To match B to A, B needs +3 dB gain = 10^(3/20) ≈ 1.4125
+        let lufs_b_quieter = -26.0f64;
+        let delta2 = lufs_a - lufs_b_quieter; // 3.0
+        let gain2 = 10f64.powf(delta2 / 20.0);
+        assert!((gain2 - 1.4125).abs() < 0.01, "gain should be ~1.413, got {}", gain2);
     }
 }

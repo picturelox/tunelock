@@ -132,6 +132,12 @@ pub enum EngineCommand {
         gain: f32,
         ramp_frames: u32,
     },
+    /// PB-6.1: Set loudness match gain (linear, separate from user gain).
+    /// 1.0 = no match. Applied immediately (not ramped).
+    SetLoudnessMatchGain {
+        player: PlayerId,
+        gain: f64,
+    },
     /// Set player pan (-1.0 = full left, 0.0 = center, 1.0 = full right).
     SetPan {
         player: PlayerId,

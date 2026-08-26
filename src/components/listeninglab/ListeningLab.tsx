@@ -23,9 +23,12 @@ import {
   listeningLabSaveResult,
   listeningLabGetResults,
   getGitRevision,
+  getLoudnessComparison,
+  audioEngineSetLoudnessMatchGain,
   type AudioMeterReadout,
   type ListeningLabProcessorInfo,
   type ListeningLabResult,
+  type LoudnessComparison,
 } from '../../lib/tauri';
 
 type ProcessorMode = 'original' | 'signalsmith';
@@ -86,8 +89,12 @@ export default function ListeningLab() {
   const [saveStatus, setSaveStatus] = useState('');
 
   // Two-deck state
-  const [, setFilePathB] = useState<string>('');
+  const [filePathB, setFilePathB] = useState<string>('');
   const [trackNameB, setTrackNameB] = useState<string>('');
+
+  // PB-6.1: Loudness comparison and Match Level
+  const [loudnessComp, setLoudnessComp] = useState<LoudnessComparison | null>(null);
+  const [matchLevelOn, setMatchLevelOn] = useState(false);
 
   const meterRef = useRef<number | null>(null);
 
@@ -139,6 +146,36 @@ export default function ListeningLab() {
       if (meterRef.current) cancelAnimationFrame(meterRef.current);
     };
   }, [initState]);
+
+  // PB-6.1: Fetch loudness comparison when both file paths are set.
+  // This is best-effort — tracks may not have been analyzed yet.
+  useEffect(() => {
+    if (!filePath || !filePathB) {
+      setLoudnessComp(null);
+      return;
+    }
+    let active = true;
+    getLoudnessComparison(filePath, filePathB)
+      .then(comp => { if (active) setLoudnessComp(comp); })
+      .catch(() => { if (active) setLoudnessComp(null); });
+    return () => { active = false; };
+  }, [filePath, filePathB]);
+
+  // PB-6.1: Toggle Match Level B→A.
+  // When on, apply computed match gain to player B (deck 1).
+  // When off, restore unity gain (user trim is never modified).
+  const toggleMatchLevel = async () => {
+    if (!loudnessComp?.matchGain) return;
+    if (matchLevelOn) {
+      // Turn off — restore unity
+      await audioEngineSetLoudnessMatchGain(1, 1.0);
+      setMatchLevelOn(false);
+    } else {
+      // Turn on — apply match gain to B
+      await audioEngineSetLoudnessMatchGain(1, loudnessComp.matchGain);
+      setMatchLevelOn(true);
+    }
+  };
 
   const handleLoadFile = async (deck: 0 | 1) => {
     const selected = await open({
@@ -572,6 +609,74 @@ export default function ListeningLab() {
             <strong> Bar Sync</strong> = tempo-match + align downbeat/bar boundaries.
             Listen for drift or phasing over 30s, 1min, 2min+.
           </p>
+        </div>
+      )}
+
+      {/* PB-6.1: Match Level — loudness comparison and gain matching */}
+      {testMode === 'twodeck' && (
+        <div className="mb-6 p-4 bg-plate-dark rounded-lg border border-plate-darker">
+          <h3 className="text-sm font-bold mb-3">Match Level (PB-6.1)</h3>
+          {!loudnessComp ? (
+            <p className="text-xs text-label-dim">
+              Load both tracks and analyze them to see loudness comparison.
+              Tracks must be analyzed first (Integrated LUFS, true peak, sample peak).
+            </p>
+          ) : (
+            <div>
+              <div className="grid grid-cols-3 gap-4 mb-3 text-sm">
+                <div>
+                  <div className="text-label-dim text-xs mb-1">Deck A</div>
+                  <div>LUFS: {loudnessComp.lufsA !== null ? loudnessComp.lufsA.toFixed(1) : '—'}</div>
+                  <div className="text-xs text-label-dim">
+                    TP: {loudnessComp.truePeakA !== null ? `${loudnessComp.truePeakA.toFixed(2)} dBTP` : '—'}
+                  </div>
+                  <div className="text-xs text-label-dim">
+                    SP: {loudnessComp.samplePeakA !== null ? `${loudnessComp.samplePeakA.toFixed(2)} dBFS` : '—'}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-label-dim text-xs mb-1">Deck B</div>
+                  <div>LUFS: {loudnessComp.lufsB !== null ? loudnessComp.lufsB.toFixed(1) : '—'}</div>
+                  <div className="text-xs text-label-dim">
+                    TP: {loudnessComp.truePeakB !== null ? `${loudnessComp.truePeakB.toFixed(2)} dBTP` : '—'}
+                  </div>
+                  <div className="text-xs text-label-dim">
+                    SP: {loudnessComp.samplePeakB !== null ? `${loudnessComp.samplePeakB.toFixed(2)} dBFS` : '—'}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-label-dim text-xs mb-1">Difference</div>
+                  <div>
+                    Δ = {loudnessComp.deltaLu !== null ? `${loudnessComp.deltaLu.toFixed(1)} LU` : '—'}
+                  </div>
+                  <div className="text-xs text-label-dim">
+                    Match gain: {loudnessComp.matchGain !== null ? `${loudnessComp.matchGain.toFixed(3)}` : '—'}
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={toggleMatchLevel}
+                  disabled={loudnessComp.matchGain === null}
+                  className={`px-4 py-2 rounded text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed ${
+                    matchLevelOn
+                      ? 'bg-cap-amber text-black'
+                      : 'bg-plate-lighter text-label-cream'
+                  }`}
+                  title="Level-match Deck B to Deck A using stored Integrated LUFS. User trim is preserved separately."
+                >
+                  {matchLevelOn ? 'Match Level: ON' : 'Match B → A'}
+                </button>
+                <span className="text-xs text-label-dim">
+                  {loudnessComp.matchGain === null
+                    ? 'Both tracks need Integrated LUFS to compute match.'
+                    : matchLevelOn
+                      ? `B gain ×${loudnessComp.matchGain.toFixed(3)} (${loudnessComp.deltaLu! >= 0 ? '+' : ''}${loudnessComp.deltaLu!.toFixed(1)} dB)`
+                      : 'Reversible. User trim is not modified.'}
+                </span>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

@@ -534,6 +534,43 @@ export async function getTrackLoudness(trackId: number): Promise<LoudnessAnalysi
   return invoke('get_track_loudness', { trackId });
 }
 
+// PB-6.1: Match Level
+export interface LoudnessMatchResult {
+  lufsA: number;
+  lufsB: number;
+  deltaLu: number;
+  gain: number;
+}
+
+export async function audioEngineSetLoudnessMatchGain(player: number, gain: number): Promise<void> {
+  return invoke('audio_engine_set_loudness_match_gain', { player, gain });
+}
+
+export async function audioEngineComputeLoudnessMatch(
+  trackIdA: number,
+  trackIdB: number,
+): Promise<LoudnessMatchResult> {
+  return invoke('audio_engine_compute_loudness_match', { trackIdA, trackIdB });
+}
+
+export interface LoudnessComparison {
+  lufsA: number | null;
+  lufsB: number | null;
+  truePeakA: number | null;
+  truePeakB: number | null;
+  samplePeakA: number | null;
+  samplePeakB: number | null;
+  matchGain: number | null;
+  deltaLu: number | null;
+}
+
+export async function getLoudnessComparison(
+  pathA: string,
+  pathB: string,
+): Promise<LoudnessComparison> {
+  return invoke('get_loudness_comparison', { pathA, pathB });
+}
+
 export async function audioEngineSetPlayerGain(player: number, gain: number): Promise<void> {
   return invoke('audio_engine_set_player_gain', { player, gain });
 }
