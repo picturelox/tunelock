@@ -32,6 +32,11 @@ crossbeam-queue = "0.3"                  # Lock-free bounded queue for commands
 rubato = "0.15"                          # Band-limited resampling
 signalsmith-stretch = "0.1"              # PB-2: pitch-preserving time stretch (MIT, C++ via bindgen)
 
+# PB-6: Loudness measurement (BS.1770-4 / EBU R128)
+# Pure Rust, no FFI. Streaming API for both offline analysis (PB-6.0) and
+# realtime metering (PB-6.2). MIT/Apache-2.0.
+ebur128-stream = "0.2"
+
 # Database
 rusqlite = { version = "0.31", features = ["bundled", "chrono"] }
 

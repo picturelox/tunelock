@@ -10,6 +10,7 @@ pub mod hpss;
 pub mod key_cnn;
 pub mod key_detector;
 pub mod key_timeline;
+pub mod loudness;
 pub mod tempo_detector;
 pub mod waveform;
 

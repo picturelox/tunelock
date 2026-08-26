@@ -34,6 +34,10 @@ impl Database {
         let migration_002 = include_str!("../../migrations/002_transition_workbench.sql");
         self.conn.execute_batch(migration_002)?;
 
+        // Migration 003: Loudness analysis (PB-6.0)
+        let migration_003 = include_str!("../../migrations/003_loudness.sql");
+        self.conn.execute_batch(migration_003)?;
+
         // Idempotent column additions for existing databases that pre-date
         // a schema change. SQLite doesn't have `ADD COLUMN IF NOT EXISTS`,
         // so we attempt the ALTER and swallow the specific "duplicate column"
@@ -1050,6 +1054,54 @@ impl Database {
         self.conn.execute(
             "DELETE FROM beat_grids WHERE track_id = ? AND is_override = 1",
             params![track_id],
+        )?;
+        Ok(())
+    }
+
+    // ========================================================================
+    // PB-6.0: Loudness analysis methods
+    // ========================================================================
+
+    pub fn get_loudness(&self, track_id: i64) -> Result<Option<LoudnessAnalysis>> {
+        let row = self.conn.query_row(
+            "SELECT track_id, integrated_lufs, true_peak_dbtp, sample_peak_dbfs,
+                    analysis_version, sample_rate, duration_sec
+             FROM loudness_analysis WHERE track_id = ?",
+            params![track_id],
+            |row| {
+                Ok(LoudnessAnalysis {
+                    track_id: row.get(0)?,
+                    integrated_lufs: row.get(1)?,
+                    true_peak_dbtp: row.get(2)?,
+                    sample_peak_dbfs: row.get(3)?,
+                    analysis_version: row.get(4)?,
+                    sample_rate: row.get(5)?,
+                    duration_sec: row.get(6)?,
+                })
+            },
+        );
+        match row {
+            Ok(analysis) => Ok(Some(analysis)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub fn save_loudness(&self, analysis: &LoudnessAnalysis) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO loudness_analysis
+             (track_id, integrated_lufs, true_peak_dbtp, sample_peak_dbfs,
+              analysis_version, sample_rate, duration_sec, analyzed_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+            params![
+                analysis.track_id,
+                analysis.integrated_lufs,
+                analysis.true_peak_dbtp,
+                analysis.sample_peak_dbfs,
+                analysis.analysis_version,
+                analysis.sample_rate,
+                analysis.duration_sec,
+            ],
         )?;
         Ok(())
     }

@@ -234,6 +234,20 @@ pub struct BeatGrid {
     pub is_override: bool,
 }
 
+/// PB-6.0: Loudness analysis result for a track.
+/// Stored in loudness_analysis table, versioned for recompute.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoudnessAnalysis {
+    pub track_id: i64,
+    pub integrated_lufs: Option<f64>,
+    pub true_peak_dbtp: f64,
+    pub sample_peak_dbfs: f64,
+    pub analysis_version: i32,
+    pub sample_rate: i32,
+    pub duration_sec: f64,
+}
+
 /// Transition plan stored per transition in a mix.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

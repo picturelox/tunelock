@@ -510,7 +510,12 @@ export default function ListeningLab() {
           <div className="flex gap-4 mb-3">
             <div className="flex-1">
               <h3 className="text-sm font-bold mb-2">Deck A</h3>
-              <button onClick={() => audioEnginePause(0)} className="px-3 py-1 bg-plate-light rounded text-sm">❚❚ Pause A</button>
+              <div className="flex gap-2 mb-1">
+                <button onClick={() => { open({ filters: [{ name: 'Audio', extensions: ['wav', 'mp3', 'flac', 'aiff', 'm4a', 'ogg'] }], multiple: false }).then(sel => { if (sel && typeof sel === 'string') { audioEngineLoadPlayerPaused(0, sel); setFilePath(sel); setTrackName(sel.split(/[\\/]/).pop() || sel); } }); }} className="px-3 py-1 bg-plate-light rounded text-sm">Load A</button>
+                <button onClick={() => audioEnginePlay(0)} className="px-3 py-1 bg-plate-light rounded text-sm">▶ Play A</button>
+                <button onClick={() => audioEnginePause(0)} className="px-3 py-1 bg-plate-light rounded text-sm">❚❚ Pause A</button>
+              </div>
+              {trackName && <p className="text-xs text-label-cream truncate">{trackName}</p>}
               <div className="text-xs text-label-dim mt-1">
                 {(meters?.players?.[0]?.sourceBpm ?? 0) > 0 ? (
                   <span>BPM: <span className="text-label-cream">{meters!.players![0].sourceBpm.toFixed(2)}</span></span>
@@ -521,7 +526,12 @@ export default function ListeningLab() {
             </div>
             <div className="flex-1">
               <h3 className="text-sm font-bold mb-2">Deck B</h3>
-              <button onClick={() => audioEnginePause(1)} className="px-3 py-1 bg-plate-light rounded text-sm">❚❚ Pause B</button>
+              <div className="flex gap-2 mb-1">
+                <button onClick={() => { open({ filters: [{ name: 'Audio', extensions: ['wav', 'mp3', 'flac', 'aiff', 'm4a', 'ogg'] }], multiple: false }).then(sel => { if (sel && typeof sel === 'string') { audioEngineLoadPlayerPaused(1, sel); setFilePathB(sel); setTrackNameB(sel.split(/[\\/]/).pop() || sel); } }); }} className="px-3 py-1 bg-plate-light rounded text-sm">Load B</button>
+                <button onClick={() => audioEnginePlay(1)} className="px-3 py-1 bg-plate-light rounded text-sm">▶ Play B</button>
+                <button onClick={() => audioEnginePause(1)} className="px-3 py-1 bg-plate-light rounded text-sm">❚❚ Pause B</button>
+              </div>
+              {trackNameB && <p className="text-xs text-label-cream truncate">{trackNameB}</p>}
               <div className="text-xs text-label-dim mt-1">
                 {(meters?.players?.[1]?.sourceBpm ?? 0) > 0 ? (
                   <span>BPM: <span className="text-label-cream">{meters!.players![1].sourceBpm.toFixed(2)}</span></span>
