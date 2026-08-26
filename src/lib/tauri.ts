@@ -519,6 +519,21 @@ export async function getGitRevision(): Promise<string> {
   return invoke('get_git_revision');
 }
 
+// PB-6.0: Loudness analysis
+export interface LoudnessAnalysis {
+  trackId: number;
+  integratedLufs: number | null;
+  truePeakDbtp: number;
+  samplePeakDbfs: number;
+  analysisVersion: number;
+  sampleRate: number;
+  durationSec: number;
+}
+
+export async function getTrackLoudness(trackId: number): Promise<LoudnessAnalysis | null> {
+  return invoke('get_track_loudness', { trackId });
+}
+
 export async function audioEngineSetPlayerGain(player: number, gain: number): Promise<void> {
   return invoke('audio_engine_set_player_gain', { player, gain });
 }

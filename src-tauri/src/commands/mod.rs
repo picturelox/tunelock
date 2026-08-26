@@ -615,6 +615,63 @@ pub async fn analyze_file(
         }
     }
 
+    // PB-6.0: Run loudness analysis asynchronously. This decodes the
+    // file again at 48 kHz for BS.1770 measurement, so it must NOT
+    // block the key/BPM result (AGENTS.md rule 3: local result first).
+    // The result is persisted to loudness_analysis and a
+    // `track-loudness-analyzed` event is emitted when complete.
+    {
+        let db_arc = state.db.clone();
+        let path_for_loudness = path.clone();
+        let track_id_for_loudness = track_id;
+        let window_for_loudness = window.clone();
+        tokio::task::spawn_blocking(move || {
+            match crate::analysis::loudness::analyze_loudness(&path_for_loudness) {
+                Ok(result) => {
+                    eprintln!(
+                        "[loudness] {} -> I={:.1} LUFS, TP={:.2} dBTP, SP={:.2} dBFS",
+                        std::path::Path::new(&path_for_loudness)
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("?"),
+                        result.integrated_lufs.unwrap_or(f64::NEG_INFINITY),
+                        result.true_peak_dbtp,
+                        result.sample_peak_dbfs,
+                    );
+                    let analysis = crate::models::LoudnessAnalysis {
+                        track_id: track_id_for_loudness,
+                        integrated_lufs: result.integrated_lufs,
+                        true_peak_dbtp: result.true_peak_dbtp,
+                        sample_peak_dbfs: result.sample_peak_dbfs,
+                        analysis_version: result.analysis_version as i32,
+                        sample_rate: result.sample_rate as i32,
+                        duration_sec: result.duration_sec,
+                    };
+                    // Persist — use a blocking DB lock since we're in spawn_blocking.
+                    let rt = tokio::runtime::Handle::current();
+                    let _ = rt.block_on(async {
+                        let db = db_arc.lock().await;
+                        if let Err(e) = db.save_loudness(&analysis) {
+                            eprintln!("[loudness] DB save failed: {}", e);
+                        }
+                    });
+                    // Emit event so UI can update with loudness data.
+                    let _ = window_for_loudness.emit("track-loudness-analyzed", &analysis);
+                }
+                Err(e) => {
+                    eprintln!(
+                        "[loudness] analysis failed for {}: {}",
+                        std::path::Path::new(&path_for_loudness)
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("?"),
+                        e
+                    );
+                }
+            }
+        });
+    }
+
     timings.total_ms = total_start.elapsed().as_millis() as u64;
     let section_count: usize = diagnostic
         .candidates
@@ -2061,6 +2118,17 @@ pub async fn get_git_revision() -> Result<String, String> {
     // Cargo package version.
     let sha = option_env!("TUNELOCK_GIT_SHA").unwrap_or(env!("CARGO_PKG_VERSION"));
     Ok(sha.to_string())
+}
+
+/// PB-6.0: Get loudness analysis for a track by ID.
+/// Returns None if the track hasn't been loudness-analyzed yet.
+#[command]
+pub async fn get_track_loudness(
+    state: State<'_, AppState>,
+    track_id: i64,
+) -> Result<Option<crate::models::LoudnessAnalysis>, String> {
+    let db = state.db.lock().await;
+    db.get_loudness(track_id).map_err(|e| e.to_string())
 }
 
 /// Seek a player to a position in seconds (not beats). Used by the

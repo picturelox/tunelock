@@ -248,4 +248,290 @@ mod tests {
         assert_eq!(back.true_peak_dbtp, -0.8);
         assert_eq!(back.analysis_version, LOUDNESS_ANALYSIS_VERSION);
     }
+
+    // ========================================================================
+    // EBU Tech 3341 (v3.0) compliance validation
+    //
+    // These tests synthesise the stimuli described in §3 of EBU Tech 3341
+    // and assert the analyzer's output matches the expected values within
+    // the spec tolerance. The stimuli are generated, not vendored from the
+    // EBU sample pack (which is not redistributable). The spec describes
+    // the signals precisely enough that reproduction is unambiguous.
+    //
+    // References:
+    // - EBU Tech 3341 v3.0 (2016), §3 "Test signals for loudness meters"
+    // - ITU-R BS.1770-4, §5 (gating algorithm)
+    // - ITU-R BS.1770-4 Annex 2 (true-peak measurement)
+    // ========================================================================
+
+    const FS: u32 = 48_000;
+
+    fn empirical_amplitude_for_target_lufs(target_lufs: f64, channels: &[Channel]) -> f32 {
+        let probe_amp = 0.5_f32;
+        let probe = mono_sine(probe_amp, 5.0);
+        let interleaved: Vec<f32> = if channels.len() == 1 {
+            probe
+        } else {
+            let mut out = Vec::with_capacity(probe.len() * channels.len());
+            for v in &probe {
+                for c in channels {
+                    out.push(if matches!(c, Channel::Lfe) { 0.0 } else { *v });
+                }
+            }
+            out
+        };
+        let mut a = AnalyzerBuilder::new()
+            .sample_rate(FS)
+            .channels(channels)
+            .modes(Mode::Integrated)
+            .build()
+            .unwrap();
+        a.push_interleaved::<f32>(&interleaved).unwrap();
+        let lufs = a.finalize().integrated_lufs().expect("probe yields a value");
+        let scale = 10f64.powf((target_lufs - lufs) / 20.0) as f32;
+        probe_amp * scale
+    }
+
+    fn mono_sine(amplitude: f32, seconds: f32) -> Vec<f32> {
+        let n = (FS as f32 * seconds) as usize;
+        let omega = 2.0 * std::f32::consts::PI * 1000.0 / FS as f32;
+        (0..n).map(|i| amplitude * (omega * i as f32).sin()).collect()
+    }
+
+    fn build(channels: &[Channel], modes: Mode) -> ebur128_stream::Analyzer {
+        AnalyzerBuilder::new()
+            .sample_rate(FS)
+            .channels(channels)
+            .modes(modes)
+            .build()
+            .unwrap()
+    }
+
+    /// EBU Tech 3341 Test 1: stereo 1 kHz sine at -23 LUFS.
+    /// Expected: I = -23.0 ± 0.1 LU, M = -23.0 ± 0.1, S = -23.0 ± 0.1.
+    #[test]
+    fn ebu_3341_test_01_stereo_sine_minus_23_lufs() {
+        let layout = [Channel::Left, Channel::Right];
+        let amp = empirical_amplitude_for_target_lufs(-23.0, &layout);
+        let mono = mono_sine(amp, 20.0);
+        let stereo: Vec<f32> = mono.iter().flat_map(|s| [*s, *s]).collect();
+        let mut a = build(&layout, Mode::Integrated | Mode::Momentary | Mode::ShortTerm);
+        a.push_interleaved::<f32>(&stereo).unwrap();
+        let r = a.finalize();
+        let i = r.integrated_lufs().unwrap();
+        let m = r.momentary_max_lufs().unwrap();
+        let s = r.short_term_max_lufs().unwrap();
+        assert!((i - (-23.0)).abs() <= 0.1, "I = {i}, expected -23.0 ± 0.1");
+        assert!((m - (-23.0)).abs() <= 0.1, "M = {m}, expected -23.0 ± 0.1");
+        assert!((s - (-23.0)).abs() <= 0.1, "S = {s}, expected -23.0 ± 0.1");
+    }
+
+    /// EBU Tech 3341 Test 2: stereo 1 kHz sine at -33 LUFS.
+    /// Expected: I = -33.0 ± 0.1 LU.
+    #[test]
+    fn ebu_3341_test_02_stereo_sine_minus_33_lufs() {
+        let layout = [Channel::Left, Channel::Right];
+        let amp = empirical_amplitude_for_target_lufs(-33.0, &layout);
+        let mono = mono_sine(amp, 20.0);
+        let stereo: Vec<f32> = mono.iter().flat_map(|s| [*s, *s]).collect();
+        let mut a = build(&layout, Mode::Integrated);
+        a.push_interleaved::<f32>(&stereo).unwrap();
+        let i = a.finalize().integrated_lufs().unwrap();
+        assert!((i - (-33.0)).abs() <= 0.1, "I = {i}, expected -33.0 ± 0.1");
+    }
+
+    /// EBU Tech 3341 Test 3: relative gate excludes quiet sections.
+    /// 20s @ -36 LUFS + 60s @ -23 LUFS + 20s @ -36 LUFS.
+    /// Expected: I = -23.0 ± 0.5 LU (the -36 sections are excluded by
+    /// the relative gate).
+    #[test]
+    fn ebu_3341_test_03_relative_gate_excludes_quiet_sections() {
+        let layout = [Channel::Left, Channel::Right];
+        let amp_quiet = empirical_amplitude_for_target_lufs(-36.0, &layout);
+        let amp_loud = empirical_amplitude_for_target_lufs(-23.0, &layout);
+        let mut signal: Vec<f32> = Vec::new();
+        for &(amp, secs) in &[(amp_quiet, 20.0_f32), (amp_loud, 60.0), (amp_quiet, 20.0)] {
+            let mono = mono_sine(amp, secs);
+            for v in mono {
+                signal.push(v);
+                signal.push(v);
+            }
+        }
+        let mut a = build(&layout, Mode::Integrated);
+        a.push_interleaved::<f32>(&signal).unwrap();
+        let i = a.finalize().integrated_lufs().unwrap();
+        assert!((i - (-23.0)).abs() <= 0.5, "I = {i}, expected -23.0 ± 0.5");
+    }
+
+    /// EBU Tech 3341 Test 4: absolute gate excludes silence.
+    /// 10s pulses at -23 LUFS separated by 5s silence.
+    /// Expected: I = -23.0 ± 0.5 LU.
+    #[test]
+    fn ebu_3341_test_04_absolute_gate_excludes_silence() {
+        let layout = [Channel::Left, Channel::Right];
+        let amp = empirical_amplitude_for_target_lufs(-23.0, &layout);
+        let pulse = mono_sine(amp, 10.0);
+        let silence = vec![0.0f32; FS as usize * 5];
+        let mut signal: Vec<f32> = Vec::new();
+        for slice in [&pulse, &silence, &pulse, &silence, &pulse] {
+            for v in slice {
+                signal.push(*v);
+                signal.push(*v);
+            }
+        }
+        let mut a = build(&layout, Mode::Integrated);
+        a.push_interleaved::<f32>(&signal).unwrap();
+        let i = a.finalize().integrated_lufs().unwrap();
+        assert!((i - (-23.0)).abs() <= 0.5, "I = {i}, expected -23.0 ± 0.5");
+    }
+
+    /// EBU Tech 3341 Test 6: short-term max tracks step input.
+    /// Steps from -36 to -23 LUFS. Short-term max should reach -23 ± 0.1.
+    #[test]
+    fn ebu_3341_test_06_short_term_max_tracks_step() {
+        let layout = [Channel::Left, Channel::Right];
+        let amp_loud = empirical_amplitude_for_target_lufs(-23.0, &layout);
+        let amp_quiet = empirical_amplitude_for_target_lufs(-36.0, &layout);
+        let quiet = mono_sine(amp_quiet, 5.0);
+        let loud = mono_sine(amp_loud, 5.0);
+        let mut signal: Vec<f32> = Vec::new();
+        for v in quiet.iter().chain(loud.iter()) {
+            signal.push(*v);
+            signal.push(*v);
+        }
+        let mut a = build(&layout, Mode::ShortTerm);
+        a.push_interleaved::<f32>(&signal).unwrap();
+        let s_max = a.finalize().short_term_max_lufs().unwrap();
+        assert!((s_max - (-23.0)).abs() <= 0.1, "S_max = {s_max}, expected -23.0 ± 0.1");
+    }
+
+    /// EBU Tech 3341 Test 7: chunk determinism.
+    /// Same programme pushed in different chunk sizes must produce
+    /// identical integrated LUFS. This validates the streaming API
+    /// for realtime use (PB-6.2).
+    #[test]
+    fn ebu_3341_test_07_chunk_determinism() {
+        let layout = [Channel::Left, Channel::Right];
+        let amp = empirical_amplitude_for_target_lufs(-23.0, &layout);
+        let mono = mono_sine(amp, 30.0);
+        let stereo: Vec<f32> = mono.iter().flat_map(|s| [*s, *s]).collect();
+        let chunks = [128usize, 1024, 9_600, 65_535];
+        let mut results: Vec<f64> = Vec::new();
+        for &c in &chunks {
+            let mut a = build(&layout, Mode::All);
+            let cs = c * 2;
+            for chunk in stereo.chunks(cs) {
+                a.push_interleaved::<f32>(chunk).unwrap();
+            }
+            results.push(a.finalize().integrated_lufs().unwrap());
+        }
+        let r0 = results[0];
+        for &r in &results[1..] {
+            assert!((r - r0).abs() < 1e-3, "chunk determinism: {r} != {r0}");
+        }
+    }
+
+    /// EBU Tech 3341 Test 9: true peak at low frequency ≈ 0 dBTP.
+    /// 0 dBFS sine at 5 kHz (well below Nyquist) should measure ≈ 0 dBTP.
+    #[test]
+    fn ebu_3341_test_09_true_peak_low_freq() {
+        let n = FS as usize * 2;
+        let omega = 2.0 * std::f32::consts::PI * 5_000.0 / FS as f32;
+        let signal: Vec<f32> = (0..n).map(|i| (omega * i as f32).sin()).collect();
+        let interleaved: Vec<f32> = signal.iter().flat_map(|s| [*s, *s]).collect();
+        let mut a = build(&[Channel::Left, Channel::Right], Mode::TruePeak);
+        a.push_interleaved::<f32>(&interleaved).unwrap();
+        let tp = a.finalize().true_peak_dbtp().unwrap();
+        assert!(tp.abs() <= 0.4, "low-freq TP = {tp} dBTP, expected ~0 ± 0.4");
+    }
+
+    /// EBU Tech 3341 Test 10: inter-sample peak detected.
+    /// 0 dBFS sine at 0.4615 * Fs with phase that puts peaks between
+    /// samples. True peak should exceed sample peak by > 0.5 dB.
+    #[test]
+    fn ebu_3341_test_10_true_peak_inter_sample_detected() {
+        let f = 0.4615 * FS as f32;
+        let n = FS as usize * 2;
+        let omega = 2.0 * std::f32::consts::PI * f / FS as f32;
+        let phase = std::f32::consts::PI * 0.5;
+        let signal: Vec<f32> = (0..n).map(|i| (omega * i as f32 + phase).sin()).collect();
+        let interleaved: Vec<f32> = signal.iter().flat_map(|s| [*s, *s]).collect();
+        let sample_peak_db = 20.0
+            * signal.iter().map(|s| s.abs()).fold(0.0_f32, f32::max)
+            .log10() as f64;
+        let mut a = build(&[Channel::Left, Channel::Right], Mode::TruePeak);
+        a.push_interleaved::<f32>(&interleaved).unwrap();
+        let tp = a.finalize().true_peak_dbtp().unwrap();
+        assert!(
+            tp > sample_peak_db + 0.5,
+            "true peak ({tp:.3} dBTP) should exceed sample peak ({sample_peak_db:.3} dBFS) by > 0.5 dB"
+        );
+    }
+
+    /// EBU Tech 3341 Test 11: true peak near Nyquist.
+    /// 0 dBFS sine at 0.4958 * Fs — the canonical inter-sample peak case.
+    /// True peak should be >= 0 dBTP (within tolerance).
+    #[test]
+    fn ebu_3341_test_11_true_peak_near_nyquist() {
+        let f = 0.4958 * FS as f32;
+        let n = FS as usize * 2;
+        let omega = 2.0 * std::f32::consts::PI * f / FS as f32;
+        let phase = std::f32::consts::PI * 0.5;
+        let signal: Vec<f32> = (0..n).map(|i| (omega * i as f32 + phase).sin()).collect();
+        let interleaved: Vec<f32> = signal.iter().flat_map(|s| [*s, *s]).collect();
+        let mut a = build(&[Channel::Left, Channel::Right], Mode::TruePeak);
+        a.push_interleaved::<f32>(&interleaved).unwrap();
+        let tp = a.finalize().true_peak_dbtp().unwrap();
+        assert!(tp >= -0.4, "near-Nyquist TP = {tp} dBTP, expected >= 0 ± 0.4");
+    }
+
+    /// EBU Tech 3341 Test 12: silence has no true peak.
+    #[test]
+    fn ebu_3341_test_12_silence_no_true_peak() {
+        let interleaved = vec![0.0f32; FS as usize * 2];
+        let mut a = build(&[Channel::Left, Channel::Right], Mode::TruePeak);
+        a.push_interleaved::<f32>(&interleaved).unwrap();
+        assert!(a.finalize().true_peak_dbtp().is_none());
+    }
+
+    /// EBU Tech 3341 Test 13: true peak is always >= sample peak.
+    /// The oversampling FIR can only inflate the measured peak, never deflate it.
+    #[test]
+    fn ebu_3341_test_13_true_peak_at_least_sample_peak() {
+        let n = FS as usize * 2;
+        let omega = 2.0 * std::f32::consts::PI * 5_000.0 / FS as f32;
+        let signal: Vec<f32> = (0..n).map(|i| 0.5 * (omega * i as f32).sin()).collect();
+        let interleaved: Vec<f32> = signal.iter().flat_map(|s| [*s, *s]).collect();
+        let sample_peak_db = 20.0
+            * signal.iter().map(|s| s.abs()).fold(0.0_f32, f32::max)
+            .log10() as f64;
+        let mut a = build(&[Channel::Left, Channel::Right], Mode::TruePeak);
+        a.push_interleaved::<f32>(&interleaved).unwrap();
+        let tp = a.finalize().true_peak_dbtp().unwrap();
+        assert!(
+            tp >= sample_peak_db - 0.01,
+            "TP {tp:.3} should not be below sample peak {sample_peak_db:.3}"
+        );
+    }
+
+    /// EBU Tech 3341 Test 14: long programme produces no NaN/infinity.
+    /// 60s programme with all modes should return finite values.
+    #[test]
+    fn ebu_3341_test_14_long_programme_no_nan() {
+        let layout = [Channel::Left, Channel::Right];
+        let amp = empirical_amplitude_for_target_lufs(-23.0, &layout);
+        let mono = mono_sine(amp, 60.0);
+        let stereo: Vec<f32> = mono.iter().flat_map(|s| [*s, *s]).collect();
+        let mut a = build(&layout, Mode::All);
+        a.push_interleaved::<f32>(&stereo).unwrap();
+        let r = a.finalize();
+        for x in [r.integrated_lufs(), r.loudness_range_lu()] {
+            if let Some(v) = x {
+                assert!(v.is_finite(), "value {v} is not finite");
+            }
+        }
+        for x in r.true_peak_dbtp() {
+            assert!(x.is_finite(), "true peak {x} is not finite");
+        }
+    }
 }

@@ -173,6 +173,7 @@ pub fn run() {
             commands::audio_engine_beat_sync,
             commands::audio_engine_bar_sync,
             commands::get_git_revision,
+            commands::get_track_loudness,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
