@@ -1363,6 +1363,149 @@ mod tests {
     use super::*;
 
     #[test]
+    fn pb62_meter_wire_uses_camel_case_and_preserves_values() {
+        let mut m = crate::audio::MeterReadout {
+            playing: true,
+            current_frame: 48000,
+            bus_a_rms: 0.1,
+            bus_a_peak: 0.2,
+            bus_b_rms: 0.3,
+            bus_b_peak: 0.4,
+            master_rms: 0.5,
+            master_peak: 0.6,
+            master_sample_peak: 0.7,
+            master_true_peak_dbtp: 1.25,
+            master_clip: true,
+            crossfade_position: 0.75,
+            underruns: 2,
+            commands_dropped: 3,
+            ..Default::default()
+        };
+        m.players[0] = crate::audio::PlayerMeterReadout {
+            playing: true,
+            position_sec: 1.5,
+            rms: 0.2,
+            peak: 0.4,
+            clip: true,
+            source_bpm: 120.0,
+            effective_bpm: 126.0,
+            tempo_ratio: 1.05,
+            pitch_semitones: -2.0,
+            beat_position: 3.0,
+            bar_position: 1.0,
+            meter_numerator: 3,
+            processor_mode: 2,
+        };
+        let wire = AudioMeterReadout::from(m);
+        let mut json = serde_json::to_value(wire).unwrap();
+        let players = json.as_object_mut().unwrap().remove("players").unwrap();
+        assert_eq!(players.as_array().unwrap().len(), 8);
+        assert_eq!(players[0], serde_json::json!({
+            "playing": true, "positionSec": 1.5, "rms": 0.2, "peak": 0.4, "clip": true,
+            "sourceBpm": 120.0, "effectiveBpm": 126.0, "tempoRatio": 1.05,
+            "pitchSemitones": -2.0, "beatPosition": 3.0, "barPosition": 1.0,
+            "meterNumerator": 3, "processorMode": 2
+        }));
+        assert_eq!(json, serde_json::json!({
+            "playing": true, "currentFrame": 48000,
+            "busARms": 0.1, "busAPeak": 0.2, "busBRms": 0.3, "busBPeak": 0.4,
+            "masterRms": 0.5, "masterPeak": 0.6, "masterSamplePeak": 0.7,
+            "masterTruePeakDbtp": 1.25, "masterClip": true,
+            "crossfadePosition": 0.75, "underruns": 2, "commandsDropped": 3
+        }));
+    }
+
+    #[test]
+    fn pb62_meter_wire_maps_only_finite_true_peak_to_some() {
+        for tp in [f64::NEG_INFINITY, f64::INFINITY, f64::NAN] {
+            let wire = AudioMeterReadout::from(crate::audio::MeterReadout {
+                master_true_peak_dbtp: tp,
+                ..Default::default()
+            });
+            assert!(wire.master_true_peak_dbtp.is_none());
+            let json = serde_json::to_value(wire).unwrap();
+            assert_eq!(json.get("masterTruePeakDbtp"), Some(&serde_json::Value::Null));
+            assert_eq!(json["masterSamplePeak"], 0.0);
+            assert_eq!(json["masterRms"], 0.0);
+            assert_eq!(json["masterClip"], false);
+        }
+        for tp in [-18.0, 0.0, 2.5] {
+            let wire = AudioMeterReadout::from(crate::audio::MeterReadout {
+                master_true_peak_dbtp: tp,
+                ..Default::default()
+            });
+            assert_eq!(wire.master_true_peak_dbtp, Some(tp));
+            assert_eq!(serde_json::to_value(wire).unwrap()["masterTruePeakDbtp"], tp);
+        }
+    }
+
+    #[test]
+    fn listening_lab_processor_wire_uses_camel_case() {
+        let info = ListeningLabProcessorInfo {
+            processor_type: "signalsmith".to_string(),
+            latency_frames: 1024,
+            sample_rate: 48000,
+        };
+        assert_eq!(serde_json::to_value(info).unwrap(), serde_json::json!({
+            "processorType": "signalsmith", "latencyFrames": 1024, "sampleRate": 48000
+        }));
+    }
+
+    #[test]
+    fn listening_lab_loudness_wire_uses_camel_case_and_nulls() {
+        let comparison = LoudnessComparison {
+            lufs_a: Some(-10.0), lufs_b: Some(-16.0),
+            true_peak_a: Some(-1.0), true_peak_b: None,
+            sample_peak_a: Some(-1.5), sample_peak_b: None,
+            match_gain: Some(2.0), match_gain_db: Some(6.0), delta_lu: Some(6.0),
+            predicted_true_peak_b: None, headroom_status: "ok".to_string(),
+        };
+        assert_eq!(serde_json::to_value(comparison).unwrap(), serde_json::json!({
+            "lufsA": -10.0, "lufsB": -16.0, "truePeakA": -1.0, "truePeakB": null,
+            "samplePeakA": -1.5, "samplePeakB": null, "matchGain": 2.0,
+            "matchGainDb": 6.0, "deltaLu": 6.0, "predictedTruePeakB": null,
+            "headroomStatus": "ok"
+        }));
+        let result = LoudnessMatchResult {
+            lufs_a: -10.0, lufs_b: -16.0, delta_lu: 6.0,
+            gain: 2.0, gain_db: 6.0, true_peak_b: None,
+            predicted_true_peak: None, headroom_status: "ok".to_string(),
+        };
+        assert_eq!(serde_json::to_value(result).unwrap(), serde_json::json!({
+            "lufsA": -10.0, "lufsB": -16.0, "deltaLu": 6.0, "gain": 2.0,
+            "gainDb": 6.0, "truePeakB": null, "predictedTruePeak": null,
+            "headroomStatus": "ok"
+        }));
+    }
+
+    #[test]
+    fn listening_lab_result_wire_accepts_frontend_payload_and_roundtrips() {
+        let json = serde_json::json!({
+            "id": 1, "timestamp": "2026-08-26T12:00:00Z", "processor": "signalsmith",
+            "tempoPercent": 6.0, "pitchSemitones": -1.0, "material": "drums",
+            "trackName": "test.wav", "transients": 4, "bass": 3, "vocals": 2,
+            "stereo": 5, "artifacts": 1, "overall": 4, "abxCorrect": 3,
+            "abxTrials": 5, "notes": "test", "gitRevision": "2be792c"
+        });
+        let result: ListeningLabResult = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(result.tempo_percent, 6.0);
+        assert_eq!(result.pitch_semitones, -1.0);
+        assert_eq!(serde_json::to_value(result).unwrap(), json);
+
+        let mut minimal = json;
+        for key in ["id", "trackName", "abxCorrect", "abxTrials", "notes", "gitRevision"] {
+            minimal.as_object_mut().unwrap().remove(key);
+        }
+        let result: ListeningLabResult = serde_json::from_value(minimal).unwrap();
+        assert!(result.id.is_none());
+        assert!(result.track_name.is_none());
+        assert!(result.abx_correct.is_none());
+        assert!(result.abx_trials.is_none());
+        assert!(result.notes.is_none());
+        assert!(result.git_revision.is_none());
+    }
+
+    #[test]
     fn test_traktor_key_mapping() {
         assert_eq!(traktor_key_to_camelot(0), Some("8B".to_string())); // C major
         assert_eq!(traktor_key_to_camelot(1), Some("9B".to_string())); // D major
@@ -1999,6 +2142,7 @@ pub async fn audio_engine_compute_loudness_match(
 
 /// PB-6.1: Result of computing a loudness match between two tracks.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LoudnessMatchResult {
     pub lufs_a: f64,
     pub lufs_b: f64,
@@ -2022,6 +2166,7 @@ pub struct LoudnessMatchResult {
 /// Looks up tracks by path, fetches stored loudness, and computes match gain.
 /// Returns None for either track's LUFS if not yet analyzed or too quiet.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct LoudnessComparison {
     pub lufs_a: Option<f64>,
     pub lufs_b: Option<f64>,
@@ -2660,6 +2805,7 @@ pub async fn audio_engine_set_filter_drive(state: State<'_, AppState>, bus: Stri
 /// Meter readout for the UI. Uses the generalized player/bus vocabulary.
 /// Players 0 and 1 correspond to the Transition Workbench's A and B decks.
 #[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AudioMeterReadout {
     pub playing: bool,
     pub current_frame: u64,
@@ -2673,8 +2819,8 @@ pub struct AudioMeterReadout {
     /// PB-6.2: Sample peak (linear, max absolute sample value)
     pub master_sample_peak: f64,
     /// PB-6.2: True peak in dBTP (BS.1770 Annex 2, 4x oversampling).
-    /// NEG_INFINITY for silence.
-    pub master_true_peak_dbtp: f64,
+    /// None on the wire for silence or a non-finite reading.
+    pub master_true_peak_dbtp: Option<f64>,
     pub master_clip: bool,
     pub crossfade_position: f64,
     pub underruns: u64,
@@ -2682,6 +2828,7 @@ pub struct AudioMeterReadout {
 }
 
 #[derive(serde::Serialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct PlayerMeterEntry {
     pub playing: bool,
     pub position_sec: f64,
@@ -2710,39 +2857,44 @@ pub async fn audio_engine_get_meters(state: State<'_, AppState>) -> Result<Audio
     // because the UI calls it regularly during playback.
     engine.drain_retired_sources();
 
-    let m = engine.get_meters();
-    let players = m.players.iter().map(|p| PlayerMeterEntry {
-        playing: p.playing,
-        position_sec: p.position_sec,
-        rms: p.rms,
-        peak: p.peak,
-        clip: p.clip,
-        source_bpm: p.source_bpm,
-        effective_bpm: p.effective_bpm,
-        tempo_ratio: p.tempo_ratio,
-        pitch_semitones: p.pitch_semitones,
-        beat_position: p.beat_position,
-        bar_position: p.bar_position,
-        meter_numerator: p.meter_numerator,
-        processor_mode: p.processor_mode,
-    }).collect::<Vec<_>>().try_into().unwrap_or_default();
-    Ok(AudioMeterReadout {
-        playing: m.playing,
-        current_frame: m.current_frame,
-        players,
-        bus_a_rms: m.bus_a_rms,
-        bus_a_peak: m.bus_a_peak,
-        bus_b_rms: m.bus_b_rms,
-        bus_b_peak: m.bus_b_peak,
-        master_rms: m.master_rms,
-        master_peak: m.master_peak,
-        master_sample_peak: m.master_sample_peak,
-        master_true_peak_dbtp: m.master_true_peak_dbtp,
-        master_clip: m.master_clip,
-        crossfade_position: m.crossfade_position,
-        underruns: m.underruns,
-        commands_dropped: m.commands_dropped,
-    })
+    Ok(engine.get_meters().into())
+}
+
+impl From<crate::audio::MeterReadout> for AudioMeterReadout {
+    fn from(m: crate::audio::MeterReadout) -> Self {
+        let players = m.players.map(|p| PlayerMeterEntry {
+            playing: p.playing,
+            position_sec: p.position_sec,
+            rms: p.rms,
+            peak: p.peak,
+            clip: p.clip,
+            source_bpm: p.source_bpm,
+            effective_bpm: p.effective_bpm,
+            tempo_ratio: p.tempo_ratio,
+            pitch_semitones: p.pitch_semitones,
+            beat_position: p.beat_position,
+            bar_position: p.bar_position,
+            meter_numerator: p.meter_numerator,
+            processor_mode: p.processor_mode,
+        });
+        Self {
+            playing: m.playing,
+            current_frame: m.current_frame,
+            players,
+            bus_a_rms: m.bus_a_rms,
+            bus_a_peak: m.bus_a_peak,
+            bus_b_rms: m.bus_b_rms,
+            bus_b_peak: m.bus_b_peak,
+            master_rms: m.master_rms,
+            master_peak: m.master_peak,
+            master_sample_peak: m.master_sample_peak,
+            master_true_peak_dbtp: Some(m.master_true_peak_dbtp).filter(|tp| tp.is_finite()),
+            master_clip: m.master_clip,
+            crossfade_position: m.crossfade_position,
+            underruns: m.underruns,
+            commands_dropped: m.commands_dropped,
+        }
+    }
 }
 
 // ============================================================================
@@ -2916,6 +3068,7 @@ pub async fn audio_engine_set_device(
 
 /// Processor information for the Listening Lab display.
 #[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ListeningLabProcessorInfo {
     /// "signalsmith" or "varispeed"
     pub processor_type: String,
@@ -2927,6 +3080,7 @@ pub struct ListeningLabProcessorInfo {
 
 /// A saved listening lab result.
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct ListeningLabResult {
     pub id: Option<i64>,
     pub timestamp: String,

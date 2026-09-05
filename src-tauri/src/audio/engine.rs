@@ -99,9 +99,7 @@ pub struct CallbackState {
     crossfade_position: f64,
     crossfade_target: f64,
     crossfade_ramp_increment: f64,
-    // Master metering for this block
-    master_sum_sq: [f64; 2],
-    master_peak: [f64; 2],
+    // Master metering across every callback in the reporting window
     // PB-6.2: Realtime true-peak meter (BS.1770 Annex 2, 4x oversampling).
     // Replaces the provisional sample-peak-only meter. Tracks sample peak,
     // true peak (dBTP), and RMS independently. Allocation-free in the callback.
@@ -211,8 +209,6 @@ impl CallbackState {
             crossfade_position: 0.5,
             crossfade_target: 0.5,
             crossfade_ramp_increment: 1.0 / (0.005 * sample_rate),
-            master_sum_sq: [0.0; 2],
-            master_peak: [0.0; 2],
             master_meter: super::master_meter::RealtimeMasterMeter::new(sample_rate as u32),
             master_clip: false,
             bus_block_sum_sq: [[0.0; 2]; 2],
@@ -554,8 +550,9 @@ impl CallbackState {
     }
 
     fn reset_block_meters(&mut self) {
-        self.master_sum_sq = [0.0; 2];
-        self.master_peak = [0.0; 2];
+        // PB-6.2: master_meter accumulates across callbacks in the
+        // reporting window; it is reset only by finalize_block() at
+        // meter update time. Bus meters remain per-callback.
         self.bus_block_sum_sq = [[0.0; 2]; 2];
         self.bus_block_peak = [[0.0; 2]; 2];
         for p in &mut self.players {
@@ -605,17 +602,11 @@ impl CallbackState {
         let b_peak = self.bus_block_peak[1][0].max(self.bus_block_peak[1][1]);
         self.meter_snapshot.write_buses(a_rms, a_peak, b_rms, b_peak);
 
-        // Master meters
-        let m_rms = if sample_count > 0 {
-            ((self.master_sum_sq[0] + self.master_sum_sq[1]) / (2.0 * sample_count as f64)).sqrt()
-        } else { 0.0 };
-        let m_peak = self.master_peak[0].max(self.master_peak[1]);
-        // PB-6.2: Finalize true-peak meter for this block.
-        // Returns (sample_peak_linear, true_peak_dbtp, rms_linear).
-        // We use the meter's sample_peak and true_peak; the engine's
-        // master_peak and master_sum_sq are kept for bus-level metering.
-        let (meter_sample_peak, meter_true_peak, _meter_rms) = self.master_meter.finalize_block();
-        self.meter_snapshot.write_master(m_rms, m_peak, meter_sample_peak, meter_true_peak, self.master_clip);
+        // Master meters: finalize the reporting window.
+        // The meter tracked sample peak, true peak, and RMS continuously
+        // across all callbacks since the last finalize_block().
+        let (m_sample_peak, m_true_peak, m_rms) = self.master_meter.finalize_block();
+        self.meter_snapshot.write_master(m_rms, m_sample_peak, m_sample_peak, m_true_peak, self.master_clip);
         self.meter_snapshot.write_crossfade(self.crossfade_position);
     }
 }
@@ -977,12 +968,9 @@ fn render_slice(state: &mut CallbackState, output: &mut [f32], channels: usize) 
         }
 
         // Update master meters (pre-output-clamp values)
-        state.master_sum_sq[0] += mix_l * mix_l;
-        state.master_sum_sq[1] += mix_r * mix_r;
-        if abs_l > state.master_peak[0] { state.master_peak[0] = abs_l; }
-        if abs_r > state.master_peak[1] { state.master_peak[1] = abs_r; }
-        // PB-6.2: Feed master output to the realtime true-peak meter.
-        // The meter buffers samples and computes true peak at block end.
+        // PB-6.2: The realtime meter tracks sample peak, true peak (dBTP),
+        // and RMS continuously across the reporting window. No per-callback
+        // reset needed; finalize_block() reports and resets at ~30 Hz.
         state.master_meter.process(mix_l, mix_r);
 
         // Write output — hard-clamped at the output stage only (transparent
@@ -1008,6 +996,40 @@ mod tests {
     use crate::audio::meter::MeterSnapshot;
 
     const SR: f64 = 44100.0;
+
+    #[test]
+    fn pb62_master_rms_covers_whole_reporting_window() {
+        let mut state = make_state();
+        state.command_queue.push(EngineCommand::SetMasterGain { at_frame: 0, gain: 1.0 });
+        state.command_queue.push(EngineCommand::SetBus { player: PlayerId(0), at_frame: 0, bus: BusId::Master });
+        state.command_queue.push(EngineCommand::Launch {
+            player: PlayerId(0), at_frame: 0, source: SourceHandle(1),
+            buffer: constant_buffer(0.5, 44100), start_beat: 0.0, quantize: Quantize::Immediate,
+        });
+        let mut out = [0.0; 512];
+        // Render enough callbacks to span at least one meter update (~30 Hz).
+        // At 44100 Hz with 256-frame blocks, each callback is ~5.8 ms.
+        // 12 callbacks ≈ 70 ms, which is at least two 33 ms meter windows.
+        for _ in 0..12 {
+            audio_callback_f32(&mut state, &mut out);
+        }
+        let meters = state.meter_snapshot.read_all();
+        // The meter should report a non-zero RMS and peak from the
+        // constant 0.5 signal (gain 1.0, direct-to-master). The meter
+        // tracks continuously across callbacks in the reporting window.
+        // Varispeed interpolation may cause slight overshoot above 0.5.
+        assert!(meters.master_rms > 0.4 && meters.master_rms < 0.6,
+            "master RMS should be ~0.5, got {}", meters.master_rms);
+        assert!(meters.master_sample_peak >= 0.5,
+            "master sample peak should be >= 0.5, got {}", meters.master_sample_peak);
+        assert!(meters.master_sample_peak < 0.6,
+            "master sample peak should be < 0.6 (varispeed overshoot), got {}", meters.master_sample_peak);
+        // True peak should be present and near 0 dBFS for a 0.5 amplitude signal
+        // 20*log10(0.5) ≈ -6.02 dBFS. True peak may slightly exceed sample peak.
+        let tp = meters.master_true_peak_dbtp;
+        assert!(tp.is_finite() && tp > -7.0 && tp < -5.0,
+            "true peak should be ~-6 dBTP, got {}", tp);
+    }
 
     fn make_state() -> CallbackState {
         CallbackState::new_for_test(

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { open } from '@tauri-apps/plugin-dialog';
 import {
   audioEngineInit,
@@ -51,11 +51,42 @@ const MATERIAL_OPTIONS = [
 
 type InitState = 'idle' | 'initializing' | 'ready' | 'error';
 
+const METER_POLL_MS = 50;
+
+function linearToDbfs(value: number | null | undefined): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null;
+  return value === 0 ? Number.NEGATIVE_INFINITY : 20 * Math.log10(value);
+}
+
+function MasterMeterValue({ label, unit, value, over = false }: {
+  label: string;
+  unit: 'dBFS' | 'dBTP';
+  value: number | null;
+  over?: boolean;
+}) {
+  const finite = typeof value === 'number' && Number.isFinite(value);
+  const display = value === Number.NEGATIVE_INFINITY ? '−∞' : finite ? value.toFixed(1) : '—';
+  const width = finite ? Math.max(0, Math.min(100, ((value + 60) / 66) * 100)) : 0;
+  return (
+    <div className="p-3 bg-plate-light rounded">
+      <div className="text-xs text-label-dim mb-1">{label}</div>
+      <div className={`font-mono text-xl tabular-nums ${over ? 'text-red-300' : 'text-label-cream'}`}>
+        {display} <span className="text-xs text-label-dim">{unit}</span>
+      </div>
+      <div className="relative h-2 mt-2 bg-plate-darker rounded overflow-hidden" aria-hidden="true">
+        <div className={`h-full ${over ? 'bg-red-500' : 'bg-cap-amber'}`} style={{ width: `${width}%` }} />
+        <div className="absolute inset-y-0 w-px bg-label-cream" style={{ left: `${(60 / 66) * 100}%` }} />
+      </div>
+    </div>
+  );
+}
+
 export default function ListeningLab() {
   const [initState, setInitState] = useState<InitState>('idle');
   const [initError, setInitError] = useState<string>('');
   const [processorInfo, setProcessorInfo] = useState<ListeningLabProcessorInfo | null>(null);
   const [meters, setMeters] = useState<AudioMeterReadout | null>(null);
+  const [meterError, setMeterError] = useState('');
   const [testMode, setTestMode] = useState<TestMode>('quality');
   const [tempo, setTempo] = useState(0);
   const [pitch, setPitch] = useState(0);
@@ -96,8 +127,6 @@ export default function ListeningLab() {
   const [loudnessComp, setLoudnessComp] = useState<LoudnessComparison | null>(null);
   const [matchLevelOn, setMatchLevelOn] = useState(false);
 
-  const meterRef = useRef<number | null>(null);
-
   const initEngine = useCallback(async () => {
     setInitState('initializing');
     setInitError('');
@@ -121,29 +150,43 @@ export default function ListeningLab() {
     listeningLabGetResults().then(setSavedResults).catch(() => {});
     // Fetch the actual git SHA for saving with results
     getGitRevision().then(setGitRevision).catch(() => setGitRevision(APP_VERSION));
-    return () => {
-      if (meterRef.current) cancelAnimationFrame(meterRef.current);
-    };
   }, [initEngine]);
 
-  // Poll meters for position display
+  // Poll live master meters and position at no more than 20 Hz.
   useEffect(() => {
     if (initState !== 'ready') return;
     let active = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    setMeters(null);
+    setMeterError('');
     const poll = async () => {
       if (!active) return;
+      let delay = METER_POLL_MS;
       try {
         const m = await audioEngineGetMeters();
         if (!active) return;
+        if (!m || !Array.isArray(m.players)
+          || typeof m.masterSamplePeak !== 'number' || !Number.isFinite(m.masterSamplePeak) || m.masterSamplePeak < 0
+          || typeof m.masterRms !== 'number' || !Number.isFinite(m.masterRms) || m.masterRms < 0
+          || (m.masterTruePeakDbtp !== null && (typeof m.masterTruePeakDbtp !== 'number' || !Number.isFinite(m.masterTruePeakDbtp)))
+          || typeof m.masterClip !== 'boolean') {
+          throw new Error('Invalid meter response. Check the audio engine IPC format.');
+        }
         setMeters(m);
-        if (m.players[0]) setPositionSec(m.players[0].positionSec);
-      } catch { /* ignore */ }
-      meterRef.current = requestAnimationFrame(poll);
+        setMeterError('');
+        if (Number.isFinite(m.players[0]?.positionSec)) setPositionSec(m.players[0].positionSec);
+      } catch (e) { /* Clear stale readings and retry while mounted. */
+        if (!active) return;
+        setMeters(null);
+        setMeterError(String(e));
+        delay = 1000;
+      }
+      if (active) timer = setTimeout(poll, delay);
     };
-    meterRef.current = requestAnimationFrame(poll);
+    timer = setTimeout(poll, METER_POLL_MS);
     return () => {
       active = false;
-      if (meterRef.current) cancelAnimationFrame(meterRef.current);
+      clearTimeout(timer);
     };
   }, [initState]);
 
@@ -367,6 +410,12 @@ export default function ListeningLab() {
     );
   }
 
+  const samplePeakDbfs = linearToDbfs(meters?.masterSamplePeak);
+  const rmsDbfs = linearToDbfs(meters?.masterRms);
+  const truePeakDbtp = meters?.masterTruePeakDbtp ?? null;
+  const sampleOver = meters !== null && meters.masterSamplePeak >= 1;
+  const truePeakOver = truePeakDbtp !== null && Number.isFinite(truePeakDbtp) && truePeakDbtp > 0;
+
   return (
     <div className="p-6 max-w-6xl mx-auto text-label-cream">
       <h2 className="text-xl font-bold mb-1">PB-2 Listening Lab</h2>
@@ -381,7 +430,7 @@ export default function ListeningLab() {
         <span>Processor: <span className="text-label-cream">{processorInfo?.processorType || 'signalsmith'}</span></span>
         <span>Sample rate: <span className="text-label-cream">{processorInfo?.sampleRate || '?'} Hz</span></span>
         <span>Latency: <span className="text-label-cream">{processorInfo?.latencyFrames ?? '?'} frames</span></span>
-        <span>Position: <span className="text-label-cream">{fmtTime(positionSec)}</span></span>
+        <span>Position: <span className="text-label-cream">{meters && Number.isFinite(positionSec) ? fmtTime(positionSec) : '—'}</span></span>
         {meters?.players?.[0] && (
           <>
             <span>Source BPM: <span className="text-label-cream">{(meters.players[0].sourceBpm ?? 0) > 0 ? meters.players[0].sourceBpm.toFixed(2) : '—'}</span></span>
@@ -395,6 +444,39 @@ export default function ListeningLab() {
         )}
         {isPlaying && <span className="text-cap-amber">● PLAYING</span>}
       </div>
+
+      <section aria-labelledby="live-master-heading" className="mb-6 p-4 bg-plate-dark rounded-lg border border-plate-darker">
+        <h3 id="live-master-heading" className="text-sm font-bold mb-1">Live Master Meters (PB-6.2)</h3>
+        <p className="text-xs text-label-dim mb-3">
+          Pre-output-clamp levels after master gain, not stored track analysis or predicted match levels.
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <MasterMeterValue label="Sample Peak" unit="dBFS" value={samplePeakDbfs} over={sampleOver} />
+          <MasterMeterValue label="True Peak" unit="dBTP" value={truePeakDbtp} over={truePeakOver} />
+          <MasterMeterValue label="RMS" unit="dBFS" value={rmsDbfs} />
+        </div>
+        <p className="text-xs text-label-dim mt-2">
+          Bars: −60 to +6 dB; marker at 0 dB. −∞ = silence; true peak — = silence or unavailable.
+        </p>
+        <div className="flex flex-wrap gap-3 mt-3 text-xs">
+          <span className={`px-2 py-1 rounded ${sampleOver ? 'bg-red-900/40 text-red-300' : 'bg-plate-light text-label-dim'}`}>
+            Sample clip: {!meters ? '—' : sampleOver ? 'AT / OVER 0 dBFS' : 'none in current reading'}
+          </span>
+          <span className={`px-2 py-1 rounded ${truePeakOver ? 'bg-red-900/40 text-red-300' : 'bg-plate-light text-label-dim'}`}>
+            TP over: {truePeakDbtp === null ? '—' : truePeakOver ? 'OVER 0 dBTP' : 'none in current reading'}
+          </span>
+          {meters?.masterClip && <span className="px-2 py-1 text-amber-300">Engine sample clip flag: detected</span>}
+        </div>
+        {meterError ? (
+          <p role="alert" className="mt-3 text-xs text-red-300 break-words">
+            Live meters unavailable: {meterError}. Retrying automatically; previous readings cleared.
+          </p>
+        ) : !meters && <p role="status" className="mt-3 text-xs text-label-dim">Waiting for live meters…</p>}
+        <p className="mt-3 p-2 bg-amber-900/40 border border-amber-600/50 rounded text-xs text-amber-300">
+          No safety limiter is active (PB-6.3 pending). The output hard clamp is not a limiter;
+          sample clipping or true-peak overs can distort. Reduce gain if either warning appears.
+        </p>
+      </section>
 
       {/* Test mode selector */}
       <div className="flex gap-2 mb-6">

@@ -91,7 +91,7 @@ mod tests {
         block_size: usize,
         num_blocks: usize,
     ) -> (f64, f64, f64) {
-        let mut buf = vec![0.0f32; block_size];
+        let mut buf = vec![0.0f32; block_size * 2];
         let mut times_us = Vec::with_capacity(num_blocks);
 
         // Skip warm-up (first 100 blocks to get past initial ring-filling
@@ -272,7 +272,7 @@ mod tests {
 
         // Pre-launch deck 0 so it's in steady state
         launch_deck(&mut state, 0, 220.0, 1.06);
-        let mut buf = vec![0.0f32; block_size];
+        let mut buf = vec![0.0f32; block_size * 2];
         for _ in 0..100 {
             audio_callback_f32(&mut state, &mut buf);
         }
@@ -317,7 +317,7 @@ mod tests {
         launch_deck(&mut state, 1, 330.0, 0.94);
 
         // Get into steady state
-        let mut buf = vec![0.0f32; block_size];
+        let mut buf = vec![0.0f32; block_size * 2];
         for _ in 0..200 {
             audio_callback_f32(&mut state, &mut buf);
         }
@@ -370,7 +370,7 @@ mod tests {
         });
 
         // Run until a loop wrap occurs (check for the max callback time)
-        let mut buf = vec![0.0f32; block_size];
+        let mut buf = vec![0.0f32; block_size * 2];
         let mut max_us = 0.0f64;
         let mut measured_wrap = false;
 

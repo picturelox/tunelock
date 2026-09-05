@@ -444,7 +444,7 @@ export interface AudioMeterReadout {
   masterRms: number;
   masterPeak: number;
   masterSamplePeak: number;
-  masterTruePeakDbtp: number;
+  masterTruePeakDbtp: number | null;
   masterClip: boolean;
   crossfadePosition: number;
   underruns: number;

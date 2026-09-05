@@ -6,20 +6,30 @@
 //   - Free of file I/O, DB calls, events, or logging
 //   - Preconstructed once and reused for the engine's lifetime
 //
-// True peak is measured using ebur128-stream's TruePeak-only mode,
-// which implements BS.1770 Annex 2 4x oversampling via a polyphase FIR.
-// The analyzer is reset each block to give per-block true peak readings
-// (the 12-tap FIR warms up within the first ~0.25ms of each block,
-// which is negligible for metering).
+// True peak uses the BS.1770 Annex 2 4x, 12-tap/phase coefficients also
+// used by ebur128-stream 0.2.0 (src/peak.rs), checked against that analyzer.
+// Its public reset clears FIR history as well as the peak, so this live
+// tracker retains fixed stereo delay lines across reporting windows.
+// Only full engine reconfiguration resets the FIR; no LUFS runs here.
 //
 // Sample peak and RMS are tracked independently with simple arithmetic,
 // giving the meter three distinct measurements as required by PB-6.2.
 
+#[cfg(test)]
 use ebur128_stream::{AnalyzerBuilder, Channel, Mode};
 
-/// Preallocated buffer capacity for master samples (stereo interleaved).
-/// A typical block is 128-1024 frames, so 2048 frames is generous.
-const MAX_BLOCK_FRAMES: usize = 2048;
+/// BS.1770 Annex 2 polyphase FIR coefficients, ordered newest sample first.
+/// Four phases of twelve taps; filter history is independent of block size.
+const TRUE_PEAK_COEFFICIENTS: [[f32; 12]; 4] = [
+    [0.0017089844, 0.010986328, -0.01965332, 0.033203125, -0.059448242, 0.1373291,
+     0.97216797, -0.10229492, 0.047607422, -0.026611328, 0.014892578, -0.0083007813],
+    [-0.029174805, 0.029296875, -0.051757812, 0.089111328, -0.16650391, 0.46508789,
+     0.77978516, -0.20031738, 0.1015625, -0.05822754, 0.033081055, -0.018920898],
+    [-0.018920898, 0.033081055, -0.05822754, 0.1015625, -0.20031738, 0.77978516,
+     0.46508789, -0.16650391, 0.089111328, -0.051757812, 0.029296875, -0.029174805],
+    [-0.0083007813, 0.014892578, -0.026611328, 0.047607422, -0.10229492, 0.97216797,
+     0.1373291, -0.059448242, 0.033203125, -0.01965332, 0.010986328, 0.0017089844],
+];
 
 /// Realtime master meter for the audio engine callback.
 ///
@@ -28,15 +38,15 @@ const MAX_BLOCK_FRAMES: usize = 2048;
 /// - **True peak**: oversampled inter-sample peak (dBTP, BS.1770 Annex 2)
 /// - **RMS**: root mean square level (dBFS)
 ///
-/// All three are reset per block and reported via the meter snapshot.
+/// Window accumulators reset on reporting; the FIR delay lines do not.
 pub struct RealtimeMasterMeter {
-    // ebur128-stream analyzer in TruePeak-only mode
-    analyzer: ebur128_stream::Analyzer,
-    // Preallocated buffer for collecting block samples (stereo interleaved f32)
-    sample_buf: Vec<f32>,
-    // Number of samples collected in the current block (for true-peak buffer)
-    sample_count: usize,
-    // Number of stereo pairs processed (for RMS, includes overflow)
+    // Continuous stereo FIR state, newest sample first
+    delay: [[f32; 12]; 2],
+    // Maximum reconstructed magnitude in the current reporting window
+    block_true_peak: f64,
+    // Invalid samples make true peak unavailable for this window
+    invalid_input: bool,
+    // Number of stereo pairs processed (for RMS, without a buffer limit)
     pair_count: usize,
     // Per-block sample peak (linear, max absolute value)
     block_sample_peak: f64,
@@ -46,19 +56,12 @@ pub struct RealtimeMasterMeter {
 
 impl RealtimeMasterMeter {
     /// Create a new realtime master meter for the given sample rate.
-    /// The analyzer is configured for stereo TruePeak-only mode.
-    pub fn new(sample_rate: u32) -> Self {
-        let analyzer = AnalyzerBuilder::new()
-            .sample_rate(sample_rate)
-            .channels(&[Channel::Left, Channel::Right])
-            .modes(Mode::TruePeak)
-            .build()
-            .expect("Failed to build true-peak analyzer");
-
+    /// The FIR uses 4x reconstruction at every supported engine rate.
+    pub fn new(_sample_rate: u32) -> Self {
         Self {
-            analyzer,
-            sample_buf: vec![0.0f32; MAX_BLOCK_FRAMES * 2],
-            sample_count: 0,
+            delay: [[0.0; 12]; 2],
+            block_true_peak: 0.0,
+            invalid_input: false,
             pair_count: 0,
             block_sample_peak: 0.0,
             block_sum_sq: 0.0,
@@ -66,10 +69,15 @@ impl RealtimeMasterMeter {
     }
 
     /// Process one stereo sample pair. Called per sample in the callback.
-    /// The sample is buffered; call `finalize_block()` at block end to
-    /// compute true peak and reset for the next block.
+    /// Each sample is reconstructed immediately; `finalize_block()` reports
+    /// the current window without interrupting the filter history.
     #[inline]
     pub fn process(&mut self, left: f64, right: f64) {
+        let sanitize = |s: f64| if s.is_finite() && (s as f32).is_finite() { s } else { 0.0 };
+        let valid_left = sanitize(left);
+        let valid_right = sanitize(right);
+        self.invalid_input |= valid_left != left || valid_right != right;
+        let (left, right) = (valid_left, valid_right);
         // Track sample peak and RMS directly (no oversampling needed)
         let abs_l = left.abs();
         let abs_r = right.abs();
@@ -80,11 +88,18 @@ impl RealtimeMasterMeter {
         self.block_sum_sq += left * left + right * right;
         self.pair_count += 1;
 
-        // Buffer sample for true-peak analysis
-        if self.sample_count < MAX_BLOCK_FRAMES * 2 {
-            self.sample_buf[self.sample_count] = left as f32;
-            self.sample_buf[self.sample_count + 1] = right as f32;
-            self.sample_count += 2;
+        // Reconstruct all four phases with fixed-size continuous history
+        self.block_true_peak = self.block_true_peak.max(max_abs);
+        for (delay, sample) in self.delay.iter_mut().zip([left, right]) {
+            delay.copy_within(..11, 1);
+            delay[0] = sample as f32;
+            for coefficients in &TRUE_PEAK_COEFFICIENTS {
+                let mut reconstructed = 0.0f32;
+                for (&coefficient, &sample) in coefficients.iter().zip(delay.iter()) {
+                    reconstructed += coefficient * sample;
+                }
+                self.block_true_peak = self.block_true_peak.max(reconstructed.abs() as f64);
+            }
         }
     }
 
@@ -92,32 +107,30 @@ impl RealtimeMasterMeter {
     /// Returns (sample_peak_linear, true_peak_dbtp, rms_linear).
     /// Resets all per-block state for the next block.
     pub fn finalize_block(&mut self) -> (f64, Option<f64>, f64) {
-        // Push buffered samples to the true-peak analyzer
-        if self.sample_count > 0 {
-            // Ignore errors (NonFiniteSample would only come from NaN/inf,
-            // which the engine should never produce)
-            let _ = self.analyzer
-                .push_interleaved::<f32>(&self.sample_buf[..self.sample_count]);
-        }
+        // Report the reconstructed maximum for all frames in the window
+        let true_peak_dbtp = if self.block_true_peak > 0.0 && !self.invalid_input {
+            // Keep unavailable or invalid readings out of logarithmic output,
+            // including empty windows and silence
+            Some(20.0 * self.block_true_peak.log10())
+        } else {
+            None
+        };
 
-        // Read true peak from the analyzer snapshot
-        let snapshot = self.analyzer.snapshot();
-        let true_peak_dbtp = snapshot.true_peak_dbtp();
+        // Clear the peak accumulator, preserving continuous FIR history
+        self.block_true_peak = 0.0;
+        self.invalid_input = false;
 
-        // Reset analyzer for the next block (retains configuration)
-        self.analyzer.reset();
+        // Keep the delay lines intact for reconstruction across windows
+        let sample_peak = self.block_sample_peak;
 
-        // Compute RMS (use pair_count, not sample_count, to include overflow)
+        // Compute RMS from every stereo pair in this reporting window
         let rms = if self.pair_count > 0 {
             (self.block_sum_sq / (2.0 * self.pair_count as f64)).sqrt()
         } else {
             0.0
         };
 
-        let sample_peak = self.block_sample_peak;
-
         // Reset per-block state
-        self.sample_count = 0;
         self.pair_count = 0;
         self.block_sample_peak = 0.0;
         self.block_sum_sq = 0.0;
@@ -127,8 +140,9 @@ impl RealtimeMasterMeter {
 
     /// Reset all state (e.g., when the engine is reconfigured).
     pub fn reset(&mut self) {
-        self.analyzer.reset();
-        self.sample_count = 0;
+        self.delay = [[0.0; 12]; 2];
+        self.block_true_peak = 0.0;
+        self.invalid_input = false;
         self.pair_count = 0;
         self.block_sample_peak = 0.0;
         self.block_sum_sq = 0.0;
@@ -138,6 +152,41 @@ impl RealtimeMasterMeter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pb62_true_peak_is_independent_of_report_boundaries() {
+        for sr in [44_100, 48_000, 96_000] {
+            let signal: Vec<f32> = (0..4096).map(|i| {
+                (std::f64::consts::FRAC_PI_2 * i as f64 + std::f64::consts::FRAC_PI_4).sin() as f32 * 0.9
+            }).chain(std::iter::repeat_n(0.0, 24)).collect();
+            let mut reference = AnalyzerBuilder::new().sample_rate(sr)
+                .channels(&[Channel::Left, Channel::Right]).modes(Mode::TruePeak).build().unwrap();
+            for &s in &signal { reference.push_interleaved(&[s, -s]).unwrap(); }
+            let expected = reference.snapshot().true_peak_dbtp().unwrap();
+            for chunk in [1, 7, 64, 128, 511, 2048, 8192] {
+                let mut meter = RealtimeMasterMeter::new(sr);
+                let mut peak = f64::NEG_INFINITY;
+                for part in signal.chunks(chunk) {
+                    for &s in part { meter.process(s as f64, -s as f64); }
+                    peak = peak.max(meter.finalize_block().1.unwrap_or(f64::NEG_INFINITY));
+                }
+                assert!((peak - expected).abs() < 1e-5, "sr={sr}, chunk={chunk}: {peak} vs {expected}");
+            }
+        }
+    }
+
+    #[test]
+    fn pb62_true_peak_captures_late_large_buffer_transient() {
+        let mut meter = RealtimeMasterMeter::new(96_000);
+        for _ in 0..3000 { meter.process(0.0, 0.0); }
+        for i in 0..128 {
+            let s = (std::f64::consts::FRAC_PI_2 * i as f64 + std::f64::consts::FRAC_PI_4).sin();
+            meter.process(0.0, s);
+        }
+        for _ in 0..24 { meter.process(0.0, 0.0); }
+        let (sp, tp, _) = meter.finalize_block();
+        assert!(tp.unwrap_or(f64::NEG_INFINITY) > 20.0 * sp.log10() + 1.0);
+    }
 
     #[test]
     fn silence_produces_zero_meter() {
@@ -195,10 +244,10 @@ mod tests {
         assert!(rms > 0.5, "rms should be substantial, got {}", rms);
     }
 
-    /// PB-6.2: Meter is allocation-free in steady state.
-    /// This test verifies that processing many blocks doesn't grow memory.
-    /// (We can't directly measure allocations, but we can verify the
-    /// buffer doesn't grow and the meter stays stable.)
+    /// PB-6.2: Readings remain stable across many reporting windows.
+    /// This is a numerical stability test, not an allocation measurement.
+    /// The separate callback allocation audit measures Rust heap activity;
+    /// this test checks peak and RMS values on a repeating signal.
     #[test]
     fn meter_is_stable_across_many_blocks() {
         let mut meter = RealtimeMasterMeter::new(48000);
@@ -217,21 +266,52 @@ mod tests {
         }
     }
 
-    /// PB-6.2: Meter handles blocks larger than the preallocated buffer
-    /// without panicking (excess samples are dropped from true-peak
-    /// analysis, but sample peak and RMS are still accurate).
+    /// PB-6.2: Meter handles blocks larger than the former buffer limit
+    /// without dropping samples from true-peak analysis; sample peak
+    /// and RMS include every stereo pair as well.
     #[test]
     fn meter_handles_large_blocks_gracefully() {
         let mut meter = RealtimeMasterMeter::new(48000);
-        // Process more than MAX_BLOCK_FRAMES samples
-        for _ in 0..(MAX_BLOCK_FRAMES + 100) {
+        // Process more than the former 2048-frame buffer capacity
+        for _ in 0..8192 {
             meter.process(0.5, 0.5);
         }
         let (sp, tp, rms) = meter.finalize_block();
         // Sample peak and RMS should still be correct
         assert!((sp - 0.5).abs() < 1e-9, "sample peak should be 0.5, got {}", sp);
         assert!(rms > 0.49 && rms < 0.51, "rms should be ~0.5, got {}", rms);
-        // True peak may or may not be present (buffer overflow drops samples)
-        // but it shouldn't panic
+        // True peak must include the sample peak as a lower bound
+        // and remain finite for valid, non-silent input
+        assert!(tp.unwrap() >= 20.0 * sp.log10());
+    }
+
+    #[test]
+    fn pb62_meter_recovers_after_invalid_input_and_reset() {
+        let mut meter = RealtimeMasterMeter::new(48_000);
+        for s in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, f64::MAX] {
+            meter.process(s, 0.0);
+        }
+        let (sp, tp, rms) = meter.finalize_block();
+        assert_eq!((sp, tp, rms), (0.0, None, 0.0));
+        for _ in 0..64 { meter.process(0.25, -0.5); }
+        let (sp, tp, rms) = meter.finalize_block();
+        assert_eq!(sp, 0.5);
+        assert!(tp.unwrap().is_finite());
+        assert!((rms - (0.3125f64 / 2.0).sqrt()).abs() < 1e-9);
+        meter.reset();
+        assert_eq!(meter.finalize_block(), (0.0, None, 0.0));
+        for _ in 0..64 { meter.process(0.0, 0.0); }
+        assert_eq!(meter.finalize_block(), (0.0, None, 0.0));
+    }
+
+    #[test]
+    fn pb62_true_peak_falls_after_signal_and_fir_tail() {
+        let mut meter = RealtimeMasterMeter::new(48_000);
+        for _ in 0..128 { meter.process(0.5, -0.5); }
+        assert!(meter.finalize_block().1.is_some());
+        for _ in 0..12 { meter.process(0.0, 0.0); }
+        meter.finalize_block();
+        for _ in 0..128 { meter.process(0.0, 0.0); }
+        assert_eq!(meter.finalize_block(), (0.0, None, 0.0));
     }
 }

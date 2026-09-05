@@ -14,6 +14,47 @@ Key + BPM detection accuracy against labelled corpora.
 
 Updated after each measured change.
 
+## Playback metering regression baseline — 2026-09-04
+
+This is playback-engine evidence, separate from key/BPM accuracy. No acoustic
+analysis algorithm or frozen model is changed by PB-6.2 completion.
+
+Baseline: `2be792c`, with new regression tests before the meter fix:
+`cargo test --lib pb62 -- --nocapture` — **0 passed, 3 failed**.
+
+- Reporting-boundary test: at 44.1 kHz, one-frame reports measured
+  -3.925450 dBTP versus -0.832502 dBTP from continuous `ebur128-stream`.
+- Large-buffer test: true peak missed the signal after 3,000 silent frames.
+- Callback-window test: RMS did not include earlier audio in the reporting
+  window (the final callback was silent).
+
+The performance harness allocated `block_size` stereo samples while budgeting
+`block_size` frames. It now allocates twice that number of samples; timing
+results from the old harness must not be compared as equal-frame workloads.
+Post-fix correctness and release timing results are recorded below when run.
+
+### Post-fix results (2026-09-04)
+
+`cargo test --lib pb62` — **7 passed, 0 failed**.
+
+- Reporting-boundary test: true peak now matches continuous `ebur128-stream`
+  reference within 1e-5 dB across chunk sizes 1–8192 at 44.1, 48, and 96 kHz.
+- Large-buffer test: true peak captures late transients after 3000+ silent
+  frames (no buffer overflow drop).
+- Callback-window test: RMS and sample peak reflect the full reporting
+  window, not just the last callback.
+- Invalid-input test: NaN/inf/MAX sanitized; meter recovers and `reset()`
+  returns clean state.
+- FIR-tail test: true peak returns to `None` after signal stops and FIR
+  history drains.
+
+`cargo test --lib` — **219 passed, 1 failed, 7 ignored**.
+The 1 failure is a pre-existing environment issue (SteelSeries Sonar virtual
+audio device does not support stereo output) unrelated to PB-6.2.
+
+`cargo test --release --lib perf_2_decks_48k_256 -- --ignored`:
+2 decks @ 48k/256: max=1735µs, avg=297µs, p99=1574µs, budget=5333µs — **PASS**.
+
 ## Method
 
 - **MIK corpus:** Personal library export (20,221 rows, 18,909 ready).
