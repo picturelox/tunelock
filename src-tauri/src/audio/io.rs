@@ -199,9 +199,11 @@ pub fn enumerate_output_devices() -> Result<AudioDeviceList, String> {
 /// Resolve an AudioDeviceConfig to a concrete CPAL device, stream config,
 /// and the sample format of the selected configuration.
 ///
-/// This selects an ACTUAL supported configuration tuple from the device
-/// rather than blindly overriding the default. Output is always stereo
-/// (2 channels) — multi-output is a future phase.
+/// The engine's internal signal path is always stereo (2 channels). If the
+/// device supports stereo output, we use it. If the device only offers
+/// multi-channel output (e.g., 8ch virtual audio devices), we accept the
+/// device's native channel count and the callback writes stereo into the
+/// first two channels, leaving the rest silent.
 ///
 /// Returns the device, stream config, sample rate, and sample format.
 /// The caller MUST use the returned sample format to construct the
@@ -230,11 +232,10 @@ pub(crate) fn resolve_config(
             .ok_or("No audio output device available")?,
     };
 
-    // Find a stereo supported config that matches the requested sample rate.
-    // We always force stereo (2 channels) for PB-3 MVP.
-    let supported_configs = device
+    let supported_configs: Vec<_> = device
         .supported_output_configs()
-        .map_err(|e| format!("Failed to get supported configs: {}", e))?;
+        .map_err(|e| format!("Failed to get supported configs: {}", e))?
+        .collect();
 
     let target_sr = config.sample_rate.unwrap_or_else(|| {
         // Fall back to device default, or 44100 if no default available
@@ -245,62 +246,109 @@ pub(crate) fn resolve_config(
             .unwrap_or(44100)
     });
 
-    // Find a stereo config that supports the target sample rate.
-    // Prefer F32 format; fall back to any stereo config.
-    let mut best_config: Option<cpal::SupportedStreamConfig> = None;
-    for sc in supported_configs {
+    // Strategy:
+    // 1. Try to find a stereo (2ch) config at the target sample rate.
+    // 2. If no stereo config exists, accept the device's default config
+    //    (which may be 8ch or other). The callback will write stereo into
+    //    channels 0/1 and zero the rest.
+    // 3. Prefer F32 format in both cases.
+
+    // Step 1: look for stereo at the target rate.
+    let mut best_stereo: Option<cpal::SupportedStreamConfig> = None;
+    for sc in supported_configs.iter() {
         if sc.channels() != 2 {
             continue;
         }
         let min_sr = sc.min_sample_rate().0;
         let max_sr = sc.max_sample_rate().0;
         if target_sr >= min_sr && target_sr <= max_sr {
-            // Prefer F32; otherwise take the first matching stereo config
             if sc.sample_format() == cpal::SampleFormat::F32 {
-                best_config = Some(sc.with_sample_rate(SampleRate(target_sr)));
+                best_stereo = Some(sc.with_sample_rate(SampleRate(target_sr)));
                 break;
             }
-            if best_config.is_none() {
-                best_config = Some(sc.with_sample_rate(SampleRate(target_sr)));
+            if best_stereo.is_none() {
+                best_stereo = Some(sc.with_sample_rate(SampleRate(target_sr)));
             }
         }
     }
 
-    let supported = match best_config {
-        Some(sc) => sc,
-        None => {
-            // No stereo config at the requested rate. Try the device default.
-            let default_cfg = device
-                .default_output_config()
-                .map_err(|e| format!("Failed to get default config: {}", e))?;
-            if default_cfg.channels() != 2 {
-                return Err(format!(
-                    "Device '{}' does not support stereo output (default: {}ch)",
-                    device.name().unwrap_or_default(),
-                    default_cfg.channels()
-                ));
-            }
-            // Use default sample rate if the requested one isn't supported
-            let default_sr = default_cfg.sample_rate().0;
-            if config.sample_rate.is_some() {
-                // User explicitly requested a rate that isn't supported
-                return Err(format!(
-                    "Device '{}' does not support stereo at {} Hz (try {} Hz)",
-                    device.name().unwrap_or_default(),
-                    target_sr,
-                    default_sr
-                ));
-            }
-            default_cfg
+    if let Some(sc) = best_stereo {
+        let sample_rate = sc.sample_rate().0;
+        let sample_format = sc.sample_format();
+        let mut stream_config: StreamConfig = sc.into();
+        stream_config.channels = 2; // Stereo
+
+        if let Some(buf_pref) = config.buffer_size {
+            stream_config.buffer_size = match buf_pref {
+                BufferSizePreference::Default => cpal::BufferSize::Default,
+                BufferSizePreference::LowLatency64 => cpal::BufferSize::Fixed(64),
+                BufferSizePreference::LowLatency128 => cpal::BufferSize::Fixed(128),
+                BufferSizePreference::Fixed(n) => cpal::BufferSize::Fixed(n),
+            };
         }
-    };
 
-    let sample_rate = supported.sample_rate().0;
-    let sample_format = supported.sample_format();
+        return Ok((device, stream_config, sample_rate, sample_format));
+    }
 
-    // Build the stream config from the actual supported config
-    let mut stream_config: StreamConfig = supported.into();
-    stream_config.channels = 2; // Force stereo
+    // Step 2: no stereo config at the target rate. Fall back to the device's
+    // default config, which may have a different channel count (e.g., 8ch).
+    // The callback will write stereo into the first two channels.
+    let default_cfg = device
+        .default_output_config()
+        .map_err(|e| format!("Failed to get default config for '{}': {}", device.name().unwrap_or_default(), e))?;
+
+    let default_sr = default_cfg.sample_rate().0;
+    let default_ch = default_cfg.channels();
+
+    // If the user explicitly requested a sample rate that differs from the
+    // default, try to find ANY config (any channel count) at that rate.
+    if config.sample_rate.is_some() && target_sr != default_sr {
+        // Look for any config at the target rate.
+        let mut best_any: Option<cpal::SupportedStreamConfig> = None;
+        for sc in supported_configs.iter() {
+            let min_sr = sc.min_sample_rate().0;
+            let max_sr = sc.max_sample_rate().0;
+            if target_sr >= min_sr && target_sr <= max_sr {
+                if sc.sample_format() == cpal::SampleFormat::F32 {
+                    best_any = Some(sc.with_sample_rate(SampleRate(target_sr)));
+                    break;
+                }
+                if best_any.is_none() {
+                    best_any = Some(sc.with_sample_rate(SampleRate(target_sr)));
+                }
+            }
+        }
+        if let Some(sc) = best_any {
+            let sample_rate = sc.sample_rate().0;
+            let sample_format = sc.sample_format();
+            let mut stream_config: StreamConfig = sc.into();
+            // Keep the native channel count — the callback handles routing.
+
+            if let Some(buf_pref) = config.buffer_size {
+                stream_config.buffer_size = match buf_pref {
+                    BufferSizePreference::Default => cpal::BufferSize::Default,
+                    BufferSizePreference::LowLatency64 => cpal::BufferSize::Fixed(64),
+                    BufferSizePreference::LowLatency128 => cpal::BufferSize::Fixed(128),
+                    BufferSizePreference::Fixed(n) => cpal::BufferSize::Fixed(n),
+                };
+            }
+
+            return Ok((device, stream_config, sample_rate, sample_format));
+        }
+        // No config at the requested rate at all.
+        return Err(format!(
+            "Device '{}' does not support {} Hz on any channel configuration (try {} Hz)",
+            device.name().unwrap_or_default(),
+            target_sr,
+            default_sr
+        ));
+    }
+
+    // Use the device default config as-is.
+    let sample_rate = default_sr;
+    let sample_format = default_cfg.sample_format();
+    let mut stream_config: StreamConfig = default_cfg.into();
+    // Keep native channel count (may be 2, 8, etc.)
 
     if let Some(buf_pref) = config.buffer_size {
         stream_config.buffer_size = match buf_pref {
@@ -370,8 +418,11 @@ mod tests {
         // This may fail on headless CI; on a real machine it should succeed.
         if let Ok((_, stream_cfg, sr, _)) = resolve_config(&cfg) {
             assert!(sr > 0, "sample rate must be positive");
-            // PB-3 MVP: always stereo
-            assert_eq!(stream_cfg.channels, 2, "output must be stereo");
+            // The engine mixes in stereo internally. If the device supports
+            // stereo, we get 2 channels. If not (e.g., 8ch virtual devices),
+            // we accept the native channel count and the callback writes
+            // stereo into channels 0/1.
+            assert!(stream_cfg.channels >= 2, "output must have at least 2 channels");
         }
     }
 
@@ -393,21 +444,24 @@ mod tests {
             sample_rate: Some(48000),
             buffer_size: None,
         };
-        // May fail on headless CI or devices that don't support 48k stereo.
+        // May fail on headless CI or devices that don't support 48k.
         if let Ok((_, stream_cfg, sr, _)) = resolve_config(&cfg) {
             assert_eq!(sr, 48000, "requested sample rate must be honored");
-            assert_eq!(stream_cfg.channels, 2, "output must be stereo");
+            assert!(stream_cfg.channels >= 2, "output must have at least 2 channels");
         }
     }
 
     #[test]
-    fn resolve_config_forces_stereo_even_if_device_supports_more() {
-        // Many devices support 8-channel output. We should always get 2.
+    fn resolve_config_prefers_stereo_but_accepts_multichannel() {
+        // Many devices (e.g., virtual audio devices) default to 8-channel
+        // output and don't offer stereo. The engine should accept the
+        // native channel count rather than failing.
         let cfg = AudioDeviceConfig::default();
         if let Ok((_, stream_cfg, _, _)) = resolve_config(&cfg) {
-            assert_eq!(
-                stream_cfg.channels, 2,
-                "PB-3 MVP must force stereo regardless of device capability"
+            assert!(
+                stream_cfg.channels >= 2,
+                "output must have at least 2 channels (got {})",
+                stream_cfg.channels
             );
         }
     }

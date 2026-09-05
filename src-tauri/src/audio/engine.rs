@@ -698,6 +698,7 @@ impl AudioEngine {
         );
 
         let config = stream_config;
+        let output_channels = config.channels as usize;
         let err_fn = |err| eprintln!("Audio stream error: {}", err);
 
         let stream = match sample_format {
@@ -707,7 +708,7 @@ impl AudioEngine {
                     .build_output_stream(
                         &config,
                         move |buffer: &mut [f32], _| {
-                            audio_callback_f32(&mut state, buffer);
+                            audio_callback_f32(&mut state, buffer, output_channels);
                         },
                         err_fn,
                         None,
@@ -728,7 +729,7 @@ impl AudioEngine {
                                 while offset < total {
                                     let n = chunk_size.min(total - offset);
                                     let scratch_slice = &mut scratch[..n];
-                                    audio_callback_f32(&mut state, scratch_slice);
+                                    audio_callback_f32(&mut state, scratch_slice, output_channels);
                                     for i in 0..n {
                                         buffer[offset + i] = (scratch_slice[i] * i16::MAX as f32)
                                             .clamp(-32768.0, 32767.0) as i16;
@@ -863,12 +864,12 @@ impl AudioEngine {
 /// Event-sliced rendering: the block is rendered in slices between pending
 /// command frames, so a command scheduled for halfway through the block
 /// takes effect at that exact frame.
-pub fn audio_callback_f32(state: &mut CallbackState, output: &mut [f32]) {
-    // PB-3 MVP: the engine's internal signal path is always stereo (2ch).
-    // resolve_config() forces stream_config.channels = 2, so the output
-    // buffer should always be interleaved stereo. If it isn't (e.g., a
-    // device driver quirk), we handle it gracefully.
-    let channels = 2;
+///
+/// The engine's internal signal path is always stereo (2 channels).
+/// `output_channels` is the actual device channel count (may be 2, 8, etc.).
+/// Stereo is written to channels 0 and 1; remaining channels are zeroed.
+pub fn audio_callback_f32(state: &mut CallbackState, output: &mut [f32], output_channels: usize) {
+    let channels = output_channels.max(2);
     let frames = output.len() / channels;
     let block_start = state.frame_counter.load(Ordering::Relaxed);
     let block_end = block_start + frames as u64;
@@ -975,9 +976,14 @@ fn render_slice(state: &mut CallbackState, output: &mut [f32], channels: usize) 
 
         // Write output — hard-clamped at the output stage only (transparent
         // below 0 dBFS; the DAC would clip anyway).
+        // The engine mixes in stereo; channels 0 and 1 carry the signal.
+        // Extra channels (2..N) are zeroed for multi-channel devices.
         frame[0] = mix_l.clamp(-1.0, 1.0) as f32;
         if channels >= 2 {
             frame[1] = mix_r.clamp(-1.0, 1.0) as f32;
+        }
+        for ch in 2..channels {
+            frame[ch] = 0.0;
         }
     }
 }
@@ -1011,7 +1017,7 @@ mod tests {
         // At 44100 Hz with 256-frame blocks, each callback is ~5.8 ms.
         // 12 callbacks ≈ 70 ms, which is at least two 33 ms meter windows.
         for _ in 0..12 {
-            audio_callback_f32(&mut state, &mut out);
+            audio_callback_f32(&mut state, &mut out, 2);
         }
         let meters = state.meter_snapshot.read_all();
         // The meter should report a non-zero RMS and peak from the
@@ -1060,7 +1066,7 @@ mod tests {
 
     /// Render one block through the real callback path.
     fn render(state: &mut CallbackState, output: &mut [f32]) {
-        audio_callback_f32(state, output);
+        audio_callback_f32(state, output, 2);
     }
 
     #[test]

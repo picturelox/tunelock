@@ -97,13 +97,13 @@ mod tests {
         // Skip warm-up (first 100 blocks to get past initial ring-filling
         // and pre-roll spikes). We want to measure steady-state behavior.
         for _ in 0..100 {
-            audio_callback_f32(state, &mut buf);
+            audio_callback_f32(state, &mut buf, 2);
         }
 
         // Measure
         for _ in 0..num_blocks {
             let start = Instant::now();
-            audio_callback_f32(state, &mut buf);
+            audio_callback_f32(state, &mut buf, 2);
             let elapsed = start.elapsed().as_secs_f64() * 1e6;
             times_us.push(elapsed);
         }
@@ -274,7 +274,7 @@ mod tests {
         launch_deck(&mut state, 0, 220.0, 1.06);
         let mut buf = vec![0.0f32; block_size * 2];
         for _ in 0..100 {
-            audio_callback_f32(&mut state, &mut buf);
+            audio_callback_f32(&mut state, &mut buf, 2);
         }
 
         // Now schedule deck 1 launch at the start of the next block
@@ -290,7 +290,7 @@ mod tests {
 
         // Measure the callback containing the launch
         let start = Instant::now();
-        audio_callback_f32(&mut state, &mut buf);
+        audio_callback_f32(&mut state, &mut buf, 2);
         let launch_us = start.elapsed().as_secs_f64() * 1e6;
 
         eprintln!(
@@ -319,7 +319,7 @@ mod tests {
         // Get into steady state
         let mut buf = vec![0.0f32; block_size * 2];
         for _ in 0..200 {
-            audio_callback_f32(&mut state, &mut buf);
+            audio_callback_f32(&mut state, &mut buf, 2);
         }
 
         // Schedule a seek on deck 0 (jump forward ~10 beats)
@@ -332,7 +332,7 @@ mod tests {
 
         // Measure the callback containing the seek
         let start = Instant::now();
-        audio_callback_f32(&mut state, &mut buf);
+        audio_callback_f32(&mut state, &mut buf, 2);
         let seek_us = start.elapsed().as_secs_f64() * 1e6;
 
         eprintln!(
@@ -376,13 +376,13 @@ mod tests {
 
         // Skip initial warm-up
         for _ in 0..50 {
-            audio_callback_f32(&mut state, &mut buf);
+            audio_callback_f32(&mut state, &mut buf, 2);
         }
 
         // Measure 200 blocks — the loop should wrap multiple times
         for _ in 0..200 {
             let start = Instant::now();
-            audio_callback_f32(&mut state, &mut buf);
+            audio_callback_f32(&mut state, &mut buf, 2);
             let elapsed = start.elapsed().as_secs_f64() * 1e6;
 
             // Check if position wrapped (audible position near 0 after being
@@ -408,3 +408,4 @@ mod tests {
         );
     }
 }
+

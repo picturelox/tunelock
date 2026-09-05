@@ -107,7 +107,7 @@ mod tests {
 
     #[track_caller]
     fn audited_callback(state: &mut CallbackState, output: &mut [f32]) {
-        let counts = measure_allocations(|| audio_callback_f32(state, output));
+        let counts = measure_allocations(|| audio_callback_f32(state, output, 2));
         assert_eq!(counts, AllocationCounts::default(), "Rust heap activity in audio callback");
     }
 

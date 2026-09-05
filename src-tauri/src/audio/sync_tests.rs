@@ -75,7 +75,7 @@ mod tests {
         let mut output = Vec::new();
         let mut buf = vec![0.0f32; block_size];
         for _ in 0..blocks {
-            audio_callback_f32(state, &mut buf);
+            audio_callback_f32(state, &mut buf, 2);
             output.extend_from_slice(&buf);
         }
         output
@@ -150,14 +150,14 @@ mod tests {
         // Render a few blocks to get past warm-up
         let mut buf256 = vec![0.0f32; 256];
         for _ in 0..20 {
-            audio_callback_f32(&mut state, &mut buf256);
+            audio_callback_f32(&mut state, &mut buf256, 2);
         }
 
         // Now sample the position at several points within blocks
         let pos1 = state.player_position_sec(0);
         // Render 100 more frames (not a full block — we render a block and
         // check position before and after)
-        audio_callback_f32(&mut state, &mut buf256);
+        audio_callback_f32(&mut state, &mut buf256, 2);
         let pos2 = state.player_position_sec(0);
 
         // Position should have advanced by roughly 256 frames / 44100 ≈ 5.8ms.
@@ -257,7 +257,7 @@ mod tests {
         // Render 20 blocks at unity tempo
         let mut buf256 = vec![0.0f32; 256];
         for _ in 0..20 {
-            audio_callback_f32(&mut state, &mut buf256);
+            audio_callback_f32(&mut state, &mut buf256, 2);
         }
         let pos_before = state.player_position_sec(0);
 
@@ -270,7 +270,7 @@ mod tests {
         });
 
         // Render one more block
-        audio_callback_f32(&mut state, &mut buf256);
+        audio_callback_f32(&mut state, &mut buf256, 2);
         let pos_after = state.player_position_sec(0);
 
         // Position should have advanced (not jumped backward or stayed frozen)
@@ -327,7 +327,7 @@ mod tests {
         let mut buf256 = vec![0.0f32; 256];
         let mut max_pos_sec: f64 = 0.0;
         for _ in 0..200 {
-            audio_callback_f32(&mut state, &mut buf256);
+            audio_callback_f32(&mut state, &mut buf256, 2);
             let pos = state.player_position_sec(0);
             max_pos_sec = max_pos_sec.max(pos);
         }
@@ -372,7 +372,7 @@ mod tests {
         // Render a bit
         let mut buf256 = vec![0.0f32; 256];
         for _ in 0..10 {
-            audio_callback_f32(&mut state, &mut buf256);
+            audio_callback_f32(&mut state, &mut buf256, 2);
         }
 
         // Relaunch with a new source — no allocation should occur.
@@ -404,7 +404,7 @@ mod tests {
         // Render more — should not panic. Render enough to get past
         // pre-roll/latency warm-up.
         for _ in 0..100 {
-            audio_callback_f32(&mut state, &mut buf256);
+            audio_callback_f32(&mut state, &mut buf256, 2);
         }
 
         // Verify audio is still being produced (after warm-up)
@@ -484,7 +484,7 @@ mod tests {
         });
         // Process commands
         let mut tmp = vec![0.0f32; 256];
-        audio_callback_f32(state, &mut tmp);
+        audio_callback_f32(state, &mut tmp, 2);
     }
 
     #[test]
@@ -514,7 +514,7 @@ mod tests {
 
         // Process commands
         let mut buf256 = vec![0.0f32; 256];
-        audio_callback_f32(&mut state, &mut buf256);
+        audio_callback_f32(&mut state, &mut buf256, 2);
 
         // After BeatSync: A's effective BPM = 124, B's effective BPM should also = 124
         let a_eff_after = state.players[0].effective_bpm();
@@ -550,7 +550,7 @@ mod tests {
         // Advance A by some frames so its beat position is non-zero
         let mut buf256 = vec![0.0f32; 256];
         for _ in 0..50 {
-            audio_callback_f32(&mut state, &mut buf256);
+            audio_callback_f32(&mut state, &mut buf256, 2);
         }
 
         // Send BeatSync
@@ -559,7 +559,7 @@ mod tests {
             player_b: PlayerId(1),
             at_frame: state.frame_counter.load(Ordering::Relaxed),
         });
-        audio_callback_f32(&mut state, &mut buf256);
+        audio_callback_f32(&mut state, &mut buf256, 2);
 
         // After BeatSync, both players should be playing
         assert!(state.players[0].playing, "Player A should be playing after BeatSync");
@@ -593,7 +593,7 @@ mod tests {
         // Advance playback
         let mut buf256 = vec![0.0f32; 256];
         for _ in 0..50 {
-            audio_callback_f32(&mut state, &mut buf256);
+            audio_callback_f32(&mut state, &mut buf256, 2);
         }
 
         // Send BarSync
@@ -602,7 +602,7 @@ mod tests {
             player_b: PlayerId(1),
             at_frame: state.frame_counter.load(Ordering::Relaxed),
         });
-        audio_callback_f32(&mut state, &mut buf256);
+        audio_callback_f32(&mut state, &mut buf256, 2);
 
         // After BarSync, both players should be playing
         assert!(state.players[0].playing, "Player A should be playing after BarSync");
@@ -655,7 +655,7 @@ mod tests {
         let mut buf256 = vec![0.0f32; 256];
         let blocks = (30.0 * SR / 256.0) as usize;
         for _ in 0..blocks {
-            audio_callback_f32(&mut state, &mut buf256);
+            audio_callback_f32(&mut state, &mut buf256, 2);
         }
 
         // After 30 seconds, the beat positions should still be close.
@@ -694,7 +694,7 @@ mod tests {
         });
 
         let mut buf256 = vec![0.0f32; 256];
-        audio_callback_f32(&mut state, &mut buf256);
+        audio_callback_f32(&mut state, &mut buf256, 2);
 
         // Position should be ~10.0 seconds
         let pos_sec = state.players[0].get_position_sec();
@@ -713,7 +713,7 @@ mod tests {
             at_frame: state.frame_counter.load(Ordering::Relaxed),
             source_seconds: 10.0,
         });
-        audio_callback_f32(&mut state, &mut buf256);
+        audio_callback_f32(&mut state, &mut buf256, 2);
 
         let pos_sec_slow = state.players[1].get_position_sec();
         assert!(
@@ -723,3 +723,4 @@ mod tests {
         );
     }
 }
+
