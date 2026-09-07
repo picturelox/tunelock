@@ -87,7 +87,8 @@ control surface as a vendor-defined HID interface, not standard MIDI.
 - VID `0x17CC`, PID `0x1900`, interface 3, usage page `0xff01`, serial
   `DE62E256`; product "Traktor Kontrol S3", manufacturer "Native Instruments".
 - Interfaces: MI_00 audio (MEDIA class), MI_03 vendor-defined HID, MI_04 DFU.
-- Input reports are 63 bytes. Byte 0 is the report ID: `0x01` carries
+- A live 271-byte HID descriptor capture reports input `0x01` at 22 bytes and
+  input `0x02` at 63 bytes, including the report-ID byte. `0x01` carries
   buttons/jog and `0x02` carries continuous controls. Their histories are
   decoded independently so interleaved report types cannot create false edges.
 - Jog values are four-byte little-endian fields at raw offset `0x0E` (Deck A)
@@ -112,8 +113,10 @@ control surface as a vendor-defined HID interface, not standard MIDI.
 - The reader start is idempotent, keeps separate short/long predecessors, and
   retries after startup absence or disconnect. Native unplug/replug behavior
   still needs a controlled hardware run.
-- LED output (reverse-engineered from the Mixxx S3 mapping, not a USB trace):
+- LED output (derived from the Mixxx mapping; physical writes not yet traced):
   - Output report `0x80` carries button/state LEDs; `0x81` carries VU meters.
+    The live descriptor confirms lengths of 83 and 79 bytes respectively
+    (and an additional 33-byte output report `0xF4`).
   - Each LED is one byte. Palette LEDs encode `color + brightness` where color
     is `0x00..0x44` in steps of `0x04` (18 colors) and brightness is `0..3`.
     Single-color LEDs use `0x20` (off) / `0x77` (on).
@@ -121,9 +124,14 @@ control surface as a vendor-defined HID interface, not standard MIDI.
     Sync A `0x0C`, Sync B `0x25`. Deck base color is CARROT `0x08`; dim `1`,
     bright `3`.
   - `s3_set_leds` mirrors Play/Cue/Sync backlight from session transport state.
-- Remaining: controlled jog/touch latency and unplug/replug runs, TL-08 control
-  range/soft-takeover decisions, and verification of the 83-byte LED report
-  length against the device's HID descriptor.
+- `cargo run --bin s3-probe -- --descriptor-only` records report lengths
+  without entering the event-capture loop; its descriptor parser has focused
+  synthetic tests.
+- `cargo run --bin s3-probe -- --led-test` was run against the connected
+  Windows S3: hidapi accepted complete 83-byte test and baseline reports.
+  Visual LED state still needs operator confirmation.
+- Remaining: controlled jog/touch latency, unplug/replug and visual LED runs,
+  plus TL-08 control range and soft-takeover decisions.
 
 ## TL-01 implementation result
 

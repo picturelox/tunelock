@@ -5,10 +5,10 @@
 //!
 //! - VID `0x17CC`, PID `0x1900`, interface 3, usage page `0xff01`.
 //! - Product "Traktor Kontrol S3", manufacturer "Native Instruments".
-//! - Input reports are 63 bytes, sent continuously at ~140 Hz while the jog
-//!   is moving and on state changes.
+//! - The device descriptor reports 22-byte `0x01` inputs and 63-byte `0x02`
+//!   inputs. Jog packets arrive at ~140 Hz while the wheel moves.
 //!
-//! Report layout (63 bytes, 0-indexed, including report ID):
+//! Report layout (0-indexed, including report ID):
 //! - byte 0: report ID (`0x01` buttons/jog, `0x02` faders/knobs).
 //! - report `0x01`: buttons at fixed byte/bit offsets and four-byte,
 //!   little-endian jog values at `0x0e` (A) / `0x12` (B).
@@ -30,6 +30,8 @@ pub const S3_PID: u16 = 0x1900;
 pub const REPORT_LEN: usize = 63;
 const SHORT_REPORT_ID: u8 = 0x01;
 const LONG_REPORT_ID: u8 = 0x02;
+const SHORT_REPORT_LEN: usize = 22;
+const LONG_REPORT_LEN: usize = 63;
 
 /// A deck on the S3 (A = left, B = right).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -127,7 +129,8 @@ pub fn release_s3_reader() {
 
 /// Output report ID for button/state LEDs.
 const LED_REPORT_ID: u8 = 0x80;
-/// Output report length (report ID + 82 data bytes), matching Mixxx outputA.
+/// Output report length (report ID + 82 data bytes), confirmed by the live S3
+/// HID descriptor and matching Mixxx outputA.
 const LED_REPORT_LEN: usize = 83;
 
 /// Palette color base values (low 6 bits; brightness occupies the low 2 bits).
@@ -268,14 +271,19 @@ impl Default for S3Report {
     }
 }
 
-/// Parse a 63-byte S3 input report. Returns `None` if the buffer is short.
+/// Parse an S3 input report. Returns `None` for unknown IDs or truncated data.
 pub fn parse_report(data: &[u8]) -> Option<S3Report> {
-    if data.len() < REPORT_LEN {
+    let required_len = match data.first().copied()? {
+        SHORT_REPORT_ID => SHORT_REPORT_LEN,
+        LONG_REPORT_ID => LONG_REPORT_LEN,
+        _ => return None,
+    };
+    if data.len() < required_len {
         return None;
     }
 
     let mut report = [0u8; REPORT_LEN];
-    report.copy_from_slice(&data[..REPORT_LEN]);
+    report[..required_len].copy_from_slice(&data[..required_len]);
 
     Some(S3Report {
         report_id: data[0],
@@ -456,10 +464,14 @@ impl S3Device {
     ///
     /// The caller supplies a complete HID output report, including report ID.
     pub fn write(&self, report: &[u8]) -> Result<(), String> {
-        self.device
-            .write(report)
-            .map(|_| ())
-            .map_err(|e| e.to_string())
+        let written = self.device.write(report).map_err(|e| e.to_string())?;
+        if written != report.len() {
+            return Err(format!(
+                "short S3 HID write: wrote {written} of {} bytes",
+                report.len()
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -477,16 +489,24 @@ mod tests {
     ];
 
     #[test]
-    fn parses_report_id_and_raw_offsets() {
-        let r = parse_report(&JOG_REPORT).expect("63-byte report must parse");
+    fn parses_22_byte_short_report_and_raw_offsets() {
+        let r =
+            parse_report(&JOG_REPORT[..SHORT_REPORT_LEN]).expect("22-byte short report must parse");
         assert_eq!(r.report_id, 0x01);
         assert_eq!(r.data[PLAY_A.0], JOG_REPORT[PLAY_A.0]);
         assert_eq!(read_jog(&r, JOG_A_OFFSET), (0x01, 0xF71BC0));
     }
 
     #[test]
-    fn rejects_short_reports() {
-        assert!(parse_report(&[0u8; 10]).is_none());
+    fn rejects_truncated_or_unknown_reports() {
+        let mut short = [0u8; SHORT_REPORT_LEN];
+        short[0] = SHORT_REPORT_ID;
+        assert!(parse_report(&short[..SHORT_REPORT_LEN - 1]).is_none());
+
+        let mut long = [0u8; LONG_REPORT_LEN];
+        long[0] = LONG_REPORT_ID;
+        assert!(parse_report(&long[..LONG_REPORT_LEN - 1]).is_none());
+        assert!(parse_report(&[0x7F; REPORT_LEN]).is_none());
     }
 
     #[test]
@@ -501,14 +521,14 @@ mod tests {
     }
 
     fn report_with_button(byte: usize, mask: u8) -> S3Report {
-        let mut r = parse_report(&JOG_REPORT).unwrap();
+        let mut r = parse_report(&JOG_REPORT[..SHORT_REPORT_LEN]).unwrap();
         r.data[byte] |= mask;
         r
     }
 
     #[test]
     fn decodes_deck_a_button_edges() {
-        let baseline = parse_report(&JOG_REPORT).unwrap();
+        let baseline = parse_report(&JOG_REPORT[..SHORT_REPORT_LEN]).unwrap();
 
         let play = report_with_button(PLAY_A.0, PLAY_A.1);
         assert!(decode_actions(&baseline, &play).contains(&S3Action::Play {
@@ -535,7 +555,7 @@ mod tests {
 
     #[test]
     fn decodes_deck_b_button_edges() {
-        let baseline = parse_report(&JOG_REPORT).unwrap();
+        let baseline = parse_report(&JOG_REPORT[..SHORT_REPORT_LEN]).unwrap();
 
         let play = report_with_button(PLAY_B.0, PLAY_B.1);
         assert!(decode_actions(&baseline, &play).contains(&S3Action::Play {
@@ -558,7 +578,7 @@ mod tests {
 
     #[test]
     fn decodes_hot_cue_and_touch() {
-        let baseline = parse_report(&JOG_REPORT).unwrap();
+        let baseline = parse_report(&JOG_REPORT[..SHORT_REPORT_LEN]).unwrap();
 
         let hot1 = report_with_button(HOTCUE_A[0].0, HOTCUE_A[0].1);
         assert!(
@@ -597,7 +617,7 @@ mod tests {
 
     #[test]
     fn decodes_jog_distance_and_device_time() {
-        let baseline = parse_report(&JOG_REPORT).unwrap();
+        let baseline = parse_report(&JOG_REPORT[..SHORT_REPORT_LEN]).unwrap();
         let mut moved = baseline;
         let (tick, time) = read_jog(&baseline, JOG_A_OFFSET);
         moved.data[JOG_A_OFFSET] = tick.wrapping_add(30);
@@ -639,7 +659,7 @@ mod tests {
 
     #[test]
     fn does_not_compare_interleaved_report_types() {
-        let short = parse_report(&JOG_REPORT).unwrap();
+        let short = parse_report(&JOG_REPORT[..SHORT_REPORT_LEN]).unwrap();
         let mut long = short;
         long.report_id = LONG_REPORT_ID;
         long.data[0] = LONG_REPORT_ID;
