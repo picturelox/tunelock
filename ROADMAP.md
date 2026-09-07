@@ -150,6 +150,12 @@ manual takeover. Bar/phrase Sync is not a first-release claim.
 phase behavior is measured with nonzero grid origins and corrected grids; missing
 or stale grids fail honestly; the other deck is unaffected.
 
+**Status:** Complete in the working tree. Eight hot-cue slots per player, a
+signed fractional-beat nudge, fractional beat-phase Sync alignment, monotonic
+grid-revision rejection, and Sync acknowledgements are implemented and tested.
+Nonzero-grid-origin phase measurement and manual-takeover definition remain
+part of TL-06 and TL-12; native S3 jog timing is a TL-06/TL-07 hardware gate.
+
 ### TL-06 - Jog, nudge, scratch, and backspin transport
 
 **Outcome:** Mouse and the S3 can perform manual nudges plus occasional expressive

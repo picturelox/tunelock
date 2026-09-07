@@ -120,10 +120,15 @@ pub struct Player {
     // Loop region (in beats, relative to beat grid)
     loop_region: Option<LoopRegion>,
 
+    // Hot-cue slots (positions in beats, relative to the beat grid)
+    hot_cues: [Option<f64>; 8],
+
     // Beat grid for this player's source
     bpm: f64,
     first_beat_sec: f64,
     meter_numerator: i32,
+    // Monotonic beat-grid revision; stale grid attachments are rejected.
+    grid_revision: u64,
 
     // Metering (per-player, this block)
     block_sum_sq: [f64; 2],
@@ -181,9 +186,11 @@ impl Player {
             loudness_match_gain: RampedGain::new(sample_rate),
             pan: 0.0,
             loop_region: None,
+            hot_cues: [None; 8],
             bpm: 120.0,
             first_beat_sec: 0.0,
             meter_numerator: 4,
+            grid_revision: 0,
             block_sum_sq: [0.0; 2],
             block_peak: [0.0; 2],
             clip: [false; 2],
@@ -421,6 +428,36 @@ impl Player {
         self.loop_region = region;
     }
 
+    /// Store a hot-cue position (in beats) in a cue slot.
+    pub fn set_hot_cue(&mut self, slot: u8, beat: f64) {
+        if (slot as usize) < self.hot_cues.len() && beat.is_finite() {
+            self.hot_cues[slot as usize] = Some(beat);
+        }
+    }
+
+    /// Jump to a stored hot-cue position and start playback. Returns false
+    /// if the slot is empty.
+    pub fn jump_hot_cue(&mut self, slot: u8) -> bool {
+        if (slot as usize) >= self.hot_cues.len() {
+            return false;
+        }
+        let Some(beat) = self.hot_cues[slot as usize] else {
+            return false;
+        };
+        self.seek_beats(beat);
+        self.playing = true;
+        true
+    }
+
+    /// Nudge by a signed fractional beat offset (positive = forward).
+    pub fn nudge(&mut self, beats: f64) {
+        if !beats.is_finite() {
+            return;
+        }
+        let current = self.beat_position();
+        self.seek_beats(current + beats);
+    }
+
     pub fn get_position_sec(&self) -> f64 {
         if let Some(buf) = &self.buffer {
             self.processor.position_frames() / buf.sample_rate as f64
@@ -436,6 +473,7 @@ impl Player {
         &mut self,
         source: SourceHandle,
         load_generation: LoadGeneration,
+        grid_revision: u64,
         bpm: f64,
         first_beat_sec: f64,
         meter_numerator: i32,
@@ -444,6 +482,12 @@ impl Player {
         if self.source_handle != Some(source) || self.load_generation != Some(load_generation) {
             return false;
         }
+        // Reject stale grid revisions so a corrected grid cannot be
+        // overwritten by an older analysis result.
+        if grid_revision < self.grid_revision {
+            return false;
+        }
+        self.grid_revision = grid_revision;
         self.bpm = bpm;
         self.first_beat_sec = first_beat_sec;
         self.meter_numerator = meter_numerator;

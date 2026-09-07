@@ -19,10 +19,10 @@ native or hardware evidence.
 | Source lifecycle | Reachable | Each accepted player replacement evicts its prior registry source; stale decode/grid work is generation checked; a deterministic 100-load test holds the registry at one source for that player | TL-12 |
 | Atomic paused loading | Reachable | One `LoadPaused` callback command attaches the source and leaves transport paused; a regression test proves digital silence until explicit resume | TL-12 |
 | Engine initialization ownership | Reachable | Initialization and device replacement share one lifecycle gate; installed engines have monotonic generations; a concurrency test covers serialized changes | TL-12 |
-| Command acknowledgement | Partial | Active load, transport, seek, loop, tempo, pitch, and loudness-gain actions have generation-scoped callback receipts, bounded pressure telemetry, timeout/error handling, and rollback; Sync-specific and legacy direct-control paths remain | TL-05/TL-08 |
-| Two-deck transport | Partial | A/B load/play/pause and synchronized launch use the same session adapter, but the current presentation remains asymmetric | TL-05/TL-12 |
-| Cues and loops | Partial | Loop command and Deck A fixed-bar loop controls exist; a hot-cue data field exists but no production hot-cue workflow was found | TL-05 |
-| Tempo, pitch, and Sync | Partial | Varispeed/Signalsmith, BeatSync, and BarSync exist with synthetic tests; fractional phase, grid revisions, nonzero downbeat origins, and manual takeover are not release-proven | TL-05 |
+| Command acknowledgement | Partial | Active load, transport, seek, loop, tempo, pitch, loudness-gain, hot-cue, nudge, and Sync actions have generation-scoped callback receipts, bounded pressure telemetry, timeout/error handling, and rollback; legacy direct-control paths remain | TL-08 |
+| Two-deck transport | Partial | A/B load/play/pause/seek/cue/loop/nudge and synchronized launch use the same session adapter, but the current presentation remains asymmetric | TL-12 |
+| Cues and loops | Partial | Loop command and Deck A fixed-bar loop controls exist; eight hot-cue slots per deck with set/jump commands exist in the engine and session, but no performance-desk hot-cue workflow is wired yet | TL-12 |
+| Tempo, pitch, and Sync | Partial | Varispeed/Signalsmith, BeatSync, and BarSync exist with synthetic tests; fractional beat phase and grid revisions are now engine-proven, but nonzero downbeat origins and manual takeover are not release-proven | TL-06/TL-12 |
 | Scratch and backspin | Missing | Current varispeed clamps the rate to positive values; no signed jog/hold/reverse transport exists | TL-06 |
 | Deck mixer | Engine only | Per-player gain, pan, mute, solo, bus, EQ, kills, and loops are registered; active Workspace exposes only a subset | TL-08/TL-12 |
 | Crossfader and filters | Engine only | Two buses, crossfade, and bus filters exist; deck identity versus crossfader-side vocabulary is not separated | TL-01/TL-08 |

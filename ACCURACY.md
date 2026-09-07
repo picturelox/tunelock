@@ -122,6 +122,22 @@ headphone output, only cue-selected decks feed the cue bus, and explicit
 routing moves the cue pair. Key/BPM accuracy was not rerun because no analysis
 path changed.
 
+### TL-05 transport recheck (2026-09-06)
+
+Working tree based on the TL-00 through TL-04 checkpoint; TL-05 adds hot cues,
+a signed nudge, fractional beat-phase Sync alignment, grid-revision rejection,
+and Sync acknowledgements. It does not change analysis algorithms, but the
+transport command path changed, so the callback harness was rerun.
+
+`cargo test --release audio::perf_harness::tests::perf_2_decks_48k_256_budget_5333us -- --ignored --nocapture`:
+2 decks @ 48k/256: max=1127 microseconds, avg=262 microseconds, p99=1108
+microseconds, budget=5333 microseconds -- **PASS**.
+
+Focused deterministic tests prove hot-cue set/jump positions correctly, a
+signed nudge shifts beat position, BeatSync aligns fractional beat phase, and a
+stale grid revision is rejected. Key/BPM accuracy was not rerun because no
+analysis path changed.
+
 ## Method
 
 - **MIK corpus:** Personal library export (20,221 rows, 18,909 ready).

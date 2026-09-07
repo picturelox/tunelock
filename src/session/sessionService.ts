@@ -11,6 +11,9 @@ import {
   audioEngineSetCueEnabled,
   audioEngineSetCueGain,
   audioEngineSetCueMasterBlend,
+  audioEngineSetHotCue,
+  audioEngineJumpHotCue,
+  audioEngineNudge,
   audioEngineSetLoop,
   audioEngineSetLoudnessMatchGain,
   audioEngineSetMasterGain,
@@ -316,9 +319,38 @@ class SessionService {
     }
   }
 
+  async setHotCue(deckId: DeckId, slot: number, beat: number): Promise<void> {
+    await this.initialize();
+    const submission = await audioEngineSetHotCue(
+      PLAYER_BY_DECK[deckId],
+      slot,
+      beat,
+    );
+    await this.waitForApplication(deckId, 'seek', submission);
+  }
+
+  async jumpHotCue(deckId: DeckId, slot: number): Promise<void> {
+    await this.initialize();
+    const submission = await audioEngineJumpHotCue(
+      PLAYER_BY_DECK[deckId],
+      slot,
+    );
+    await this.waitForApplication(deckId, 'seek', submission);
+  }
+
+  async nudge(deckId: DeckId, beats: number): Promise<void> {
+    await this.initialize();
+    const submission = await audioEngineNudge(PLAYER_BY_DECK[deckId], beats);
+    await this.waitForApplication(deckId, 'seek', submission);
+  }
+
   async beatSync(leader: DeckId, follower: DeckId): Promise<void> {
     await this.initialize();
-    await audioEngineBeatSync(PLAYER_BY_DECK[leader], PLAYER_BY_DECK[follower]);
+    const submission = await audioEngineBeatSync(
+      PLAYER_BY_DECK[leader],
+      PLAYER_BY_DECK[follower],
+    );
+    await this.waitForApplication(follower, 'sync', submission);
   }
 
   async syncLaunch(first: DeckId, second: DeckId): Promise<void> {
@@ -330,7 +362,11 @@ class SessionService {
 
   async barSync(leader: DeckId, follower: DeckId): Promise<void> {
     await this.initialize();
-    await audioEngineBarSync(PLAYER_BY_DECK[leader], PLAYER_BY_DECK[follower]);
+    const submission = await audioEngineBarSync(
+      PLAYER_BY_DECK[leader],
+      PLAYER_BY_DECK[follower],
+    );
+    await this.waitForApplication(follower, 'sync', submission);
   }
 
   async pollMeters(): Promise<void> {

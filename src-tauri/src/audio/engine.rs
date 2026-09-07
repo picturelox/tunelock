@@ -471,6 +471,24 @@ impl CallbackState {
                     self.players[idx].set_loop(loop_region);
                 }
             }
+            EngineCommand::SetHotCue { player, slot, beat, .. } => {
+                let idx = player.as_index();
+                if idx < MAX_PLAYERS {
+                    self.players[idx].set_hot_cue(slot, beat);
+                }
+            }
+            EngineCommand::JumpHotCue { player, slot, .. } => {
+                let idx = player.as_index();
+                if idx < MAX_PLAYERS {
+                    self.players[idx].jump_hot_cue(slot);
+                }
+            }
+            EngineCommand::Nudge { player, beats, .. } => {
+                let idx = player.as_index();
+                if idx < MAX_PLAYERS {
+                    self.players[idx].nudge(beats);
+                }
+            }
             EngineCommand::SetCrossfade { position, .. } => {
                 self.crossfade_target = position as f64;
             }
@@ -595,14 +613,11 @@ impl CallbackState {
                         let tempo_ratio = a_effective_bpm / b_source_bpm;
                         self.players[idx_b].set_tempo(tempo_ratio as f32);
                     }
-                    // Align beats: seek B to the nearest beat that matches A's beat position.
+                    // Align B's fractional beat phase to A's exact beat
+                    // position (no rounding), so both decks share the same
+                    // sub-beat phase after Sync.
                     let a_beat = self.players[idx_a].beat_position();
-                    let b_beat = self.players[idx_b].beat_position();
-                    let beat_diff = a_beat - b_beat;
-                    // If B is behind A, seek B forward by beat_diff beats.
-                    // If B is ahead, seek B backward. Round to nearest beat.
-                    let target_beat_b = b_beat + beat_diff.round();
-                    self.players[idx_b].seek_beats(target_beat_b);
+                    self.players[idx_b].seek_beats(a_beat);
                     // Start both players
                     self.players[idx_a].play();
                     self.players[idx_b].play();
@@ -637,6 +652,7 @@ impl CallbackState {
                 player,
                 source,
                 load_generation,
+                grid_revision,
                 bpm,
                 first_beat_sec,
                 meter_numerator,
@@ -648,6 +664,7 @@ impl CallbackState {
                     self.players[idx].attach_beat_grid(
                         source,
                         load_generation,
+                        grid_revision,
                         bpm,
                         first_beat_sec,
                         meter_numerator,
@@ -763,6 +780,9 @@ impl CommandFrame for EngineCommand {
             | EngineCommand::SetEqGain { at_frame, .. }
             | EngineCommand::SetEqKill { at_frame, .. }
             | EngineCommand::SetLoop { at_frame, .. }
+            | EngineCommand::SetHotCue { at_frame, .. }
+            | EngineCommand::JumpHotCue { at_frame, .. }
+            | EngineCommand::Nudge { at_frame, .. }
             | EngineCommand::SetCrossfade { at_frame, .. }
             | EngineCommand::SetBusGain { at_frame, .. }
             | EngineCommand::SetBusEq { at_frame, .. }
@@ -1552,6 +1572,7 @@ mod tests {
             at_frame: 0,
             source: SourceHandle(1),
             load_generation: LoadGeneration(1),
+            grid_revision: 1,
             bpm: 77.0,
             first_beat_sec: 0.0,
             meter_numerator: 4,
@@ -1567,6 +1588,7 @@ mod tests {
             at_frame: state.frame_counter.load(Ordering::Relaxed),
             source: SourceHandle(2),
             load_generation: LoadGeneration(2),
+            grid_revision: 1,
             bpm: 140.0,
             first_beat_sec: 0.0,
             meter_numerator: 4,
@@ -2124,5 +2146,192 @@ mod tests {
                 "default cue pair (2,3) must stay silent after rerouting"
             );
         }
+    }
+
+    // ── TL-05: hot cues, nudge, fractional phase, grid revision ───────
+
+    #[test]
+    fn hot_cue_set_and_jump() {
+        let mut state = make_state();
+        state.command_queue.push(EngineCommand::SetMasterGain { at_frame: 0, gain: 1.0 });
+        state.command_queue.push(EngineCommand::SetBus {
+            player: PlayerId(0),
+            at_frame: 0,
+            bus: BusId::Master,
+        });
+        state.command_queue.push(EngineCommand::Launch {
+            player: PlayerId(0),
+            at_frame: 0,
+            source: SourceHandle(1),
+            buffer: constant_buffer(0.3, 44100 * 5),
+            start_beat: 0.0,
+            quantize: Quantize::Immediate,
+        });
+        // Store beat 4.0 in hot-cue slot 0.
+        state.command_queue.push(EngineCommand::SetHotCue {
+            player: PlayerId(0),
+            at_frame: 0,
+            slot: 0,
+            beat: 4.0,
+        });
+
+        let mut out = vec![0.0f32; 512];
+        for _ in 0..5 {
+            render(&mut state, &mut out);
+        }
+
+        // Jump to hot cue 0: position should be ~4 beats = 2.0s at 120 BPM.
+        state.command_queue.push(EngineCommand::JumpHotCue {
+            player: PlayerId(0),
+            at_frame: state.frame_counter.load(Ordering::Relaxed),
+            slot: 0,
+        });
+        render(&mut state, &mut out);
+
+        let pos = state.players[0].get_position_sec();
+        assert!(
+            (pos - 2.0).abs() < 0.05,
+            "hot cue jump should position at ~2.0s, got {pos}"
+        );
+        assert!(state.players[0].playing, "hot cue jump should start playback");
+    }
+
+    #[test]
+    fn nudge_shifts_beat_position() {
+        let mut state = make_state();
+        state.command_queue.push(EngineCommand::SetMasterGain { at_frame: 0, gain: 1.0 });
+        state.command_queue.push(EngineCommand::SetBus {
+            player: PlayerId(0),
+            at_frame: 0,
+            bus: BusId::Master,
+        });
+        state.command_queue.push(EngineCommand::Launch {
+            player: PlayerId(0),
+            at_frame: 0,
+            source: SourceHandle(1),
+            buffer: constant_buffer(0.3, 44100),
+            start_beat: 0.0,
+            quantize: Quantize::Immediate,
+        });
+
+        let mut out = vec![0.0f32; 512];
+        for _ in 0..5 {
+            render(&mut state, &mut out);
+        }
+        let before = state.players[0].beat_position();
+
+        state.command_queue.push(EngineCommand::Nudge {
+            player: PlayerId(0),
+            at_frame: state.frame_counter.load(Ordering::Relaxed),
+            beats: 0.25,
+        });
+        render(&mut state, &mut out);
+
+        let after = state.players[0].beat_position();
+        // The nudge shifts by 0.25 beats, plus one block of playback advance
+        // during the render that applies the command.
+        assert!(
+            (after - before - 0.25).abs() < 0.02,
+            "nudge +0.25 should shift beat position by ~0.25 ({} -> {})",
+            before,
+            after
+        );
+    }
+
+    #[test]
+    fn beat_sync_aligns_fractional_phase() {
+        let mut state = make_state();
+        state.command_queue.push(EngineCommand::SetMasterGain { at_frame: 0, gain: 1.0 });
+        state.command_queue.push(EngineCommand::Launch {
+            player: PlayerId(0),
+            at_frame: 0,
+            source: SourceHandle(1),
+            buffer: constant_buffer(0.3, 44100),
+            start_beat: 0.0,
+            quantize: Quantize::Immediate,
+        });
+        state.command_queue.push(EngineCommand::Launch {
+            player: PlayerId(1),
+            at_frame: 0,
+            source: SourceHandle(2),
+            buffer: constant_buffer(0.3, 44100),
+            start_beat: 0.0,
+            quantize: Quantize::Immediate,
+        });
+        // Different fractional phases: A at 2.3, B at 5.7 beats.
+        state.command_queue.push(EngineCommand::Seek {
+            player: PlayerId(0),
+            at_frame: 0,
+            source_beat: 2.3,
+        });
+        state.command_queue.push(EngineCommand::Seek {
+            player: PlayerId(1),
+            at_frame: 0,
+            source_beat: 5.7,
+        });
+
+        let mut out = vec![0.0f32; 512];
+        render(&mut state, &mut out);
+
+        state.command_queue.push(EngineCommand::BeatSync {
+            player_a: PlayerId(0),
+            player_b: PlayerId(1),
+            at_frame: state.frame_counter.load(Ordering::Relaxed),
+        });
+        render(&mut state, &mut out);
+
+        let a_beat = state.players[0].beat_position();
+        let b_beat = state.players[1].beat_position();
+        assert!(
+            (a_beat - b_beat).abs() < 0.05,
+            "fractional beat phase should align: A={a_beat}, B={b_beat}"
+        );
+    }
+
+    #[test]
+    fn stale_grid_revision_is_rejected() {
+        let mut state = make_state();
+        state.command_queue.push(EngineCommand::LoadPaused {
+            player: PlayerId(0),
+            at_frame: 0,
+            source: SourceHandle(1),
+            buffer: constant_buffer(0.1, 4410),
+            start_beat: 0.0,
+            load_generation: LoadGeneration(1),
+        });
+        state.command_queue.push(EngineCommand::AttachBeatGrid {
+            player: PlayerId(0),
+            at_frame: 0,
+            source: SourceHandle(1),
+            load_generation: LoadGeneration(1),
+            grid_revision: 2,
+            bpm: 130.0,
+            first_beat_sec: 0.0,
+            meter_numerator: 4,
+            downbeat_offset: 0,
+        });
+
+        let mut out = [0.0f32; 2];
+        render(&mut state, &mut out);
+        assert_eq!(state.players[0].source_bpm(), 130.0);
+
+        // A stale (older) grid revision must not overwrite the newer grid.
+        state.command_queue.push(EngineCommand::AttachBeatGrid {
+            player: PlayerId(0),
+            at_frame: state.frame_counter.load(Ordering::Relaxed),
+            source: SourceHandle(1),
+            load_generation: LoadGeneration(1),
+            grid_revision: 1,
+            bpm: 77.0,
+            first_beat_sec: 0.0,
+            meter_numerator: 4,
+            downbeat_offset: 0,
+        });
+        render(&mut state, &mut out);
+        assert_eq!(
+            state.players[0].source_bpm(),
+            130.0,
+            "stale grid revision must be rejected"
+        );
     }
 }

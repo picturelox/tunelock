@@ -2529,6 +2529,86 @@ pub async fn audio_engine_set_loop(state: State<'_, AppState>, player: u8, start
     })
 }
 
+/// Store a hot-cue position (in beats) in one of the player's cue slots.
+#[command]
+pub async fn audio_engine_set_hot_cue(
+    state: State<'_, AppState>,
+    player: u8,
+    slot: u8,
+    beat: f64,
+) -> Result<AudioCommandSubmission, String> {
+    let player = checked_player(player)?;
+    if slot >= 8 {
+        return Err("Hot-cue slot must be in 0..8".to_string());
+    }
+    if !beat.is_finite() {
+        return Err("Hot-cue position must be finite".to_string());
+    }
+    let engine_slot = state.audio_engine.lock().await;
+    let engine = engine_slot.as_ref().ok_or("Audio engine not initialized")?;
+    let frame = engine.current_frame();
+    submit_audio_command(
+        engine,
+        state.audio_engine_lifecycle.generation(),
+        crate::audio::EngineCommand::SetHotCue {
+            player,
+            at_frame: frame,
+            slot,
+            beat,
+        },
+    )
+}
+
+/// Jump to a stored hot-cue position and start playback.
+#[command]
+pub async fn audio_engine_jump_hot_cue(
+    state: State<'_, AppState>,
+    player: u8,
+    slot: u8,
+) -> Result<AudioCommandSubmission, String> {
+    let player = checked_player(player)?;
+    if slot >= 8 {
+        return Err("Hot-cue slot must be in 0..8".to_string());
+    }
+    let engine_slot = state.audio_engine.lock().await;
+    let engine = engine_slot.as_ref().ok_or("Audio engine not initialized")?;
+    let frame = engine.current_frame();
+    submit_audio_command(
+        engine,
+        state.audio_engine_lifecycle.generation(),
+        crate::audio::EngineCommand::JumpHotCue {
+            player,
+            at_frame: frame,
+            slot,
+        },
+    )
+}
+
+/// Nudge a player by a signed fractional beat offset.
+#[command]
+pub async fn audio_engine_nudge(
+    state: State<'_, AppState>,
+    player: u8,
+    beats: f64,
+) -> Result<AudioCommandSubmission, String> {
+    let player = checked_player(player)?;
+    if !beats.is_finite() {
+        return Err("Nudge offset must be finite".to_string());
+    }
+    let engine_slot = state.audio_engine.lock().await;
+    let engine = engine_slot.as_ref().ok_or("Audio engine not initialized")?;
+    let frame = engine.current_frame();
+    submit_audio_command(
+        engine,
+        state.audio_engine_lifecycle.generation(),
+        crate::audio::EngineCommand::Nudge {
+            player,
+            at_frame: frame,
+            beats,
+        },
+    )
+}
+
 #[command]
 pub async fn audio_engine_load_player(state: State<'_, AppState>, player: u8, file_path: String) -> Result<(), String> {
     let mut engine_slot = state.audio_engine.lock().await;
@@ -2639,24 +2719,28 @@ pub async fn audio_engine_seek_source_seconds(
     Ok(())
 }
 
-/// Beat Sync: tempo-match player B to player A's effective BPM and
-/// align their nearest beat-grid beats. Both players start playing.
+/// Beat Sync: tempo-match player B to player A's effective BPM and align
+/// their fractional beat phase. Both players start playing.
 #[command]
 pub async fn audio_engine_beat_sync(
     state: State<'_, AppState>,
     player_a: u8,
     player_b: u8,
-) -> Result<(), String> {
+) -> Result<AudioCommandSubmission, String> {
+    let player_a = checked_player(player_a)?;
+    let player_b = checked_player(player_b)?;
     let engine_slot = state.audio_engine.lock().await;
-    if let Some(engine) = engine_slot.as_ref() {
-        let frame = engine.current_frame();
-        engine.send_command(crate::audio::EngineCommand::BeatSync {
-            player_a: crate::audio::PlayerId(player_a),
-            player_b: crate::audio::PlayerId(player_b),
+    let engine = engine_slot.as_ref().ok_or("Audio engine not initialized")?;
+    let frame = engine.current_frame();
+    submit_audio_command(
+        engine,
+        state.audio_engine_lifecycle.generation(),
+        crate::audio::EngineCommand::BeatSync {
+            player_a,
+            player_b,
             at_frame: frame,
-        });
-    }
-    Ok(())
+        },
+    )
 }
 
 /// Bar Sync: tempo-match player B to player A and align downbeat/bar
@@ -2666,17 +2750,21 @@ pub async fn audio_engine_bar_sync(
     state: State<'_, AppState>,
     player_a: u8,
     player_b: u8,
-) -> Result<(), String> {
+) -> Result<AudioCommandSubmission, String> {
+    let player_a = checked_player(player_a)?;
+    let player_b = checked_player(player_b)?;
     let engine_slot = state.audio_engine.lock().await;
-    if let Some(engine) = engine_slot.as_ref() {
-        let frame = engine.current_frame();
-        engine.send_command(crate::audio::EngineCommand::BarSync {
-            player_a: crate::audio::PlayerId(player_a),
-            player_b: crate::audio::PlayerId(player_b),
+    let engine = engine_slot.as_ref().ok_or("Audio engine not initialized")?;
+    let frame = engine.current_frame();
+    submit_audio_command(
+        engine,
+        state.audio_engine_lifecycle.generation(),
+        crate::audio::EngineCommand::BarSync {
+            player_a,
+            player_b,
             at_frame: frame,
-        });
-    }
-    Ok(())
+        },
+    )
 }
 
 #[command]
@@ -2886,6 +2974,7 @@ pub async fn audio_engine_load_player_paused(
                             at_frame: frame,
                             source,
                             load_generation,
+                            grid_revision: 1,
                             bpm: grid.bpm,
                             first_beat_sec: grid.first_beat_sec,
                             meter_numerator: grid.meter_numerator,

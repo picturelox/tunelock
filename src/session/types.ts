@@ -25,7 +25,8 @@ export type DeckCommandKind =
   | 'tempo'
   | 'pitch'
   | 'gain'
-  | 'cue';
+  | 'cue'
+  | 'sync';
 
 export interface PendingDeckCommand {
   id: CommandId;

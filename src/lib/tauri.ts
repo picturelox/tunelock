@@ -553,12 +553,24 @@ export async function audioEngineSeekSourceSeconds(player: number, sourceSeconds
   return invoke('audio_engine_seek_source_seconds', { player, sourceSeconds });
 }
 
-export async function audioEngineBeatSync(playerA: number, playerB: number): Promise<void> {
+export async function audioEngineBeatSync(playerA: number, playerB: number): Promise<AudioCommandSubmission> {
   return invoke('audio_engine_beat_sync', { playerA, playerB });
 }
 
-export async function audioEngineBarSync(playerA: number, playerB: number): Promise<void> {
+export async function audioEngineBarSync(playerA: number, playerB: number): Promise<AudioCommandSubmission> {
   return invoke('audio_engine_bar_sync', { playerA, playerB });
+}
+
+export async function audioEngineSetHotCue(player: number, slot: number, beat: number): Promise<AudioCommandSubmission> {
+  return invoke('audio_engine_set_hot_cue', { player, slot, beat });
+}
+
+export async function audioEngineJumpHotCue(player: number, slot: number): Promise<AudioCommandSubmission> {
+  return invoke('audio_engine_jump_hot_cue', { player, slot });
+}
+
+export async function audioEngineNudge(player: number, beats: number): Promise<AudioCommandSubmission> {
+  return invoke('audio_engine_nudge', { player, beats });
 }
 
 export async function getGitRevision(): Promise<string> {

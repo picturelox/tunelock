@@ -2,7 +2,7 @@
 
 Updated: 2026-09-06
 
-Current milestone: TL-04 complete in the working tree; TL-05 is the next
+Current milestone: TL-05 complete in the working tree; TL-06 is the next
 dependency-ready package
 
 Integration baseline: `performance-build` at
@@ -74,9 +74,9 @@ channel pairs, but the performance desk has not yet exposed those controls.
 
 ## Next bounded ticket
 
-TL-05 (A/B transport, cues, loops, and beat Sync) is now dependency-ready.
-TL-04 routing is complete in the working tree; TL-05 must not claim private cue
-until the multichannel routing gate passes on real hardware.
+TL-06 (jog, nudge, scratch, and backspin transport) is now dependency-ready.
+TL-05 transport is complete in the working tree; TL-06 must not claim S3 jog
+timing or scratch/backspin until the controller and hardware gates run.
 
 ## TL-01 implementation result
 
@@ -190,3 +190,28 @@ Fresh verification after TL-04:
 | Focused routing regressions | Passed: cue never reaches master on 4ch, stereo fallback folds cue, 6ch zeroes unused channels, mono downmix, whole-frame counts across 1/2/4/6/8ch, cue gain, per-deck cue selection, and explicit cue-pair rerouting |
 | Two-deck 48 kHz/256 release harness | Passed: max 1,262 microseconds, average 271 microseconds, p99 1,187 microseconds; 5,333 microsecond budget |
 | Native listening, S3 four-channel device, and macOS | Not run; retained for TL-07 and TL-12 hardware/platform gates |
+
+## TL-05 implementation result
+
+- Added eight hot-cue slots per player with `SetHotCue` and `JumpHotCue`
+  commands; a jump seeks to the stored beat and starts playback.
+- Added a signed fractional-beat `Nudge` command for manual beat alignment.
+- Changed BeatSync to align B's fractional beat phase to A's exact beat
+  position (no rounding), so both decks share sub-beat phase after Sync.
+- Added a monotonic grid revision to `AttachBeatGrid`; stale (older) grid
+  revisions are rejected so a corrected grid cannot be overwritten.
+- Made BeatSync and BarSync tracked commands with generation-scoped
+  acknowledgements, and wired hot-cue/nudge/sync through the session service.
+- Equivalent A/B transport now covers load/play/pause/seek/cue/loop/nudge on
+  both decks through the same session adapter.
+
+Fresh verification after TL-05:
+
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` | Passed |
+| `npm run build` | Passed; 1,609 modules transformed; 261.94 kB JavaScript and 33.25 kB CSS before gzip |
+| `cargo test` | Passed: 245 library tests + 8 binary tests; 0 failed; 7 ignored performance tests |
+| Focused transport regressions | Passed: hot-cue set/jump, signed nudge, fractional beat-phase alignment, and stale grid-revision rejection |
+| Two-deck 48 kHz/256 release harness | Passed: max 1,127 microseconds, average 262 microseconds, p99 1,108 microseconds; 5,333 microsecond budget |
+| Native listening, S3 jog timing, and macOS | Not run; retained for TL-06, TL-07, and TL-12 hardware/platform gates |

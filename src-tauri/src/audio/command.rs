@@ -214,6 +214,26 @@ pub enum EngineCommand {
         at_frame: u64,
         loop_region: Option<LoopRegion>,
     },
+    /// Store a hot-cue position (in beats) in one of the player's cue slots.
+    SetHotCue {
+        player: PlayerId,
+        at_frame: u64,
+        slot: u8,
+        beat: f64,
+    },
+    /// Jump to a stored hot-cue position and start playback.
+    JumpHotCue {
+        player: PlayerId,
+        at_frame: u64,
+        slot: u8,
+    },
+    /// Nudge a player by a signed fractional beat offset (positive = forward,
+    /// negative = backward). Used for manual beat alignment.
+    Nudge {
+        player: PlayerId,
+        at_frame: u64,
+        beats: f64,
+    },
     /// Set crossfader position (0.0 = full A, 1.0 = full B). Ramped.
     SetCrossfade {
         at_frame: u64,
@@ -336,6 +356,7 @@ pub enum EngineCommand {
         at_frame: u64,
         source: SourceHandle,
         load_generation: LoadGeneration,
+        grid_revision: u64,
         bpm: f64,
         first_beat_sec: f64,
         meter_numerator: i32,
