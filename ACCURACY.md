@@ -55,6 +55,36 @@ audio device does not support stereo output) unrelated to PB-6.2.
 `cargo test --release --lib perf_2_decks_48k_256 -- --ignored`:
 2 decks @ 48k/256: max=1735µs, avg=297µs, p99=1574µs, budget=5333µs — **PASS**.
 
+### TL-01 session-ownership recheck (2026-09-06)
+
+Working tree based on `e07d936`; the TL-01 changes serialize engine creation
+and device replacement and move UI ownership into an application-level session.
+They do not change analysis algorithms, DSP, or the realtime callback.
+
+`cargo test --release audio::perf_harness::tests::perf_2_decks_48k_256_budget_5333us -- --ignored --nocapture`:
+2 decks @ 48k/256: max=1839µs, avg=318µs, p99=1624µs, budget=5333µs — **PASS**.
+
+This is one fresh steady-state synthetic run. The small difference from the
+2026-09-04 run is not attributed to TL-01 because the measured callback path is
+unchanged and the harness is subject to host scheduling noise. Key/BPM accuracy
+was not rerun because no analysis path changed.
+
+### TL-02 atomic-loading recheck (2026-09-06)
+
+Working tree based on `e07d936`; TL-02 adds atomic paused source replacement,
+generation/source guards for late work, and explicit registry eviction. It does
+not change analysis algorithms or per-sample DSP, but it changes command
+application and source-retirement paths, so the callback harness was rerun.
+
+`cargo test --release audio::perf_harness::tests::perf_2_decks_48k_256_budget_5333us -- --ignored --nocapture`:
+2 decks @ 48k/256: max=1216µs, avg=268µs, p99=1197µs, budget=5333µs — **PASS**.
+
+Focused deterministic tests also prove that load-paused emits digital silence
+until resume, stale grid attachment is rejected after replacement, and 100
+successive accepted loads retain one source-registry entry for the player. This
+is not a native long-session process-memory measurement. Key/BPM accuracy was
+not rerun because no analysis path changed.
+
 ## Method
 
 - **MIK corpus:** Personal library export (20,221 rows, 18,909 ready).

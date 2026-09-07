@@ -53,6 +53,10 @@ pub enum BusId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SourceHandle(pub u64);
 
+/// Monotonic server-side identity for an asynchronous player load.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LoadGeneration(pub u64);
+
 /// Quantization point for launching a player.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Quantize {
@@ -83,6 +87,17 @@ pub enum EngineCommand {
         buffer: Arc<DecodedBuffer>,
         start_beat: f64,
         quantize: Quantize,
+    },
+    /// Replace a player's source and leave transport paused as one atomic
+    /// callback operation. This prevents a load from rendering even one
+    /// frame before a following Pause command can be observed.
+    LoadPaused {
+        player: PlayerId,
+        at_frame: u64,
+        source: SourceHandle,
+        buffer: Arc<DecodedBuffer>,
+        start_beat: f64,
+        load_generation: LoadGeneration,
     },
     /// Stop a player at the given output frame.
     Stop {
@@ -274,6 +289,8 @@ pub enum EngineCommand {
     AttachBeatGrid {
         player: PlayerId,
         at_frame: u64,
+        source: SourceHandle,
+        load_generation: LoadGeneration,
         bpm: f64,
         first_beat_sec: f64,
         meter_numerator: i32,

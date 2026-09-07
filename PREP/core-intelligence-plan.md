@@ -1,5 +1,10 @@
 # TuneLock Core Intelligence Plan
 
+> **Historical scope notice (2026-09-06):** Retained as analysis research and
+> evidence. The analyzer-only product direction is superseded by `PRODUCT.md`
+> and `ROADMAP.md`; the local-first analysis invariant and measured gates remain
+> active.
+
 Updated: 2026-08-23
 Branch: `core-intelligence`
 

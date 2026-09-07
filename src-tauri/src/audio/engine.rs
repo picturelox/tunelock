@@ -34,7 +34,7 @@ use cpal::{SampleFormat, StreamConfig};
 use super::bus::Bus;
 use super::command::{
     BusId, CommandQueue, DecodedBuffer, EngineCommand, EqBand, MAX_PLAYERS, PlayerId,
-    Quantize, SourceHandle,
+    LoadGeneration, Quantize, SourceHandle,
 };
 use super::meter::MeterSnapshot;
 use super::player::Player;
@@ -52,6 +52,9 @@ pub struct AudioEngine {
     /// touches this registry.
     sources: HashMap<u64, Arc<DecodedBuffer>>,
     next_source_handle: u64,
+    /// Registry ownership for the source most recently accepted for each
+    /// player. Replacing a player evicts its prior registry reference.
+    player_sources: [Option<SourceHandle>; MAX_PLAYERS],
     /// Deferred-destruction queue: retired Arc<DecodedBuffer> from the
     /// callback are pushed here (lock-free). The engine thread drains and
     /// drops them outside the realtime path, so large Vec<f32> deallocation
@@ -284,6 +287,27 @@ impl CallbackState {
                     // If the queue is full, the Arc drops here — but this
                     // requires 128 + 8*8 + 16 = 208 undrained sources, which
                     // is impossible with 30Hz meter-poll draining.
+                    for arc in unstored.iter().flatten() {
+                        let _ = self.deferred_overflow.push(arc.clone());
+                    }
+                }
+            }
+            EngineCommand::LoadPaused {
+                player,
+                source,
+                buffer,
+                start_beat,
+                load_generation,
+                ..
+            } => {
+                let idx = player.as_index();
+                if idx < MAX_PLAYERS {
+                    let unstored = self.players[idx].load_paused(
+                        source,
+                        buffer,
+                        start_beat,
+                        load_generation,
+                    );
                     for arc in unstored.iter().flatten() {
                         let _ = self.deferred_overflow.push(arc.clone());
                     }
@@ -522,10 +546,26 @@ impl CallbackState {
                     self.players[idx_b].play();
                 }
             }
-            EngineCommand::AttachBeatGrid { player, bpm, first_beat_sec, meter_numerator, downbeat_offset, .. } => {
+            EngineCommand::AttachBeatGrid {
+                player,
+                source,
+                load_generation,
+                bpm,
+                first_beat_sec,
+                meter_numerator,
+                downbeat_offset,
+                ..
+            } => {
                 let idx = player.as_index();
                 if idx < MAX_PLAYERS {
-                    self.players[idx].attach_beat_grid(bpm, first_beat_sec, meter_numerator, downbeat_offset);
+                    self.players[idx].attach_beat_grid(
+                        source,
+                        load_generation,
+                        bpm,
+                        first_beat_sec,
+                        meter_numerator,
+                        downbeat_offset,
+                    );
                 }
             }
         }
@@ -620,6 +660,7 @@ impl CommandFrame for EngineCommand {
     fn at_frame(&self) -> u64 {
         match self {
             EngineCommand::Launch { at_frame, .. }
+            | EngineCommand::LoadPaused { at_frame, .. }
             | EngineCommand::Stop { at_frame, .. }
             | EngineCommand::Pause { at_frame, .. }
             | EngineCommand::Resume { at_frame, .. }
@@ -754,6 +795,7 @@ impl AudioEngine {
             stream: Some(SendStream(stream)),
             sources: HashMap::new(),
             next_source_handle: 1,
+            player_sources: [None; MAX_PLAYERS],
             retired_sources,
             deferred_overflow,
         })
@@ -840,21 +882,80 @@ impl AudioEngine {
         start_beat: f64,
         quantize: Quantize,
     ) -> Result<(), String> {
+        if player.as_index() >= MAX_PLAYERS {
+            return Err(format!("Player {} is out of range", player.0));
+        }
         let buffer = self.sources.get(&source.0)
             .ok_or("Source not found in registry")?
             .clone(); // Arc clone — pointer copy only, no PCM duplication
 
         let at_frame = self.current_frame();
-        self.command_queue.push(EngineCommand::Launch {
+        if !self.command_queue.push(EngineCommand::Launch {
             player,
             at_frame,
             source,
             buffer,
             start_beat,
             quantize,
-        });
+        }) {
+            return Err("Audio command queue is full".to_string());
+        }
+
+        self.adopt_player_source(player, source)?;
 
         Ok(())
+    }
+
+    /// Atomically attach a registered source and leave the player paused.
+    pub fn load_player_paused(
+        &mut self,
+        player: PlayerId,
+        source: SourceHandle,
+        start_beat: f64,
+        load_generation: LoadGeneration,
+    ) -> Result<(), String> {
+        if player.as_index() >= MAX_PLAYERS {
+            return Err(format!("Player {} is out of range", player.0));
+        }
+        let buffer = self
+            .sources
+            .get(&source.0)
+            .ok_or("Source not found in registry")?
+            .clone();
+        let at_frame = self.current_frame();
+        if !self.command_queue.push(EngineCommand::LoadPaused {
+            player,
+            at_frame,
+            source,
+            buffer,
+            start_beat,
+            load_generation,
+        }) {
+            return Err("Audio command queue is full".to_string());
+        }
+        self.adopt_player_source(player, source)
+    }
+
+    fn adopt_player_source(
+        &mut self,
+        player: PlayerId,
+        source: SourceHandle,
+    ) -> Result<(), String> {
+        let idx = player.as_index();
+        if idx >= MAX_PLAYERS {
+            return Err(format!("Player {} is out of range", player.0));
+        }
+        if let Some(previous) = self.player_sources[idx].replace(source) {
+            if previous != source {
+                self.unregister_source(previous);
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    pub fn source_count_for_test(&self) -> usize {
+        self.sources.len()
     }
 }
 
@@ -1101,6 +1202,122 @@ mod tests {
         // so assert signal presence rather than exact value at block start.)
         let non_zero = out.iter().filter(|&&s| s.abs() > 1e-6).count();
         assert!(non_zero > 400, "launched player must produce audio (got {non_zero} non-zero samples)");
+    }
+
+    #[test]
+    fn load_paused_is_silent_until_resume() {
+        let mut state = make_state();
+        state.command_queue.push(EngineCommand::SetMasterGain {
+            at_frame: 0,
+            gain: 1.0,
+        });
+        state.command_queue.push(EngineCommand::SetBus {
+            player: PlayerId(0),
+            at_frame: 0,
+            bus: BusId::Master,
+        });
+        state.command_queue.push(EngineCommand::LoadPaused {
+            player: PlayerId(0),
+            at_frame: 0,
+            source: SourceHandle(1),
+            buffer: constant_buffer(0.25, 4410),
+            start_beat: 0.0,
+            load_generation: LoadGeneration(1),
+        });
+
+        let mut out = vec![0.0f32; 512];
+        render(&mut state, &mut out);
+        assert!(out.iter().all(|&sample| sample == 0.0));
+
+        state.command_queue.push(EngineCommand::Resume {
+            player: PlayerId(0),
+            at_frame: state.frame_counter.load(Ordering::Relaxed),
+        });
+        render(&mut state, &mut out);
+        assert!(out.iter().any(|&sample| sample.abs() > 1e-6));
+    }
+
+    #[test]
+    fn stale_beat_grid_cannot_modify_replacement_source() {
+        let mut state = make_state();
+        let mut replacement = constant_buffer(0.1, 4410);
+        Arc::get_mut(&mut replacement).unwrap().bpm = Some(130.0);
+
+        state.command_queue.push(EngineCommand::LoadPaused {
+            player: PlayerId(0),
+            at_frame: 0,
+            source: SourceHandle(1),
+            buffer: constant_buffer(0.1, 4410),
+            start_beat: 0.0,
+            load_generation: LoadGeneration(1),
+        });
+        state.command_queue.push(EngineCommand::LoadPaused {
+            player: PlayerId(0),
+            at_frame: 0,
+            source: SourceHandle(2),
+            buffer: replacement,
+            start_beat: 0.0,
+            load_generation: LoadGeneration(2),
+        });
+        state.command_queue.push(EngineCommand::AttachBeatGrid {
+            player: PlayerId(0),
+            at_frame: 0,
+            source: SourceHandle(1),
+            load_generation: LoadGeneration(1),
+            bpm: 77.0,
+            first_beat_sec: 0.0,
+            meter_numerator: 4,
+            downbeat_offset: 0,
+        });
+
+        let mut out = [0.0f32; 2];
+        render(&mut state, &mut out);
+        assert_eq!(state.players[0].source_bpm(), 130.0);
+
+        state.command_queue.push(EngineCommand::AttachBeatGrid {
+            player: PlayerId(0),
+            at_frame: state.frame_counter.load(Ordering::Relaxed),
+            source: SourceHandle(2),
+            load_generation: LoadGeneration(2),
+            bpm: 140.0,
+            first_beat_sec: 0.0,
+            meter_numerator: 4,
+            downbeat_offset: 0,
+        });
+        render(&mut state, &mut out);
+        assert_eq!(state.players[0].source_bpm(), 140.0);
+    }
+
+    #[test]
+    fn repeated_player_loads_keep_one_registry_source() {
+        let command_queue = Arc::new(CommandQueue::new(8));
+        let mut engine = AudioEngine {
+            frame_counter: Arc::new(AtomicU64::new(0)),
+            command_queue: command_queue.clone(),
+            meter_snapshot: Arc::new(MeterSnapshot::new()),
+            sample_rate: SR as u32,
+            stream: None,
+            sources: HashMap::new(),
+            next_source_handle: 1,
+            player_sources: [None; MAX_PLAYERS],
+            retired_sources: Arc::new(crossbeam_queue::ArrayQueue::new(8)),
+            deferred_overflow: Arc::new(crossbeam_queue::ArrayQueue::new(8)),
+        };
+
+        for generation in 1..=100 {
+            let buffer = Arc::try_unwrap(constant_buffer(0.1, 16)).unwrap();
+            let source = engine.register_source(buffer);
+            engine
+                .load_player_paused(
+                    PlayerId(0),
+                    source,
+                    0.0,
+                    LoadGeneration(generation),
+                )
+                .unwrap();
+            drop(command_queue.pop());
+            assert_eq!(engine.source_count_for_test(), 1);
+        }
     }
 
     #[test]

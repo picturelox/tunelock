@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use super::command::{PlayerId, BusId, DecodedBuffer, EqBand, LoopRegion, SourceHandle, BeatGridCompact};
+use super::command::{BusId, DecodedBuffer, EqBand, LoadGeneration, LoopRegion, PlayerId, SourceHandle};
 use super::eq::DjIsolator;
 use super::timepitch::{TimePitchProcessor, ProcessorSet, ProcessorMode};
 
@@ -70,6 +70,7 @@ pub struct Player {
 
     // Source handle (set by Launch); the buffer lives in the processor
     source_handle: Option<SourceHandle>,
+    load_generation: Option<LoadGeneration>,
     buffer: Option<Arc<DecodedBuffer>>,
 
     // Time/pitch engine — preconstructed set of all three processor types
@@ -169,6 +170,7 @@ impl Player {
             muted: false,
             soloed: false,
             source_handle: None,
+            load_generation: None,
             buffer: None,
             processor: ProcessorSet::new(sample_rate, 2, mode),
             retired_sources,
@@ -240,6 +242,7 @@ impl Player {
         start_beat: f64,
     ) -> [Option<Arc<DecodedBuffer>>; 2] {
         self.source_handle = Some(handle);
+        self.load_generation = None;
         if let Some(bg) = &buffer.beat_grid {
             self.bpm = bg.bpm;
             self.first_beat_sec = bg.first_beat_sec;
@@ -264,6 +267,21 @@ impl Player {
         ];
         self.playing = true;
         self.eq.reset();
+        unstored
+    }
+
+    /// Replace the source and leave this player paused. Source attachment and
+    /// transport state change happen within one callback command.
+    pub fn load_paused(
+        &mut self,
+        handle: SourceHandle,
+        buffer: Arc<DecodedBuffer>,
+        start_beat: f64,
+        load_generation: LoadGeneration,
+    ) -> [Option<Arc<DecodedBuffer>>; 2] {
+        let unstored = self.launch(handle, buffer, start_beat);
+        self.load_generation = Some(load_generation);
+        self.playing = false;
         unstored
     }
 
@@ -414,10 +432,22 @@ impl Player {
     /// Attach a beat grid to an already-loaded player. Called when
     /// async beat-grid analysis completes. Updates BPM, first beat,
     /// and meter without reloading the source or affecting position.
-    pub fn attach_beat_grid(&mut self, bpm: f64, first_beat_sec: f64, meter_numerator: i32, _downbeat_offset: usize) {
+    pub fn attach_beat_grid(
+        &mut self,
+        source: SourceHandle,
+        load_generation: LoadGeneration,
+        bpm: f64,
+        first_beat_sec: f64,
+        meter_numerator: i32,
+        _downbeat_offset: usize,
+    ) -> bool {
+        if self.source_handle != Some(source) || self.load_generation != Some(load_generation) {
+            return false;
+        }
         self.bpm = bpm;
         self.first_beat_sec = first_beat_sec;
         self.meter_numerator = meter_numerator;
+        true
     }
 
     /// Source BPM (from beat grid or fallback 120).

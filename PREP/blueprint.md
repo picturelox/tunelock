@@ -1,5 +1,10 @@
 # Technical Blueprint: NotMixedInKey
 
+> **Historical implementation notice (2026-09-06):** This build-from-scratch
+> blueprint predates the current native performance engine. Use `PRODUCT.md`,
+> `ROADMAP.md`, and the audited source as authority. Do not replace working
+> engine foundations to conform to this document.
+
 > The definitive implementation guide for building the app from scratch.  
 > A developer should be able to follow this document and produce a working application.
 

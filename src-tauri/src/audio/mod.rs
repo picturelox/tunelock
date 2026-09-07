@@ -39,7 +39,7 @@ pub mod worker;
 
 pub use bus::Bus;
 pub use command::{
-    BusId, CommandQueue, EngineCommand, EqBand, FilterModeParam, LoopRegion,
+    BusId, CommandQueue, EngineCommand, EqBand, FilterModeParam, LoadGeneration, LoopRegion,
     DecodedBuffer, BeatGridCompact, PlayerId, SourceHandle, Quantize,
     MAX_PLAYERS,
 };

@@ -1,111 +1,68 @@
 # TuneLock
 
-Current development is deliberately focused on the analyzer: immediate local
-key/BPM, key and intensity over time, and useful relationships between tracks.
-See [CORE_INTELLIGENCE.md](CORE_INTELLIGENCE.md) for the plain-language status,
-[ACCURACY.md](ACCURACY.md) for measured results, and
-[ACCURACY_CONTRIBUTING.md](ACCURACY_CONTRIBUTING.md) for the human/crowdsourced
-data plan.
+TuneLock is a native DJ instrument for discovering relationships in a music
+library, preparing transitions, performing a set, and recording the result.
 
-> Fast, accurate musical key + BPM analysis for producers and DJs.
-> Built for the MPC → Ableton Live → Tape 16 → Traktor workflow.
+The first usable release targets reliable two-deck home mixing on Windows and
+macOS with mouse/keyboard and a Traktor Kontrol S3. Decks C/D follow after A/B
+reliability; stems follow after four-deck full-track reliability.
 
-Built with **Tauri 2** (Rust backend) + **React** + **TypeScript** + **TailwindCSS**.
+## Current state
 
-## The three modes
+The repository already contains a substantial Rust/CPAL audio foundation,
+classical and neural-analysis research, library persistence, and an integrated
+analysis/playback workspace. It is not yet the first usable release: private cue
+routing, S3 control, scratching/backspins, delay/reverb, output protection,
+recording, executable transition replay, a shared session model, and macOS
+validation remain open.
 
-| Mode | What it does |
-|---|---|
-| **Tuner** | Drop a file or feed audio in (mic / line-in) and get the key + Camelot + BPM instantly. Like a guitar tuner, but for songs. |
-| **Library** | Visualize and arrange your samples, stems, and tracks by key. Drag-and-drop playlists with live Camelot relationship hints (+1/-1, +2 energy boost, A↔B mood shift). |
-| **Delivery** | Non-destructive export: copy, rename, optionally transcode, and emit `.m3u8` + `.csv` ready for Traktor, Ableton, Rekordbox, or USB to MPC / CDJs. |
+Start here:
 
-## Features
+- [Product contract](PRODUCT.md)
+- [Delivery roadmap](ROADMAP.md)
+- [Capability ledger](CAPABILITIES.md)
+- [Current milestone and checks](STATUS.md)
+- [Measured analysis and audio evidence](ACCURACY.md)
+- [Frozen intelligence architecture](CORE_INTELLIGENCE.md)
 
-- **Hybrid key detection**: HPSS source separation + 3-profile ensemble (Krumhansl, Temperley, Sha'ath) + temporal segment voting. Targeting ≥90% accuracy.
-- **Camelot notation** alongside standard key (`8A`, `C minor`).
-- **BPM detection** via onset energy + autocorrelation.
-- **Camelot wheel** with live relationship overlay: same-key, ±1, ±2 (energy boost / drop), A↔B (mood shift).
-- **Virtual-scrolling library** for large sample collections.
-- **Non-destructive export** with M3U8 + CSV emission.
+Older documents in `PREP/` are retained as research, architecture, and design
+history. They do not override the documents above where scope conflicts.
 
-## Tech Stack
+## Technical foundation
 
-| Layer | Technology |
-|-------|------------|
-| Framework | Tauri 2 |
-| Frontend | React 18, TypeScript, TailwindCSS |
-| State | Zustand |
-| Audio Decoding | Symphonia (Rust) |
-| Analysis | rustfft, ndarray |
-| Database | SQLite (rusqlite) |
-| Metadata | lofty |
+- Tauri 2, React 18, TypeScript, TailwindCSS, and Zustand
+- Rust, CPAL, Symphonia, Rubato, and Signalsmith Stretch
+- SQLite persistence with WAL mode
+- immediate deterministic key/BPM analysis plus optional asynchronous
+  intelligence work
+- a bounded real-time command path and allocation/deallocation audit coverage
 
 ## Development
 
-### Prerequisites
+Prerequisites are Node.js 20+, current stable Rust, and the platform's native
+build tools. On Windows, run Rust commands from a Visual Studio x64 developer
+environment and add Cargo to `PATH` as documented in `AGENTS.md`.
 
-- Node.js 20+
-- Rust (latest stable)
-- Windows: Visual Studio Build Tools
-- macOS: Xcode Command Line Tools
-
-### Setup
-
-```bash
-# Install dependencies
+```powershell
 npm install
-
-# Run in development mode
+npm run dev
 npm run tauri-dev
-
-# Build for production
-npm run tauri-build
+npx tsc --noEmit
+npm run build
 ```
 
-### Project Structure
-
-```
-notmixedinkey/
-├── src/                    # React frontend
-│   ├── components/         # React components
-│   │   ├── camelot/        # Camelot wheel, HarmonicMap
-│   │   ├── library/        # LibraryTable, TrackRow, ImportDialog
-│   │   ├── layout/         # MainLayout, Sidebar, Header
-│   │   ├── player/         # DualDeck, Deck, Mixer
-│   │   └── playlist/       # PlaylistBuilder
-│   ├── hooks/              # Custom React hooks
-│   ├── lib/                # Utilities (camelot.ts, tauri.ts)
-│   ├── stores/             # Zustand stores
-│   ├── styles/             # Global CSS
-│   └── types/              # TypeScript interfaces
-├── src-tauri/              # Rust backend
-│   ├── src/
-│   │   ├── analysis/       # Audio analysis engine
-│   │   ├── commands/       # Tauri IPC commands
-│   │   ├── db/             # SQLite database
-│   │   └── models/         # Rust data structures
-│   ├── migrations/         # Database migrations
-│   └── Cargo.toml
-└── PREP/                   # Planning documents
+```powershell
+$env:PATH = "C:\Users\louis.media\.cargo\bin;" + $env:PATH
+Set-Location src-tauri
+cargo test
 ```
 
-## Audio Analysis Pipeline
+See `AGENTS.md` for project rules and verification commands.
 
-The analysis engine uses a hybrid approach:
+## Safety and licensing
 
-1. **Audio Decoding** (Symphonia): Decode any supported format to mono 44.1kHz PCM
-2. **Chromagram Extraction** (rustfft): Convert audio to 12-dimensional pitch class representation
-3. **Classical Key Detection**: Profile matching using Krumhansl, Temperley, and Sha'ath key profiles
-4. **Tempo Detection**: Onset detection + autocorrelation for BPM
+TuneLock never modifies, moves, or deletes original media. External utilities
+such as ffmpeg are detected on `PATH` or used as optional sidecars; downloaders
+and GPL/AGPL code are not bundled.
 
-## Architecture
-
-- **Frontend**: React with virtual scrolling for large libraries
-- **Backend**: Rust with tokio for async operations
-- **Database**: SQLite with WAL mode for concurrent read/write
-- **IPC**: Tauri events for real-time analysis progress
-
-## License
-
-MIT
+License: MIT.

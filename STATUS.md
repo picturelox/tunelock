@@ -1,55 +1,131 @@
-# TuneLock — Status
+# TuneLock status
 
-> Replaces `progress.txt`, which predated Mix Canvas, Harmonic Mosaic, PianoRoll and Metronome. Authoritative as of the baseline commit.
+Updated: 2026-09-06
 
-## What the app is
-The ultimate mix planner. Accurate key + BPM + energy analysis with honest confidence and ranked alternatives, exploration of harmonic relationships across a whole collection, set planning, and non-destructive DJ-ready delivery. Multimedia: video files are in scope. Target: **elite, all-genre accuracy that surpasses Mixed In Key.**
+Current milestone: TL-02 complete in the working tree; TL-03 is next
 
-**Design language:** Walnut Console — a modern musical instrument housed in a vintage shell. Principle: *character in the frame; precision in the display.* Three-level workspace: Set Map (strategic trajectory) → Layer Lab (eight-slot exploratory grid, 2-4 active) → Transition Workbench (precision editing). Semantic color system: Camelot hues highest saturation, waveform RGB darker, amber = queued, green = active, red = failure only. See `PREP/design-language.md`.
+Integration baseline: `performance-build` at
+`e07d936b6a9bcd560edb4928b83dd242157818ce`
 
-## What actually works today
-- **Analyze (Tuner):** drop a file → live per-stage progress → key, Camelot, BPM, energy, confidence, ranked runner-ups with musical reasons, Camelot wheel, Harmonic Mosaic, piano roll, metronome, chroma, timings, three-band waveform.
-- **Key engine:** HPSS → dual 12-bin + 72-band chroma → Krumhansl/Temperley/Sha'ath → 8-segment ranked vote. ~4 s/track in release (500-track sample).
-- **Key timeline:** per-segment key detection with modulation boundaries + honest abstention for atonal material.
-- **Genre-adaptive profiles:** electronic/classical/rock/hip-hop/jazz weight sets selected by genre metadata.
-- **Energy detection:** loudness + spectral centroid + onset density + percussive ratio → 1–10 scale.
-- **Consensus:** multi-source opinion model (TuneLock + MIK + Traktor + AcoustID) with four-dot agreement indicator.
-- **Traktor NML import:** parse collection.nml, match by path/filename, store as opinions.
-- **Media:** Symphonia (mp3/wav/flac/ogg/aac/alac/m4a/aiff) + ffmpeg sidecar fallback (video, malformed WAV). 0 decode failures on 20k library.
-- **Waveforms:** three-band (low/mid/high) canvas renderer, 60 FPS, 2000 columns per track.
-- **Library table:** server-side paging (500-row pages), infinite scroll, smart filters, sorting, MIK CSV import, Traktor NML import, consensus dots.
-- **Playlist generation:** real harmonic compatibility scoring + BPM similarity. `generate_playlist` and `get_compatible_tracks` are functional.
-- **Mix Canvas:** clip timeline + transition scoring. **Persists to database** — save/load across restarts via `save_mix`/`load_mix` commands. Clip notes stored in playlist `rules` JSON.
-- **Delivery:** CSV/M3U8 as browser downloads only; real export unreachable from UI.
-- **CNN (Phase 11):** Python ML project scaffolded and **trained, but the experiment was invalid** (not fairly evaluated). Multiple implementation bugs: windowing loaded only first 30s, augmentation was a no-op (rolled channel axis of length 1), best-epoch selection bias, no pitch-shift augmentation, insufficient training data (604 tracks vs 1,077 in the reference work). The 29.6% result diagnoses implementation problems, not CNN viability. Status: **experiment invalid; deferred.** The `ml/` scaffolding remains for a corrected re-run with MTG training data and the Korzeniowski protocol. The Rust `key_cnn.rs` stub returns `None` and is not wired into the ensemble.
-- **Assist layer (Phase 11):** LLM-powered features via Ollama (local, offline). Four features built:
-  1. DJ setlist analysis — paste a tracklist, LLM parses it, matches local library, shows harmonic flow with key/BPM/energy arc.
-  2. Metadata repair — scan library for missing artist/title/genre, LLM parses filenames and infers metadata. User reviews and approves each change.
-  3. Genre inference — LLM infers genre from artist/title, feeds adaptive profiles.
-  4. NL set planning — describe a set in plain English ("90 min, start mellow, peak at 60"), LLM sequences tracks from library using harmonic compatibility.
-  5. Transition explanations — LLM explains why a transition works (with deterministic template fallback when Ollama is absent).
-  Never on the critical analysis path. All features are user-initiated. Degrades gracefully when Ollama is not installed.
-- **Transition Workbench (Phase 7, Slice A):** Audio engine architecture decision revised after technical review. **Native Rust engine on CPAL** is the authoritative audio engine (not Web Audio API). Real-time core built with: lock-free command queue (crossbeam ArrayQueue), atomic meter snapshots (30 Hz UI updates), preallocated buffers, single CPAL callback that never allocates/locks/does I/O. 3-band DJ isolator EQ with Linkwitz-Riley 4th-order crossovers and 5ms parameter ramps. Rubato band-limited resampling in worker thread. Symphonia decode on background thread via `spawn_blocking`. Database infrastructure: `beat_grids`, `transition_plans`, `stem_manifests` tables with migration 002. 13 Tauri commands for audio engine control. Web Audio API prototype demoted to UI interaction prototype only. **Beat-grid DSP** added: multi-band spectral-flux onset detection, adaptive whitening, tempogram with octave-aware tempo estimation, Ellis-style DP beat tracking, downbeat and meter scoring (4/4, 3/4, 2/4, 6/8), confidence scoring. 9 unit tests pass on synthetic click tracks at 120/128/140 BPM. `detect_beat_grid` Tauri command runs on background thread and stores results in `beat_grids` table.
+## Product destination
 
-## Known defects (see plan, `C:\Users\louis.media\.devin\plans\plan-dfdfe6627c43db0f.md`)
-- ~~`insert_track` returns a wrong id on re-import~~ **Fixed (Phase 5)** — uses `RETURNING id`.
-- ~~StrictMode double-registers drag-drop → every Tuner analysis runs twice.~~ **Fixed (Phase 5)** — cancelled flag + late teardown.
-- ~~Tempo detector is 98 lines, unnormalised autocorrelation, hard 60–180 clamp~~ **Fixed (Phase 3)** — octave resolution + wider range, 59.4% BPM ±1.
-- ~~671 audio files (.m4a/.aif) + all 341 video files cannot be decoded~~ **Fixed (Phase 2)** — 0 unsupported, 0 decode failures.
-- ~~18 frontend wrappers call Rust commands that don't exist.~~ **Fixed (Phase 5)** — all 18 phantom wrappers deleted.
-- ~~Two competing harmony vocabularies~~ **Fixed (Phase 5)** — unified `lib/harmony.ts` + Rust `harmony/mod.rs` mirror.
-- ~~HPSS kernel footprint is ~1.7 s (hop=4096), not the 210 ms the comments claim.~~ **Fixed (Phase 5)** — comments corrected to match actual parameters.
-- ~~setState-during-render in `MixWorkspace` and `DualAuditionPanel`.~~ **Fixed (Phase 5)** — moved to useEffect.
-- ~~`bundle.active = false` — no installer can be produced.~~ **Fixed** — bundle enabled with NSIS target for Windows installer.
-- ~~No test infrastructure beyond one Camelot unit test.~~ **Improved** — 52 tests (harmony, metrics, tempo, consensus, waveform, energy, genre profiles, key timeline, CNN stub, NML parsing, gold annotations).
+The first usable release is a reliable two-deck DJ performance and recording
+application for Windows and macOS, controlled by mouse/keyboard and the Traktor
+Kontrol S3. It includes EQ/isolator/filter/delay/reverb mixing, cues and loops,
+tempo/beat Sync, nudging, occasional scratches/backspins, private cue routing,
+connected musical intelligence, and record/edit/save/replay transitions.
 
-## Ground truth
-- `ground-truth/MIKCompleteLibrary.csv` — 20,221 rows, 19,563 present on disk. Key (Camelot), Tempo, Energy, CuePoints, Genre, per track.
-- `ground-truth/OUIE 7.csv` — 69 rows, 68 files, smoke corpus.
-- `C:\Users\louis.media\Music\Tunelock Test Tracks` — 5-track smoke set.
+`PRODUCT.md` is the scope contract. `ROADMAP.md` is the plan source of truth.
+`CAPABILITIES.md` separates reachable behavior from engine-only, partial,
+missing, and unverified work.
 
-## The plan
-Fifteen phases, four hard checkpoints (A–D), in `C:\Users\louis.media\.devin\plans\plan-dfdfe6627c43db0f.md`. That file is the source of truth and is kept current.
+## TL-00 result
 
-## Verification commands
-See `AGENTS.md`.
+- Verified remote heads on 2026-09-06: `main` and `core-intelligence` remain at
+  `d0cfd4d`; `performance-build` remains at `e07d936`.
+- Reconciled the supplied desktop blueprint and the legacy local Devin plan.
+  The supplied file labels itself provisional and contains sections 1-10; the
+  user's accompanying confirmed-scope message resolves the release choices and
+  is reflected in `PRODUCT.md` and `ROADMAP.md`. The reviewed file SHA-256 is
+  `1CD2BCE38DDAA2E9887BAE76E734B3C1D30374D784E39D9B1583779F89A8DC3B`.
+- Preserved `ACCURACY.md`, `CORE_INTELLIGENCE.md`, all source, and all prior
+  research evidence unchanged.
+- Marked conflicting PREP product directions as historical instead of deleting
+  them.
+- No application or engine code changed in TL-00.
+
+## Fresh baseline
+
+Run on Windows at the pinned SHA before documentation edits:
+
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` | Passed |
+| `npm run build` | Passed; Vite transformed 1,605 modules |
+| `cargo test` | Passed: 220 library + 8 binary tests; 0 failed; 7 ignored performance tests |
+| Engine/accuracy benchmark | Not rerun because TL-00 changes no engine code; existing evidence remains authoritative in `ACCURACY.md` |
+| Native listening and UI walkthrough | Not run in TL-00 |
+| S3 hardware | Not available/proven in TuneLock |
+| macOS | Not run; no current platform evidence recorded |
+
+The first Rust attempt from a plain PowerShell shell failed while generating
+Signalsmith bindings because Windows SDK/C++ include variables were absent. It
+passed from the installed Visual Studio 2022 x64 developer environment. This is
+a setup prerequisite, not a TuneLock test failure.
+
+## Verified current behavior
+
+The mounted application is the single `Workspace` view. It analyzes files,
+auto-loads analyzed Deck A, directly loads Deck B, drives a subset of the native
+engine's transport/sync controls, polls meters, compares loudness, and opens a
+library drawer. The underlying engine has eight player slots, bounded commands,
+time/pitch processors, EQ and filters, two crossfade buses, loops, sync commands,
+device selection, and metering.
+
+This does not yet establish release behavior. The current Workspace combines
+session, analysis, engine, and presentation state; A/B are asymmetric; several
+handlers optimistically update local state; multichannel output carries only
+the stereo master; transition plans are storage-only; and key release features
+are missing or unverified as detailed in `CAPABILITIES.md`.
+
+## Next bounded ticket
+
+Start TL-03: add bounded command identities/results and compact engine
+acknowledgements so the interface can distinguish requested, queued, applied,
+and failed state. Force queue-full and engine/device failures in focused tests.
+Do not combine this with transport feature expansion or visual redesign.
+
+## TL-01 implementation result
+
+- Added branded `DeckId`, `PlayerId`, `SourceId`, `LoadGeneration`,
+  `EngineGeneration`, `AnalysisRevision`, and `GridRevision` frontend contracts.
+- Added one app-root session runtime and Zustand store. Deck A-D selection,
+  desired state, engine-telemetry acknowledgement, load state, and errors survive
+  Workspace remounts.
+- Routed A/B load and transport through the same session adapter.
+- Deck A loading and local analysis now start independently; neither waits for
+  the other to finish.
+- Serialized Rust engine initialization and device replacement, added monotonic
+  engine generations to init results and meter telemetry, and kept the retired
+  buffer drain under one application owner.
+- Device replacement starts the candidate stream before retiring the current
+  engine and invalidates the session's loaded-state acknowledgement when its
+  engine generation changes. Reload automation belongs to a later package.
+
+Fresh verification after TL-01:
+
+| Check | Result |
+|---|---|
+| `npm run build` | Passed; 1,609 modules transformed |
+| `cargo test` | Passed: 222 library tests + 8 binary tests; 0 failed; 7 ignored performance tests |
+| Two-deck 48 kHz/256 release harness | Passed: max 1,839 µs, average 318 µs, p99 1,624 µs; 5,333 µs budget |
+| Native interaction/listening | Not run; retained for integrated hardware/UI validation |
+
+## TL-02 implementation result
+
+- Replaced the separate launch and pause messages with one callback-side
+  `LoadPaused` command. Source attachment and `playing = false` are now one
+  atomic realtime operation, so a load cannot render an intervening frame.
+- Added a server-side monotonic load coordinator per player. A newer request or
+  an engine-generation change prevents older decode work from installing.
+- Bound asynchronous beat-grid attachment to player, source handle, load
+  generation, and engine generation. Both the async boundary and callback
+  reject stale completion.
+- Added explicit per-player registry ownership. Accepting a replacement source
+  unregisters the prior registry reference while player-held buffers continue
+  through the existing deferred-destruction queues.
+- Propagated frontend request generations through IPC. Session completion is
+  accepted only for the matching request; legacy Listening Lab calls receive a
+  wrapper-generated request generation.
+
+Fresh verification after TL-02:
+
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` | Passed |
+| `npm run build` | Passed; 1,609 modules transformed |
+| `cargo test` | Passed: 228 library tests + 8 binary tests; 0 failed; 7 ignored performance tests |
+| Focused lifecycle regressions | Passed: silent-until-resume with an allocation-audited callback, stale-grid rejection, latest-request invalidation, IPC identity serialization, and 100 repeated replacements with one registry source |
+| Two-deck 48 kHz/256 release harness | Passed: max 1,216 µs, average 268 µs, p99 1,197 µs; 5,333 µs budget |
+| Native interaction/listening | Not run; retained for integrated hardware/UI validation |
+| Long-session process memory | Not yet measured interactively; deterministic registry ownership is bounded and the release soak remains a TL-12 gate |

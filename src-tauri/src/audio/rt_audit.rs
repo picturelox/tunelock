@@ -18,7 +18,7 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use crate::audio::command::{
-        DecodedBuffer, EngineCommand, Quantize, SourceHandle,
+        DecodedBuffer, EngineCommand, LoadGeneration, Quantize, SourceHandle,
     };
     use crate::audio::engine::{audio_callback_f32, CallbackState};
     use crate::audio::meter::MeterSnapshot;
@@ -429,6 +429,39 @@ mod tests {
             retired += 1;
         }
         assert!(retired >= 1, "at least one buffer must be retired through the queue");
+    }
+
+    #[test]
+    fn callback_load_paused_is_silent_and_has_no_rust_heap_activity() {
+        let mut state = make_state();
+        state.command_queue.push(EngineCommand::SetMasterGain {
+            at_frame: 0,
+            gain: 1.0,
+        });
+        state.command_queue.push(EngineCommand::SetBus {
+            player: PlayerId(0),
+            at_frame: 0,
+            bus: BusId::Master,
+        });
+        state.command_queue.push(EngineCommand::LoadPaused {
+            player: PlayerId(0),
+            at_frame: 0,
+            source: SourceHandle(1),
+            buffer: constant_buffer(0.3, 44_100),
+            start_beat: 0.0,
+            load_generation: LoadGeneration(1),
+        });
+
+        let mut out = vec![0.0f32; 512];
+        audited_callback(&mut state, &mut out);
+        assert!(out.iter().all(|&sample| sample == 0.0));
+
+        state.command_queue.push(EngineCommand::Resume {
+            player: PlayerId(0),
+            at_frame: state.frame_counter.load(Ordering::Relaxed),
+        });
+        audited_callback(&mut state, &mut out);
+        assert!(out.iter().any(|&sample| sample.abs() > 1e-6));
     }
 
     #[test]

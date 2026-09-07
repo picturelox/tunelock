@@ -8,26 +8,7 @@ import {
   getLibraryPage,
   onTrackAnalyzed,
   getWaveformData,
-  audioEngineInit,
-  audioEngineLoadPlayerPaused,
-  audioEnginePlay,
-  audioEnginePause,
-  audioEngineStop,
-  audioEngineSeek,
-  audioEngineSetTempo,
-  audioEngineSetPitch,
-  audioEngineSetLoop,
-  audioEngineSetBus,
-  audioEngineSetMasterGain,
-  audioEngineSyncLaunch,
-  audioEngineBeatSync,
-  audioEngineBarSync,
-  audioEngineGetMeters,
-  listeningLabGetProcessorInfo,
   getLoudnessComparison,
-  audioEngineSetLoudnessMatchGain,
-  type AudioMeterReadout,
-  type ListeningLabProcessorInfo,
   type LoudnessComparison,
   type WaveformData,
 } from '../../lib/tauri';
@@ -38,6 +19,8 @@ import AnalysisProgressDisplay from '../tuner/AnalysisProgressDisplay';
 import HarmonicMosaic, { type FocalTrack } from '../mosaic/HarmonicMosaic';
 import WaveformDisplay from '../waveform/WaveformDisplay';
 import LibraryTable from '../library/LibraryTable';
+import { sessionService } from '../../session/sessionService';
+import { useSessionStore } from '../../session/sessionStore';
 
 // ─── helpers ────────────────────────────────────────────────────────────
 
@@ -80,8 +63,6 @@ const PITCH_PRESETS = [-3, -1, 0, 1, 3];
 
 // ─── component ──────────────────────────────────────────────────────────
 
-type EngineState = 'idle' | 'initializing' | 'ready' | 'error';
-
 export default function Workspace({ libraryOpen, setLibraryOpen }: {
   libraryOpen: boolean;
   setLibraryOpen: (open: boolean) => void;
@@ -98,22 +79,21 @@ export default function Workspace({ libraryOpen, setLibraryOpen }: {
   const [libraryTracks, setLibraryTracks] = useState<Track[]>([]);
   const [waveform, setWaveform] = useState<WaveformData | null>(null);
 
-  // Engine state
-  const [engineState, setEngineState] = useState<EngineState>('idle');
-  const [engineError, setEngineError] = useState('');
-  const [processorInfo, setProcessorInfo] = useState<ListeningLabProcessorInfo | null>(null);
-  const [meters, setMeters] = useState<AudioMeterReadout | null>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [tempo, setTempo] = useState(0);
-  const [pitch, setPitch] = useState(0);
-  const [loopBeats, setLoopBeats] = useState<number | null>(null);
-  const [positionSec, setPositionSec] = useState(0);
-
-  // Two-deck state
-  const [filePathA, setFilePathA] = useState<string>('');
-  const [, setTrackNameA] = useState<string>('');
-  const [filePathB, setFilePathB] = useState<string>('');
-  const [trackNameB, setTrackNameB] = useState<string>('');
+  // The application-level session survives this component's lifetime.
+  const engine = useSessionStore((state) => state.engine);
+  const deckA = useSessionStore((state) => state.decks.A);
+  const deckB = useSessionStore((state) => state.decks.B);
+  const meters = useSessionStore((state) => state.meters);
+  const engineState = engine.status;
+  const engineError = engine.error ?? '';
+  const filePathA = deckA.source?.filePath ?? '';
+  const filePathB = deckB.source?.filePath ?? '';
+  const trackNameB = deckB.source?.displayName ?? '';
+  const isPlaying = deckA.acknowledgedTransport === 'playing';
+  const tempo = (deckA.tempoRatio - 1) * 100;
+  const pitch = deckA.pitchSemitones;
+  const loopBeats = deckA.loopLengthBeats;
+  const positionSec = meters?.players?.[deckA.playerId]?.positionSec ?? 0;
   const [loudnessComp, setLoudnessComp] = useState<LoudnessComparison | null>(null);
   const [matchLevelOn, setMatchLevelOn] = useState(false);
 
@@ -133,23 +113,23 @@ export default function Workspace({ libraryOpen, setLibraryOpen }: {
       const analysis = await analyzeFile(path);
       setResult(analysis);
       setProgress({ stage: 'done', percent: 1 });
-      // Auto-load into Deck A of the performance engine
-      if (engineState === 'ready' && analysis.file_path) {
-        try {
-          await audioEngineLoadPlayerPaused(0, analysis.file_path);
-          setFilePathA(analysis.file_path);
-          setTrackNameA(displayName);
-        } catch (e) {
-          console.warn('[workspace] auto-load into engine failed:', e);
-        }
-      }
     } catch (e) {
       setError(typeof e === 'string' ? e : 'Analysis failed.');
       setProgress(null);
     } finally {
       setIsAnalyzing(false);
     }
-  }, [engineState]);
+  }, []);
+
+  const handleLoadAndAnalyze = useCallback(async (path: string, displayName: string) => {
+    // Playback preparation and local analysis start independently. A decode or
+    // device failure must not suppress the analysis result, and analysis must
+    // not sit on the path to a playable deck.
+    void sessionService.loadDeck('A', path, displayName).catch((loadError) => {
+      console.warn('[workspace] Deck A load failed:', loadError);
+    });
+    await handleAnalyzePath(path, displayName);
+  }, [handleAnalyzePath]);
 
   // Tauri drag-drop
   useEffect(() => {
@@ -170,7 +150,7 @@ export default function Workspace({ libraryOpen, setLibraryOpen }: {
             if (paths && paths.length > 0) {
               const fullPath = paths[0];
               const name = fullPath.split(/[\\/]/).pop() ?? fullPath;
-              handleAnalyzePath(fullPath, name);
+              void handleLoadAndAnalyze(fullPath, name);
             }
           }
         });
@@ -180,7 +160,7 @@ export default function Workspace({ libraryOpen, setLibraryOpen }: {
       }
     })();
     return () => { cancelled = true; if (unlisten) unlisten(); };
-  }, [handleAnalyzePath]);
+  }, [handleLoadAndAnalyze]);
 
   // Tuner progress listener
   useEffect(() => {
@@ -248,61 +228,14 @@ export default function Workspace({ libraryOpen, setLibraryOpen }: {
       });
       if (typeof selected === 'string') {
         const name = selected.split(/[\\/]/).pop() ?? selected;
-        await handleAnalyzePath(selected, name);
+        await handleLoadAndAnalyze(selected, name);
       }
     } catch (err) {
       setError(typeof err === 'string' ? err : 'Could not open the file picker.');
     }
-  }, [handleAnalyzePath]);
+  }, [handleLoadAndAnalyze]);
 
   // ─── engine ──────────────────────────────────────────────────────────
-
-  const initEngine = useCallback(async () => {
-    setEngineState('initializing');
-    setEngineError('');
-    try {
-      await audioEngineInit();
-      const info = await listeningLabGetProcessorInfo();
-      setProcessorInfo(info);
-      await audioEngineSetMasterGain(1.0);
-      await audioEngineSetBus(0, 'master');
-      await audioEngineSetBus(1, 'master');
-      setEngineState('ready');
-    } catch (e) {
-      console.error('Engine init failed:', e);
-      setEngineError(String(e));
-      setEngineState('error');
-    }
-  }, []);
-
-  // Auto-init engine on mount
-  useEffect(() => {
-    initEngine();
-  }, [initEngine]);
-
-  // Poll meters at 20 Hz
-  useEffect(() => {
-    if (engineState !== 'ready') return;
-    let active = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const poll = async () => {
-      if (!active) return;
-      try {
-        const m = await audioEngineGetMeters();
-        if (!active) return;
-        setMeters(m);
-        if (Number.isFinite(m?.players?.[0]?.positionSec)) {
-          setPositionSec(m.players[0].positionSec);
-        }
-      } catch (e) {
-        if (!active) return;
-        setMeters(null);
-      }
-      if (active) timer = setTimeout(poll, 50);
-    };
-    timer = setTimeout(poll, 50);
-    return () => { active = false; clearTimeout(timer); };
-  }, [engineState]);
 
   // Loudness comparison when both decks loaded
   useEffect(() => {
@@ -321,48 +254,46 @@ export default function Workspace({ libraryOpen, setLibraryOpen }: {
     });
     if (!selected || typeof selected !== 'string') return;
     try {
-      await audioEngineLoadPlayerPaused(1, selected);
-      setFilePathB(selected);
-      setTrackNameB(selected.split(/[\\/]/).pop() || selected);
+      await sessionService.loadDeck(
+        'B',
+        selected,
+        selected.split(/[\\/]/).pop() || selected,
+      );
     } catch (e) {
       console.error('Load Deck B failed:', e);
     }
   };
 
-  const handlePlay = async () => { try { await audioEnginePlay(0); setIsPlaying(true); } catch (e) { console.error(e); } };
-  const handlePause = async () => { try { await audioEnginePause(0); setIsPlaying(false); } catch (e) { console.error(e); } };
-  const handleStop = async () => { try { await audioEngineStop(0); setIsPlaying(false); } catch (e) { console.error(e); } };
-  const handleSeek = async (beats: number) => { try { await audioEngineSeek(0, beats); } catch (e) { console.error(e); } };
+  const handlePlay = async () => { try { await sessionService.setTransport('A', 'playing'); } catch (e) { console.error(e); } };
+  const handlePause = async () => { try { await sessionService.setTransport('A', 'paused'); } catch (e) { console.error(e); } };
+  const handleStop = async () => { try { await sessionService.setTransport('A', 'stopped'); } catch (e) { console.error(e); } };
+  const handleSeek = async (beats: number) => { try { await sessionService.seek('A', beats); } catch (e) { console.error(e); } };
 
   const handleSetLoop = async (bars: number | null) => {
     if (bars === null) {
-      setLoopBeats(null);
-      try { await audioEngineSetLoop(0, null, null); } catch (e) { console.error(e); }
+      try { await sessionService.setLoop('A', null); } catch (e) { console.error(e); }
       return;
     }
-    const meterNum = meters?.players?.[0]?.meterNumerator || 4;
+    const meterNum = meters?.players?.[deckA.playerId]?.meterNumerator || 4;
     const beats = bars * meterNum;
-    setLoopBeats(beats);
-    try { await audioEngineSetLoop(0, 0, beats); } catch (e) { console.error(e); }
+    try { await sessionService.setLoop('A', beats); } catch (e) { console.error(e); }
   };
 
   const applyTempo = async (pct: number) => {
-    setTempo(pct);
-    try { await audioEngineSetTempo(0, 1 + pct / 100); } catch (e) { console.error(e); }
+    try { await sessionService.setTempo('A', 1 + pct / 100); } catch (e) { console.error(e); }
   };
 
   const applyPitch = async (st: number) => {
-    setPitch(st);
-    try { await audioEngineSetPitch(0, st); } catch (e) { console.error(e); }
+    try { await sessionService.setPitch('A', st); } catch (e) { console.error(e); }
   };
 
   const toggleMatchLevel = async () => {
     if (!loudnessComp?.matchGain) return;
     if (matchLevelOn) {
-      await audioEngineSetLoudnessMatchGain(1, 1.0);
+      await sessionService.setLoudnessMatchGain('B', 1.0);
       setMatchLevelOn(false);
     } else {
-      await audioEngineSetLoudnessMatchGain(1, loudnessComp.matchGain);
+      await sessionService.setLoudnessMatchGain('B', loudnessComp.matchGain);
       setMatchLevelOn(true);
     }
   };
@@ -401,7 +332,7 @@ export default function Workspace({ libraryOpen, setLibraryOpen }: {
   const sampleOver = meters !== null && meters.masterSamplePeak >= 1;
   const truePeakOver = truePeakDbtp !== null && Number.isFinite(truePeakDbtp) && truePeakDbtp > 0;
 
-  const meterNum = meters?.players?.[0]?.meterNumerator || 4;
+  const meterNum = meters?.players?.[deckA.playerId]?.meterNumerator || 4;
 
   // ─── render ──────────────────────────────────────────────────────────
 
@@ -512,18 +443,28 @@ export default function Workspace({ libraryOpen, setLibraryOpen }: {
       )}
 
       {/* ─── Performance section ─── */}
-      {result && (
-        <div className="border-t border-white/10 pt-6">
+      <div className="border-t border-white/10 pt-6">
           <h3 className="text-lg font-bold text-text-primary mb-1">Performance</h3>
           <p className="text-sm text-text-secondary mb-4">
             Play back through the TuneLock engine with live metering. No safety limiter yet (PB-6.3 pending).
           </p>
 
+          <div className="mb-4 text-xs text-text-secondary flex flex-wrap gap-3">
+            <span>Deck A: {deckA.source?.displayName ?? 'No file loaded'}</span>
+            <span>Load: {deckA.loadStatus}</span>
+            <span>Engine generation: {engine.generation}</span>
+          </div>
+          {deckA.error && (
+            <div className="mb-4 p-3 bg-red-900/30 border border-red-700/50 rounded-lg text-sm text-red-300">
+              Deck A: {deckA.error}
+            </div>
+          )}
+
           {/* Engine status */}
           {engineState === 'error' && (
             <div className="mb-4 p-3 bg-red-900/30 border border-red-700/50 rounded-lg text-sm text-red-300">
               Audio engine failed: {engineError}
-              <button onClick={initEngine} className="ml-3 px-3 py-1 bg-red-800/50 rounded text-xs">Retry</button>
+              <button onClick={() => void sessionService.initialize()} className="ml-3 px-3 py-1 bg-red-800/50 rounded text-xs">Retry</button>
             </div>
           )}
           {engineState === 'initializing' && (
@@ -537,7 +478,7 @@ export default function Workspace({ libraryOpen, setLibraryOpen }: {
                 <div className="flex items-center justify-between mb-3">
                   <h4 className="text-sm font-bold text-label-cream">Live Master Meters</h4>
                   <div className="text-xs text-label-dim flex gap-4">
-                    <span>SR: {processorInfo?.sampleRate || '?'} Hz</span>
+                    <span>SR: {engine.sampleRate || '?'} Hz</span>
                     <span>Pos: {meters && Number.isFinite(positionSec) ? fmtTime(positionSec) : '—'}</span>
                     {isPlaying && <span className="text-cap-amber">● PLAYING</span>}
                   </div>
@@ -561,24 +502,24 @@ export default function Workspace({ libraryOpen, setLibraryOpen }: {
               {/* Transport */}
               <div className="flex flex-wrap gap-2 mb-4">
                 {!isPlaying ? (
-                  <button onClick={handlePlay} className="flex items-center gap-1.5 px-4 py-2 bg-cap-amber text-black rounded text-sm font-medium">
+                  <button disabled={deckA.loadStatus !== 'ready'} onClick={handlePlay} className="flex items-center gap-1.5 px-4 py-2 bg-cap-amber text-black rounded text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed">
                     <Play className="w-4 h-4" /> Play
                   </button>
                 ) : (
-                  <button onClick={handlePause} className="flex items-center gap-1.5 px-4 py-2 bg-plate-lighter rounded text-sm">
+                  <button disabled={deckA.loadStatus !== 'ready'} onClick={handlePause} className="flex items-center gap-1.5 px-4 py-2 bg-plate-lighter rounded text-sm disabled:opacity-40 disabled:cursor-not-allowed">
                     <Pause className="w-4 h-4" /> Pause
                   </button>
                 )}
-                <button onClick={handleStop} className="flex items-center gap-1.5 px-4 py-2 bg-plate-light rounded text-sm">
+                <button disabled={deckA.loadStatus !== 'ready'} onClick={handleStop} className="flex items-center gap-1.5 px-4 py-2 bg-plate-light rounded text-sm disabled:opacity-40 disabled:cursor-not-allowed">
                   <Square className="w-4 h-4" /> Stop
                 </button>
-                <button onClick={() => handleSeek(0)} className="flex items-center gap-1.5 px-4 py-2 bg-plate-light rounded text-sm">
+                <button disabled={deckA.loadStatus !== 'ready'} onClick={() => handleSeek(0)} className="flex items-center gap-1.5 px-4 py-2 bg-plate-light rounded text-sm disabled:opacity-40 disabled:cursor-not-allowed">
                   <SkipBack className="w-4 h-4" /> Start
                 </button>
-                <button onClick={() => handleSeek(32)} className="flex items-center gap-1.5 px-4 py-2 bg-plate-light rounded text-sm">
+                <button disabled={deckA.loadStatus !== 'ready'} onClick={() => handleSeek(32)} className="flex items-center gap-1.5 px-4 py-2 bg-plate-light rounded text-sm disabled:opacity-40 disabled:cursor-not-allowed">
                   <FastForward className="w-4 h-4" /> +32 beats
                 </button>
-                <button onClick={() => handleSeek(64)} className="flex items-center gap-1.5 px-4 py-2 bg-plate-light rounded text-sm">
+                <button disabled={deckA.loadStatus !== 'ready'} onClick={() => handleSeek(64)} className="flex items-center gap-1.5 px-4 py-2 bg-plate-light rounded text-sm disabled:opacity-40 disabled:cursor-not-allowed">
                   <FastForward className="w-4 h-4" /> +64 beats
                 </button>
               </div>
@@ -589,11 +530,11 @@ export default function Workspace({ libraryOpen, setLibraryOpen }: {
                   LOOP ({meterNum}/4 time — bar = {meterNum} beats)
                 </label>
                 <div className="flex gap-2">
-                  <button onClick={() => handleSetLoop(null)} className={`px-3 py-1 text-sm rounded ${loopBeats === null ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>Off</button>
-                  <button onClick={() => handleSetLoop(1)} className={`px-3 py-1 text-sm rounded ${loopBeats === meterNum * 1 ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>1 bar</button>
-                  <button onClick={() => handleSetLoop(2)} className={`px-3 py-1 text-sm rounded ${loopBeats === meterNum * 2 ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>2 bars</button>
-                  <button onClick={() => handleSetLoop(4)} className={`px-3 py-1 text-sm rounded ${loopBeats === meterNum * 4 ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>4 bars</button>
-                  <button onClick={() => handleSetLoop(8)} className={`px-3 py-1 text-sm rounded ${loopBeats === meterNum * 8 ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>8 bars</button>
+                  <button disabled={deckA.loadStatus !== 'ready'} onClick={() => handleSetLoop(null)} className={`px-3 py-1 text-sm rounded disabled:opacity-40 disabled:cursor-not-allowed ${loopBeats === null ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>Off</button>
+                  <button disabled={deckA.loadStatus !== 'ready'} onClick={() => handleSetLoop(1)} className={`px-3 py-1 text-sm rounded disabled:opacity-40 disabled:cursor-not-allowed ${loopBeats === meterNum * 1 ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>1 bar</button>
+                  <button disabled={deckA.loadStatus !== 'ready'} onClick={() => handleSetLoop(2)} className={`px-3 py-1 text-sm rounded disabled:opacity-40 disabled:cursor-not-allowed ${loopBeats === meterNum * 2 ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>2 bars</button>
+                  <button disabled={deckA.loadStatus !== 'ready'} onClick={() => handleSetLoop(4)} className={`px-3 py-1 text-sm rounded disabled:opacity-40 disabled:cursor-not-allowed ${loopBeats === meterNum * 4 ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>4 bars</button>
+                  <button disabled={deckA.loadStatus !== 'ready'} onClick={() => handleSetLoop(8)} className={`px-3 py-1 text-sm rounded disabled:opacity-40 disabled:cursor-not-allowed ${loopBeats === meterNum * 8 ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>8 bars</button>
                 </div>
               </div>
 
@@ -603,8 +544,8 @@ export default function Workspace({ libraryOpen, setLibraryOpen }: {
                   <label className="text-xs text-text-secondary block mb-1">TEMPO</label>
                   <div className="flex gap-2">
                     {TEMPO_PRESETS.map(p => (
-                      <button key={p} onClick={() => applyTempo(p)}
-                        className={`px-3 py-1 text-sm rounded min-w-[3.5rem] ${tempo === p ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>
+                      <button key={p} disabled={deckA.loadStatus !== 'ready'} onClick={() => applyTempo(p)}
+                        className={`px-3 py-1 text-sm rounded min-w-[3.5rem] disabled:opacity-40 disabled:cursor-not-allowed ${tempo === p ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>
                         {p > 0 ? `+${p}%` : `${p}%`}
                       </button>
                     ))}
@@ -614,8 +555,8 @@ export default function Workspace({ libraryOpen, setLibraryOpen }: {
                   <label className="text-xs text-text-secondary block mb-1">PITCH (semitones)</label>
                   <div className="flex gap-2">
                     {PITCH_PRESETS.map(p => (
-                      <button key={p} onClick={() => applyPitch(p)}
-                        className={`px-3 py-1 text-sm rounded min-w-[3rem] ${pitch === p ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>
+                      <button key={p} disabled={deckA.loadStatus !== 'ready'} onClick={() => applyPitch(p)}
+                        className={`px-3 py-1 text-sm rounded min-w-[3rem] disabled:opacity-40 disabled:cursor-not-allowed ${pitch === p ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>
                         {p > 0 ? `+${p}` : `${p}`}
                       </button>
                     ))}
@@ -624,14 +565,14 @@ export default function Workspace({ libraryOpen, setLibraryOpen }: {
               </div>
 
               {/* Musical telemetry */}
-              {meters?.players?.[0] && (
+              {meters?.players?.[deckA.playerId] && (
                 <div className="mb-4 text-xs text-text-secondary flex flex-wrap gap-4">
-                  <span>Source BPM: <span className="text-text-primary">{(meters.players[0].sourceBpm ?? 0) > 0 ? meters.players[0].sourceBpm.toFixed(2) : '—'}</span></span>
-                  <span>Effective BPM: <span className="text-text-primary">{(meters.players[0].effectiveBpm ?? 0) > 0 ? meters.players[0].effectiveBpm.toFixed(2) : '—'}</span></span>
-                  <span>Tempo: <span className="text-text-primary">{(((meters.players[0].tempoRatio ?? 1) - 1) * 100).toFixed(2)}%</span></span>
-                  <span>Pitch: <span className="text-text-primary">{(meters.players[0].pitchSemitones ?? 0) > 0 ? '+' : ''}{(meters.players[0].pitchSemitones ?? 0).toFixed(1)} st</span></span>
-                  <span>Beat: <span className="text-text-primary">{(meters.players[0].beatPosition ?? 0).toFixed(1)}</span></span>
-                  <span>Bar: <span className="text-text-primary">{(meters.players[0].barPosition ?? 0).toFixed(1)}</span></span>
+                  <span>Source BPM: <span className="text-text-primary">{(meters.players[deckA.playerId].sourceBpm ?? 0) > 0 ? meters.players[deckA.playerId].sourceBpm.toFixed(2) : '—'}</span></span>
+                  <span>Effective BPM: <span className="text-text-primary">{(meters.players[deckA.playerId].effectiveBpm ?? 0) > 0 ? meters.players[deckA.playerId].effectiveBpm.toFixed(2) : '—'}</span></span>
+                  <span>Tempo: <span className="text-text-primary">{(((meters.players[deckA.playerId].tempoRatio ?? 1) - 1) * 100).toFixed(2)}%</span></span>
+                  <span>Pitch: <span className="text-text-primary">{(meters.players[deckA.playerId].pitchSemitones ?? 0) > 0 ? '+' : ''}{(meters.players[deckA.playerId].pitchSemitones ?? 0).toFixed(1)} st</span></span>
+                  <span>Beat: <span className="text-text-primary">{(meters.players[deckA.playerId].beatPosition ?? 0).toFixed(1)}</span></span>
+                  <span>Bar: <span className="text-text-primary">{(meters.players[deckA.playerId].barPosition ?? 0).toFixed(1)}</span></span>
                 </div>
               )}
 
@@ -645,29 +586,35 @@ export default function Workspace({ libraryOpen, setLibraryOpen }: {
                   <span className="text-sm text-label-dim truncate">{trackNameB || 'No file loaded'}</span>
                 </div>
 
+                {deckB.error && (
+                  <div className="mb-3 p-2 bg-red-900/30 border border-red-700/50 rounded text-xs text-red-300">
+                    Deck B: {deckB.error}
+                  </div>
+                )}
+
                 {trackNameB && (
                   <>
                     <div className="flex gap-2 flex-wrap mb-3">
-                      <button onClick={() => audioEnginePlay(1)} className="flex items-center gap-1 px-3 py-1.5 bg-plate-light rounded text-sm">
+                      <button disabled={deckB.loadStatus !== 'ready'} onClick={() => void sessionService.setTransport('B', 'playing').catch(console.error)} className="flex items-center gap-1 px-3 py-1.5 bg-plate-light rounded text-sm disabled:opacity-40 disabled:cursor-not-allowed">
                         <Play className="w-3.5 h-3.5" /> Play B
                       </button>
-                      <button onClick={() => audioEnginePause(1)} className="flex items-center gap-1 px-3 py-1.5 bg-plate-light rounded text-sm">
+                      <button disabled={deckB.loadStatus !== 'ready'} onClick={() => void sessionService.setTransport('B', 'paused').catch(console.error)} className="flex items-center gap-1 px-3 py-1.5 bg-plate-light rounded text-sm disabled:opacity-40 disabled:cursor-not-allowed">
                         <Pause className="w-3.5 h-3.5" /> Pause B
                       </button>
-                      <button onClick={() => audioEngineSyncLaunch(0, 1)} className="px-3 py-1.5 bg-plate-lighter rounded text-sm" title="Start both at the same engine frame">
+                      <button disabled={deckA.loadStatus !== 'ready' || deckB.loadStatus !== 'ready'} onClick={() => void sessionService.syncLaunch('A', 'B').catch(console.error)} className="px-3 py-1.5 bg-plate-lighter rounded text-sm disabled:opacity-40 disabled:cursor-not-allowed" title="Start both at the same engine frame">
                         Same-Frame Start
                       </button>
                       <button
-                        onClick={() => audioEngineBeatSync(0, 1)}
-                        disabled={(meters?.players?.[0]?.sourceBpm ?? 0) <= 0 || (meters?.players?.[1]?.sourceBpm ?? 0) <= 0}
+                        onClick={() => void sessionService.beatSync('A', 'B').catch(console.error)}
+                        disabled={(meters?.players?.[deckA.playerId]?.sourceBpm ?? 0) <= 0 || (meters?.players?.[deckB.playerId]?.sourceBpm ?? 0) <= 0}
                         className="px-4 py-1.5 bg-cap-amber text-black rounded text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed"
                         title="Tempo-match B to A and align nearest beats"
                       >
                         Beat Sync
                       </button>
                       <button
-                        onClick={() => audioEngineBarSync(0, 1)}
-                        disabled={(meters?.players?.[0]?.sourceBpm ?? 0) <= 0 || (meters?.players?.[1]?.sourceBpm ?? 0) <= 0}
+                        onClick={() => void sessionService.barSync('A', 'B').catch(console.error)}
+                        disabled={(meters?.players?.[deckA.playerId]?.sourceBpm ?? 0) <= 0 || (meters?.players?.[deckB.playerId]?.sourceBpm ?? 0) <= 0}
                         className="px-4 py-1.5 bg-cap-amber text-black rounded text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed"
                         title="Tempo-match B→A + align downbeat/bar boundaries"
                       >
@@ -725,7 +672,6 @@ export default function Workspace({ libraryOpen, setLibraryOpen }: {
             </>
           )}
         </div>
-      )}
 
       {/* ─── Library drawer ─── */}
       {libraryOpen && (

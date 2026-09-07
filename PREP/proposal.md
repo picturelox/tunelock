@@ -1,5 +1,9 @@
 # Project Proposal: TuneLock
 
+> **Historical scope notice (2026-09-06):** Retained for product and visual
+> research. `PRODUCT.md` defines the current performance-and-recording release;
+> `ROADMAP.md` defines delivery order.
+
 > The ultimate mix planner — a planning desk where a DJ can see an entire set,  
 > experiment like a sampler performer, and inspect a transition like an audio engineer.  
 > Housed in a Walnut Console: character in the frame, precision in the display.

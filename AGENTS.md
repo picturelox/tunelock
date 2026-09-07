@@ -21,7 +21,7 @@ $env:PATH = "C:\Users\louis.media\.cargo\bin;" + $env:PATH
 
 ## House rules
 
-1. **The plan file is the source of truth:** `C:\Users\louis.media\.devin\plans\plan-dfdfe6627c43db0f.md`. Keep it current; do not work against memory of it.
+1. **The in-repository plan is the source of truth:** `ROADMAP.md`, governed by `PRODUCT.md` and evidenced by `CAPABILITIES.md`, `STATUS.md`, and `ACCURACY.md`. The legacy file at `C:\Users\louis.media\.devin\plans\plan-dfdfe6627c43db0f.md` carries a TL-00 supersession header for older tooling; it must not override the repository plan.
 2. **No engine change lands before a baseline exists** in `ACCURACY.md`, and every engine change is re-measured against it.
 3. **The local result renders first, always.** No network call, model load, or LLM call is ever on the critical path to a key/BPM readout.
 4. **One harmony vocabulary.** Rust `harmony/` and TS `lib/harmony.ts` are mirrors with shared test vectors. Do not add a third.

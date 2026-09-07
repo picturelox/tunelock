@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64},
+    Arc,
+};
 use tauri::Manager;
 use tokio::sync::Mutex;
 
@@ -26,6 +29,75 @@ pub struct AppState {
     pub assist_enabled: Arc<Mutex<bool>>,
     pub assist_model: Arc<Mutex<Option<String>>>,
     pub audio_engine: Arc<Mutex<Option<audio::AudioEngine>>>,
+    /// Serializes engine creation and device replacement.
+    pub audio_engine_lifecycle: Arc<AudioEngineLifecycle>,
+    pub audio_engine_drain_started: Arc<AtomicBool>,
+    pub audio_loads: Arc<AudioLoadCoordinator>,
+}
+
+/// Assigns and validates asynchronous load identities independently for every
+/// player. Decode work may finish out of order; only the newest identity may
+/// install into the engine.
+pub struct AudioLoadCoordinator {
+    next_generation: AtomicU64,
+    current: [AtomicU64; audio::MAX_PLAYERS],
+}
+
+impl AudioLoadCoordinator {
+    pub fn new() -> Self {
+        Self {
+            next_generation: AtomicU64::new(1),
+            current: std::array::from_fn(|_| AtomicU64::new(0)),
+        }
+    }
+
+    pub fn begin(&self, player: audio::PlayerId) -> Result<audio::LoadGeneration, String> {
+        let index = player.as_index();
+        if index >= audio::MAX_PLAYERS {
+            return Err(format!("Player {} is out of range", player.0));
+        }
+        let generation = self
+            .next_generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        self.current[index].store(generation, std::sync::atomic::Ordering::Release);
+        Ok(audio::LoadGeneration(generation))
+    }
+
+    pub fn is_current(
+        &self,
+        player: audio::PlayerId,
+        generation: audio::LoadGeneration,
+    ) -> bool {
+        player.as_index() < audio::MAX_PLAYERS
+            && self.current[player.as_index()].load(std::sync::atomic::Ordering::Acquire)
+                == generation.0
+    }
+}
+
+/// Coordinates application-level engine replacement without putting any
+/// synchronization on the realtime thread.
+pub struct AudioEngineLifecycle {
+    pub change: Mutex<()>,
+    generation: AtomicU64,
+}
+
+impl AudioEngineLifecycle {
+    pub fn new() -> Self {
+        Self {
+            change: Mutex::new(()),
+            generation: AtomicU64::new(0),
+        }
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    pub fn advance_generation(&self) -> u64 {
+        self.generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
+            + 1
+    }
 }
 
 pub struct AnalysisQueue {
@@ -38,6 +110,43 @@ pub struct AnalysisQueue {
     pub completed_count: usize,
     /// Total time spent analyzing (ms) since the queue started.
     pub elapsed_ms: u128,
+}
+
+#[cfg(test)]
+mod app_state_tests {
+    use super::{AudioEngineLifecycle, AudioLoadCoordinator};
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn engine_lifecycle_serializes_concurrent_changes() {
+        let lifecycle = Arc::new(AudioEngineLifecycle::new());
+        let first_change = lifecycle.change.lock().await;
+
+        let waiting_lifecycle = lifecycle.clone();
+        let waiting = tokio::spawn(async move {
+            let _change = waiting_lifecycle.change.lock().await;
+            waiting_lifecycle.advance_generation()
+        });
+
+        tokio::task::yield_now().await;
+        assert!(!waiting.is_finished());
+        assert_eq!(lifecycle.generation(), 0);
+
+        drop(first_change);
+        assert_eq!(waiting.await.unwrap(), 1);
+        assert_eq!(lifecycle.generation(), 1);
+    }
+
+    #[test]
+    fn newest_player_load_generation_invalidates_older_work() {
+        let loads = AudioLoadCoordinator::new();
+        let player = crate::audio::PlayerId(1);
+        let first = loads.begin(player).unwrap();
+        let second = loads.begin(player).unwrap();
+        assert!(!loads.is_current(player, first));
+        assert!(loads.is_current(player, second));
+        assert!(loads.begin(crate::audio::PlayerId(8)).is_err());
+    }
 }
 
 impl Default for AnalysisQueue {
@@ -75,6 +184,9 @@ pub fn run() {
                 assist_enabled: Arc::new(Mutex::new(false)),
                 assist_model: Arc::new(Mutex::new(None)),
                 audio_engine: Arc::new(Mutex::new(None)),
+                audio_engine_lifecycle: Arc::new(AudioEngineLifecycle::new()),
+                audio_engine_drain_started: Arc::new(AtomicBool::new(false)),
+                audio_loads: Arc::new(AudioLoadCoordinator::new()),
             };
             
             app.manage(state);

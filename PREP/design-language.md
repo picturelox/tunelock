@@ -1,5 +1,10 @@
 # TuneLock Design Language — Walnut Console
 
+> **Historical layout notice (2026-09-06):** The visual principles remain a
+> reference, but the three-level primary workspace is superseded by the
+> persistent performance-desk contract in `PRODUCT.md` and TL-12 of
+> `ROADMAP.md`.
+
 **Status:** Approved direction  
 **Date:** 2026-08-20  
 **Owner:** TuneLock  

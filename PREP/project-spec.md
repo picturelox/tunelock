@@ -1,3 +1,6 @@
+> **Historical scope notice (2026-09-06):** This early project sketch is
+> superseded by `PRODUCT.md` and `ROADMAP.md` where product scope conflicts.
+
 Goal of this project: Fast win/osx app that enables DJs to analyze, organize, and prepare their music files.
 
 Similar to: Mixed in Key, Songfinder, beaTunes

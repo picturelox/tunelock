@@ -436,6 +436,7 @@ export interface PlayerMeterEntry {
 export interface AudioMeterReadout {
   playing: boolean;
   currentFrame: number;
+  engineGeneration: number;
   players: PlayerMeterEntry[]; // length 8
   busARms: number;
   busAPeak: number;
@@ -451,7 +452,13 @@ export interface AudioMeterReadout {
   commandsDropped: number;
 }
 
-export async function audioEngineInit(): Promise<number> {
+export interface AudioEngineInitResult {
+  sampleRate: number;
+  engineGeneration: number;
+  created: boolean;
+}
+
+export async function audioEngineInit(): Promise<AudioEngineInitResult> {
   return invoke('audio_engine_init');
 }
 
@@ -500,8 +507,31 @@ export async function audioEngineSetListeningCondition(
   return invoke('audio_engine_set_listening_condition', { player, processorType, tempoRate, pitchSemitones });
 }
 
-export async function audioEngineLoadPlayerPaused(player: number, filePath: string): Promise<void> {
-  return invoke('audio_engine_load_player_paused', { player, filePath });
+export interface AudioPlayerLoadResult {
+  requestGeneration: number;
+  loadGeneration: number;
+  engineGeneration: number;
+  sourceHandle: number | null;
+  installed: boolean;
+}
+
+const fallbackLoadGenerations = new Array<number>(8).fill(0);
+
+export async function audioEngineLoadPlayerPaused(
+  player: number,
+  filePath: string,
+  requestGeneration?: number,
+): Promise<AudioPlayerLoadResult> {
+  const generation = requestGeneration ?? ++fallbackLoadGenerations[player];
+  fallbackLoadGenerations[player] = Math.max(
+    fallbackLoadGenerations[player] ?? 0,
+    generation,
+  );
+  return invoke('audio_engine_load_player_paused', {
+    player,
+    filePath,
+    requestGeneration: generation,
+  });
 }
 
 export async function audioEngineSeekSourceSeconds(player: number, sourceSeconds: number): Promise<void> {

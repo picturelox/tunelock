@@ -4,6 +4,7 @@ import ErrorBoundary from './components/layout/ErrorBoundary';
 import Workspace from './components/workspace/Workspace';
 import { useLibraryStore } from './stores/libraryStore';
 import { onTrackAnalyzed, onMetadataBatchComplete, onAnalysisProgress } from './lib/tauri';
+import SessionRuntime from './session/SessionRuntime';
 
 function App() {
   const [libraryOpen, setLibraryOpen] = useState(false);
@@ -55,6 +56,7 @@ function App() {
 
   return (
     <ErrorBoundary>
+      <SessionRuntime />
       <MainLayout onToggleLibrary={() => setLibraryOpen(o => !o)}>
         <ErrorBoundary>
           <Workspace libraryOpen={libraryOpen} setLibraryOpen={setLibraryOpen} />

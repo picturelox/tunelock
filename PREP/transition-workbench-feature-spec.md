@@ -1,5 +1,11 @@
 # TuneLock Transition Workbench — Product Feature Specification
 
+> **Historical scope notice (2026-09-06):** Retained as design and persistence
+> research. Its preparation-first scope and three-level primary workspace are
+> superseded by `PRODUCT.md` and `ROADMAP.md`. Reusable transition details must
+> be reconciled with the persistent performance desk and executable replay
+> contract in TL-11.
+
 **Status:** Product direction approved; design language updated; implementation in progress  
 **Version:** 0.2  
 **Date:** 2026-08-20  
@@ -565,4 +571,3 @@ These decisions are binding for the first implementation proposal:
 | Default storage policy | User-set quota with LRU cleanup; current-project stems pinned |
 | First provider | User-installed local provider behind `StemProvider` |
 | Preview export | Defer until interactive reproduction and licensing behavior are proven |
-

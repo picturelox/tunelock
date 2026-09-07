@@ -1363,6 +1363,44 @@ mod tests {
     use super::*;
 
     #[test]
+    fn audio_engine_init_result_wire_names_generation() {
+        let wire = AudioEngineInitResult {
+            sample_rate: 48_000,
+            engine_generation: 7,
+            created: false,
+        };
+        assert_eq!(
+            serde_json::to_value(wire).unwrap(),
+            serde_json::json!({
+                "sampleRate": 48_000,
+                "engineGeneration": 7,
+                "created": false
+            })
+        );
+    }
+
+    #[test]
+    fn audio_player_load_result_wire_preserves_all_identities() {
+        let wire = AudioPlayerLoadResult {
+            request_generation: 4,
+            load_generation: 19,
+            engine_generation: 3,
+            source_handle: Some(8),
+            installed: true,
+        };
+        assert_eq!(
+            serde_json::to_value(wire).unwrap(),
+            serde_json::json!({
+                "requestGeneration": 4,
+                "loadGeneration": 19,
+                "engineGeneration": 3,
+                "sourceHandle": 8,
+                "installed": true
+            })
+        );
+    }
+
+    #[test]
     fn pb62_meter_wire_uses_camel_case_and_preserves_values() {
         let mut m = crate::audio::MeterReadout {
             playing: true,
@@ -1407,7 +1445,7 @@ mod tests {
             "meterNumerator": 3, "processorMode": 2
         }));
         assert_eq!(json, serde_json::json!({
-            "playing": true, "currentFrame": 48000,
+            "playing": true, "currentFrame": 48000, "engineGeneration": 0,
             "busARms": 0.1, "busAPeak": 0.2, "busBRms": 0.3, "busBPeak": 0.4,
             "masterRms": 0.5, "masterPeak": 0.6, "masterSamplePeak": 0.7,
             "masterTruePeakDbtp": 1.25, "masterClip": true,
@@ -1906,16 +1944,70 @@ pub async fn get_stem_manifest(
 // The Layer Lab exposes all eight slots.
 // ============================================================================
 
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioEngineInitResult {
+    pub sample_rate: u32,
+    pub engine_generation: u64,
+    pub created: bool,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioPlayerLoadResult {
+    pub request_generation: u64,
+    pub load_generation: u64,
+    pub engine_generation: u64,
+    pub source_handle: Option<u64>,
+    pub installed: bool,
+}
+
+fn ensure_audio_engine_drain_task(state: &State<'_, AppState>) {
+    use std::sync::atomic::Ordering;
+
+    if state
+        .audio_engine_drain_started
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return;
+    }
+
+    let engine_arc = state.audio_engine.clone();
+    tokio::spawn(async move {
+        let mut interval =
+            tokio::time::interval(tokio::time::Duration::from_millis(100));
+        loop {
+            interval.tick().await;
+            let engine_slot = engine_arc.lock().await;
+            if let Some(engine) = engine_slot.as_ref() {
+                engine.drain_retired_sources();
+            }
+        }
+    });
+}
+
 #[command]
-pub async fn audio_engine_init(state: State<'_, AppState>) -> Result<u32, String> {
+pub async fn audio_engine_init(
+    state: State<'_, AppState>,
+) -> Result<AudioEngineInitResult, String> {
+    // Serialize the check, construction, start, and install sequence with
+    // device replacement. Concurrent callers wait and reuse the winner.
+    let _change_guard = state.audio_engine_lifecycle.change.lock().await;
+
     // Idempotent: if the engine already exists, return its sample rate.
     // The audio engine is an application-level service, not something
     // the Listening Lab owns. Multiple views can call init safely.
     {
         let engine_slot = state.audio_engine.lock().await;
         if let Some(engine) = engine_slot.as_ref() {
+            ensure_audio_engine_drain_task(&state);
             eprintln!("[AudioInit] engine already exists, returning sr={}", engine.sample_rate());
-            return Ok(engine.sample_rate());
+            return Ok(AudioEngineInitResult {
+                sample_rate: engine.sample_rate(),
+                engine_generation: state.audio_engine_lifecycle.generation(),
+                created: false,
+            });
         }
     }
 
@@ -1934,34 +2026,23 @@ pub async fn audio_engine_init(state: State<'_, AppState>) -> Result<u32, String
     })?;
     eprintln!("[AudioInit] stream started successfully");
 
-    {
+    let generation = {
         let mut engine_slot = state.audio_engine.lock().await;
         *engine_slot = Some(engine);
-    }
-    eprintln!("[AudioInit] engine stored, spawning drain task");
+        state.audio_engine_lifecycle.advance_generation()
+    };
+    eprintln!("[AudioInit] engine stored, ensuring drain task");
+    ensure_audio_engine_drain_task(&state);
 
-    // Spawn an engine-owned non-realtime drain task that periodically
-    // drains retired source buffers. This is independent of UI meter
-    // polling — it runs even when the UI is hidden, minimized, or not
-    // polling meters. Drains every 100ms (10Hz), which is far faster
-    // than any realistic source retirement rate.
-    let engine_arc = state.audio_engine.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(100));
-        loop {
-            interval.tick().await;
-            let engine_slot = engine_arc.lock().await;
-            if let Some(engine) = engine_slot.as_ref() {
-                engine.drain_retired_sources();
-            } else {
-                // Engine was dropped — stop the drain task.
-                break;
-            }
-        }
-    });
-
-    eprintln!("[AudioInit] complete, returning sr={}", sr);
-    Ok(sr)
+    eprintln!(
+        "[AudioInit] complete, returning sr={}, generation={}",
+        sr, generation
+    );
+    Ok(AudioEngineInitResult {
+        sample_rate: sr,
+        engine_generation: generation,
+        created: true,
+    })
 }
 
 #[command]
@@ -2567,12 +2648,19 @@ pub async fn audio_engine_load_player_paused(
     state: State<'_, AppState>,
     player: u8,
     file_path: String,
-) -> Result<(), String> {
+    request_generation: u64,
+) -> Result<AudioPlayerLoadResult, String> {
+    let player_id = crate::audio::PlayerId(player);
+    let load_generation = state.audio_loads.begin(player_id)?;
+
     // Phase 1: Get the target sample rate from the engine.
-    let target_sr = {
+    let (target_sr, engine_generation) = {
         let engine_slot = state.audio_engine.lock().await;
         let engine = engine_slot.as_ref().ok_or("Audio engine not initialized")?;
-        engine.sample_rate()
+        (
+            engine.sample_rate(),
+            state.audio_engine_lifecycle.generation(),
+        )
     };
 
     // Phase 2: Look up the track in the DB by path and fetch its beat grid.
@@ -2599,14 +2687,39 @@ pub async fn audio_engine_load_player_paused(
         }
     };
 
+    if !state.audio_loads.is_current(player_id, load_generation)
+        || state.audio_engine_lifecycle.generation() != engine_generation
+    {
+        return Ok(AudioPlayerLoadResult {
+            request_generation,
+            load_generation: load_generation.0,
+            engine_generation,
+            source_handle: None,
+            installed: false,
+        });
+    }
+
     // Phase 3: Decode the audio file on a background thread.
     let file_path_for_decode = file_path.clone();
-    let mut buffer = tokio::task::spawn_blocking(move || {
+    let decode_result = tokio::task::spawn_blocking(move || {
         crate::audio::worker::decode_file(&file_path_for_decode, target_sr)
             .map_err(|e| e.to_string())
     })
     .await
-    .map_err(|e| format!("Decode task failed: {}", e))??;
+    .map_err(|e| format!("Decode task failed: {}", e))?;
+
+    if !state.audio_loads.is_current(player_id, load_generation)
+        || state.audio_engine_lifecycle.generation() != engine_generation
+    {
+        return Ok(AudioPlayerLoadResult {
+            request_generation,
+            load_generation: load_generation.0,
+            engine_generation,
+            source_handle: None,
+            installed: false,
+        });
+    }
+    let mut buffer = decode_result?;
 
     // Phase 4: If we have beat grid info from the DB, attach it now.
     if let Some((bpm, first_beat_sec, meter_numerator, downbeat_offset)) = beat_grid_info {
@@ -2622,22 +2735,32 @@ pub async fn audio_engine_load_player_paused(
     // source now and kick off async beat-grid detection below.
 
     // Phase 5: Register the source and launch (paused).
+    let _change_guard = state.audio_engine_lifecycle.change.lock().await;
+    if !state.audio_loads.is_current(player_id, load_generation)
+        || state.audio_engine_lifecycle.generation() != engine_generation
+    {
+        return Ok(AudioPlayerLoadResult {
+            request_generation,
+            load_generation: load_generation.0,
+            engine_generation,
+            source_handle: None,
+            installed: false,
+        });
+    }
     let mut engine_slot = state.audio_engine.lock().await;
     let engine = engine_slot.as_mut().ok_or("Audio engine not initialized")?;
     let source = engine.register_source(buffer);
-    engine.launch_player(
-        crate::audio::PlayerId(player),
+    if let Err(error) = engine.load_player_paused(
+        player_id,
         source,
         0.0,
-        crate::audio::Quantize::Immediate,
-    )?;
-    // Immediately pause to stop playback that launch_player just started.
-    let frame = engine.current_frame();
-    engine.send_command(crate::audio::EngineCommand::Pause {
-        player: crate::audio::PlayerId(player),
-        at_frame: frame,
-    });
+        load_generation,
+    ) {
+        engine.unregister_source(source);
+        return Err(error);
+    }
     drop(engine_slot);
+    drop(_change_guard);
 
     // Phase 6: If no beat grid was found in the DB, run the existing
     // beat-grid detector asynchronously. When it completes, send an
@@ -2645,48 +2768,64 @@ pub async fn audio_engine_load_player_paused(
     // without reloading the source.
     if beat_grid_info.is_none() {
         let engine_arc = state.audio_engine.clone();
+        let lifecycle = state.audio_engine_lifecycle.clone();
+        let loads = state.audio_loads.clone();
         let file_path_for_analysis = file_path.clone();
-        let player_id = player;
-        tokio::task::spawn_blocking(move || {
-            let result = (|| -> Result<crate::analysis::beat_grid::BeatGridResult, String> {
+        tokio::spawn(async move {
+            let result = tokio::task::spawn_blocking(move || {
                 let samples = crate::media::decode_media(&file_path_for_analysis)
                     .map_err(|e| e.to_string())?;
                 crate::analysis::beat_grid::detect_beat_grid(&samples)
                     .map_err(|e| e.to_string())
-            })();
+            })
+            .await
+            .map_err(|e| format!("Beat-grid task failed: {}", e))
+            .and_then(|result| result);
 
             match result {
                 Ok(grid) => {
                     eprintln!(
                         "[BeatGrid] async detection complete for player {}: BPM={:.2}, meter={}/4",
-                        player_id, grid.bpm, grid.meter_numerator
+                        player_id.0, grid.bpm, grid.meter_numerator
                     );
-                    // Attach the beat grid to the player via engine command.
-                    // Use a blocking lock since we're in spawn_blocking.
-                    let rt = tokio::runtime::Handle::current();
-                    let _ = rt.block_on(async {
-                        let engine_slot = engine_arc.lock().await;
-                        if let Some(engine) = engine_slot.as_ref() {
-                            let frame = engine.current_frame();
-                            engine.send_command(crate::audio::EngineCommand::AttachBeatGrid {
-                                player: crate::audio::PlayerId(player_id),
-                                at_frame: frame,
-                                bpm: grid.bpm,
-                                first_beat_sec: grid.first_beat_sec,
-                                meter_numerator: grid.meter_numerator,
-                                downbeat_offset: grid.downbeat_offset,
-                            });
-                        }
-                    });
+                    if !loads.is_current(player_id, load_generation) {
+                        return;
+                    }
+                    let _change_guard = lifecycle.change.lock().await;
+                    if lifecycle.generation() != engine_generation
+                        || !loads.is_current(player_id, load_generation)
+                    {
+                        return;
+                    }
+                    let engine_slot = engine_arc.lock().await;
+                    if let Some(engine) = engine_slot.as_ref() {
+                        let frame = engine.current_frame();
+                        engine.send_command(crate::audio::EngineCommand::AttachBeatGrid {
+                            player: player_id,
+                            at_frame: frame,
+                            source,
+                            load_generation,
+                            bpm: grid.bpm,
+                            first_beat_sec: grid.first_beat_sec,
+                            meter_numerator: grid.meter_numerator,
+                            downbeat_offset: grid.downbeat_offset,
+                        });
+                    }
                 }
                 Err(e) => {
-                    eprintln!("[BeatGrid] async detection failed for player {}: {}", player_id, e);
+                    eprintln!("[BeatGrid] async detection failed for player {}: {}", player_id.0, e);
                 }
             }
         });
     }
 
-    Ok(())
+    Ok(AudioPlayerLoadResult {
+        request_generation,
+        load_generation: load_generation.0,
+        engine_generation,
+        source_handle: Some(source.0),
+        installed: true,
+    })
 }
 
 #[command]
@@ -2809,6 +2948,7 @@ pub async fn audio_engine_set_filter_drive(state: State<'_, AppState>, bus: Stri
 pub struct AudioMeterReadout {
     pub playing: bool,
     pub current_frame: u64,
+    pub engine_generation: u64,
     pub players: [PlayerMeterEntry; 8],
     pub bus_a_rms: f64,
     pub bus_a_peak: f64,
@@ -2857,7 +2997,9 @@ pub async fn audio_engine_get_meters(state: State<'_, AppState>) -> Result<Audio
     // because the UI calls it regularly during playback.
     engine.drain_retired_sources();
 
-    Ok(engine.get_meters().into())
+    let mut readout: AudioMeterReadout = engine.get_meters().into();
+    readout.engine_generation = state.audio_engine_lifecycle.generation();
+    Ok(readout)
 }
 
 impl From<crate::audio::MeterReadout> for AudioMeterReadout {
@@ -2880,6 +3022,7 @@ impl From<crate::audio::MeterReadout> for AudioMeterReadout {
         Self {
             playing: m.playing,
             current_frame: m.current_frame,
+            engine_generation: 0,
             players,
             bus_a_rms: m.bus_a_rms,
             bus_a_peak: m.bus_a_peak,
@@ -3034,6 +3177,9 @@ pub async fn audio_engine_set_device(
     sample_rate: Option<u32>,
     buffer_size: Option<u32>,
 ) -> Result<u32, String> {
+    // Device replacement and first initialization share one owner.
+    let _change_guard = state.audio_engine_lifecycle.change.lock().await;
+
     // Rebuild the engine with the new config. This requires stopping the
     // current stream and creating a new one. The source registry is lost;
     // the UI must re-launch sources after a device change.
@@ -3048,14 +3194,16 @@ pub async fn audio_engine_set_device(
 
     let new_engine = crate::audio::engine::AudioEngine::new_with_config(&config)?;
     let new_sr = new_engine.sample_rate();
+    new_engine
+        .start()
+        .map_err(|e| format!("Failed to start stream: {}", e))?;
 
     let mut engine_slot = state.audio_engine.lock().await;
-    // Drop the old engine (stops the old stream)
+    // Only retire the old engine after the replacement stream starts.
     *engine_slot = Some(new_engine);
-    // Start the new stream
-    if let Some(engine) = engine_slot.as_ref() {
-        engine.start().map_err(|e| format!("Failed to start stream: {}", e))?;
-    }
+    state.audio_engine_lifecycle.advance_generation();
+    drop(engine_slot);
+    ensure_audio_engine_drain_task(&state);
 
     Ok(new_sr)
 }
