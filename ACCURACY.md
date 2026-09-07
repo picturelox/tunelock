@@ -138,6 +138,22 @@ signed nudge shifts beat position, BeatSync aligns fractional beat phase, and a
 stale grid revision is rejected. Key/BPM accuracy was not rerun because no
 analysis path changed.
 
+### TL-06 transport recheck (2026-09-07)
+
+Working tree based on the TL-00 through TL-05 checkpoint; TL-06 adds signed
+jog/scratch rate (reverse/hold), touch engagement, and clean release/resume to
+the varispeed processor. It does not change analysis algorithms, but the
+transport command path changed, so the callback harness was rerun.
+
+`cargo test --release audio::perf_harness::tests::perf_2_decks_48k_256_budget_5333us -- --ignored --nocapture`:
+2 decks @ 48k/256: max=1158 microseconds, avg=268 microseconds, p99=1122
+microseconds, budget=5333 microseconds -- **PASS**.
+
+Focused deterministic tests prove varispeed jog reverse decreases position,
+hold-at-zero outputs silence without advancing, release resumes forward
+playback, and the engine-level jog reverse/hold/resume sequence works. Key/BPM
+accuracy was not rerun because no analysis path changed.
+
 ## Method
 
 - **MIK corpus:** Personal library export (20,221 rows, 18,909 ready).

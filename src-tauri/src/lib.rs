@@ -263,6 +263,8 @@ pub fn run() {
             commands::audio_engine_set_hot_cue,
             commands::audio_engine_jump_hot_cue,
             commands::audio_engine_nudge,
+            commands::audio_engine_jog_touch,
+            commands::audio_engine_jog_rate,
             commands::audio_engine_load_player,
             commands::audio_engine_set_master_gain,
             commands::audio_engine_set_bus_gain,

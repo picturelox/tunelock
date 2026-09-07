@@ -573,6 +573,14 @@ export async function audioEngineNudge(player: number, beats: number): Promise<A
   return invoke('audio_engine_nudge', { player, beats });
 }
 
+export async function audioEngineJogTouch(player: number, engaged: boolean): Promise<AudioCommandSubmission> {
+  return invoke('audio_engine_jog_touch', { player, engaged });
+}
+
+export async function audioEngineJogRate(player: number, rate: number): Promise<AudioCommandSubmission> {
+  return invoke('audio_engine_jog_rate', { player, rate });
+}
+
 export async function getGitRevision(): Promise<string> {
   return invoke('get_git_revision');
 }

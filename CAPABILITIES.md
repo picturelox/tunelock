@@ -22,8 +22,8 @@ native or hardware evidence.
 | Command acknowledgement | Partial | Active load, transport, seek, loop, tempo, pitch, loudness-gain, hot-cue, nudge, and Sync actions have generation-scoped callback receipts, bounded pressure telemetry, timeout/error handling, and rollback; legacy direct-control paths remain | TL-08 |
 | Two-deck transport | Partial | A/B load/play/pause/seek/cue/loop/nudge and synchronized launch use the same session adapter, but the current presentation remains asymmetric | TL-12 |
 | Cues and loops | Partial | Loop command and Deck A fixed-bar loop controls exist; eight hot-cue slots per deck with set/jump commands exist in the engine and session, but no performance-desk hot-cue workflow is wired yet | TL-12 |
-| Tempo, pitch, and Sync | Partial | Varispeed/Signalsmith, BeatSync, and BarSync exist with synthetic tests; fractional beat phase and grid revisions are now engine-proven, but nonzero downbeat origins and manual takeover are not release-proven | TL-06/TL-12 |
-| Scratch and backspin | Missing | Current varispeed clamps the rate to positive values; no signed jog/hold/reverse transport exists | TL-06 |
+| Tempo, pitch, and Sync | Partial | Varispeed/Signalsmith, BeatSync, and BarSync exist with synthetic tests; fractional beat phase and grid revisions are now engine-proven, but nonzero downbeat origins and manual takeover are not release-proven | TL-12 |
+| Scratch and backspin | Partial | Signed jog rate (reverse/hold), touch engagement, and clean release/resume exist in the varispeed engine and session; S3 jog timing and Master Tempo reverse are not release-proven | TL-07/TL-12 |
 | Deck mixer | Engine only | Per-player gain, pan, mute, solo, bus, EQ, kills, and loops are registered; active Workspace exposes only a subset | TL-08/TL-12 |
 | Crossfader and filters | Engine only | Two buses, crossfade, and bus filters exist; deck identity versus crossfader-side vocabulary is not separated | TL-01/TL-08 |
 | Delay and reverb | Missing | No production delay or reverb DSP/control path was found | TL-08 |

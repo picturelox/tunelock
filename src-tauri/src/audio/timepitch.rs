@@ -24,6 +24,13 @@ pub trait TimePitchProcessor: Send {
     fn set_tempo_ratio(&mut self, ratio: f64);
     /// Set independent pitch shift in semitones (0.0 = none).
     fn set_pitch_semitones(&mut self, semitones: f64);
+    /// Set a signed scratch/jog read rate (negative = reverse, 0 = hold).
+    /// Only meaningful while jogging is engaged. Default no-op for
+    /// processors that do not support reverse playback.
+    fn set_jog_rate(&mut self, _rate: f64) {}
+    /// Engage or release scratch/jog mode. While engaged, the processor
+    /// reads at `jog_rate` instead of the tempo/pitch rate.
+    fn set_jogging(&mut self, _jogging: bool) {}
     /// Current tempo ratio.
     fn tempo_ratio(&self) -> f64;
     /// Current pitch shift in semitones.
@@ -159,6 +166,22 @@ impl TimePitchProcessor for ProcessorSet {
             ProcessorMode::Bypass => self.bypass.set_pitch_semitones(semitones),
             ProcessorMode::Varispeed => self.varispeed.set_pitch_semitones(semitones),
             ProcessorMode::Signalsmith => self.signalsmith.set_pitch_semitones(semitones),
+        }
+    }
+
+    fn set_jog_rate(&mut self, rate: f64) {
+        match self.mode {
+            ProcessorMode::Bypass => self.bypass.set_jog_rate(rate),
+            ProcessorMode::Varispeed => self.varispeed.set_jog_rate(rate),
+            ProcessorMode::Signalsmith => self.signalsmith.set_jog_rate(rate),
+        }
+    }
+
+    fn set_jogging(&mut self, jogging: bool) {
+        match self.mode {
+            ProcessorMode::Bypass => self.bypass.set_jogging(jogging),
+            ProcessorMode::Varispeed => self.varispeed.set_jogging(jogging),
+            ProcessorMode::Signalsmith => self.signalsmith.set_jogging(jogging),
         }
     }
 
@@ -317,6 +340,10 @@ pub struct VarispeedProcessor {
     position: f64,
     tempo: f64,
     semitones: f64,
+    // Signed scratch/jog rate (negative = reverse, 0 = hold).
+    jog_rate: f64,
+    // Whether scratch/jog mode is engaged.
+    jogging: bool,
 }
 
 impl VarispeedProcessor {
@@ -326,13 +353,20 @@ impl VarispeedProcessor {
             position: 0.0,
             tempo: 1.0,
             semitones: 0.0,
+            jog_rate: 0.0,
+            jogging: false,
         }
     }
 
-    /// Effective read rate: tempo compounded with pitch shift.
+    /// Effective read rate: tempo compounded with pitch shift, unless
+    /// scratch/jog mode is engaged (then the signed jog rate).
     #[inline]
     fn read_rate(&self) -> f64 {
-        self.tempo * 2.0f64.powf(self.semitones / 12.0)
+        if self.jogging {
+            self.jog_rate
+        } else {
+            self.tempo * 2.0f64.powf(self.semitones / 12.0)
+        }
     }
 
     /// Catmull-Rom cubic interpolation of an interleaved buffer.
@@ -373,6 +407,14 @@ impl TimePitchProcessor for VarispeedProcessor {
         self.semitones = semitones.clamp(-24.0, 24.0);
     }
 
+    fn set_jog_rate(&mut self, rate: f64) {
+        self.jog_rate = rate.clamp(-8.0, 8.0);
+    }
+
+    fn set_jogging(&mut self, jogging: bool) {
+        self.jogging = jogging;
+    }
+
     fn tempo_ratio(&self) -> f64 {
         self.tempo
     }
@@ -397,7 +439,13 @@ impl TimePitchProcessor for VarispeedProcessor {
         let channels = source.channels as usize;
         let total_frames = source.samples.len() / channels;
 
-        if self.position >= total_frames as f64 {
+        let rate = self.read_rate();
+        if rate == 0.0 {
+            // Hold at zero: output silence without advancing the position.
+            return Some((0.0, 0.0));
+        }
+
+        if self.position >= total_frames as f64 || self.position < 0.0 {
             return None;
         }
 
@@ -408,7 +456,7 @@ impl TimePitchProcessor for VarispeedProcessor {
             l
         };
 
-        self.position += self.read_rate();
+        self.position += rate;
         Some((l, r))
     }
 
@@ -1199,5 +1247,62 @@ mod tests {
                 break;
             }
         }
+    }
+
+    // ── TL-06: signed jog rate (reverse + hold) ───────────────────────
+
+    #[test]
+    fn varispeed_jog_reverse_decreases_position() {
+        let buf = sine_buffer(440.0, 44100.0, 4410);
+        let mut p = VarispeedProcessor::new();
+        p.set_source(buf, 1000.0);
+        p.set_jogging(true);
+        p.set_jog_rate(-1.0);
+
+        let before = p.position_frames();
+        let _ = p.next_frame().expect("reverse should produce a frame");
+        let after = p.position_frames();
+        assert!(
+            after < before,
+            "reverse jog should decrease position: {before} -> {after}"
+        );
+    }
+
+    #[test]
+    fn varispeed_jog_hold_outputs_silence_without_advancing() {
+        let buf = sine_buffer(440.0, 44100.0, 4410);
+        let mut p = VarispeedProcessor::new();
+        p.set_source(buf, 500.0);
+        p.set_jogging(true);
+        p.set_jog_rate(0.0);
+
+        let before = p.position_frames();
+        let (l, r) = p.next_frame().expect("hold should produce a frame");
+        assert_eq!(l, 0.0, "hold should output silence on left");
+        assert_eq!(r, 0.0, "hold should output silence on right");
+        assert_eq!(
+            p.position_frames(),
+            before,
+            "hold must not advance position"
+        );
+    }
+
+    #[test]
+    fn varispeed_jog_release_resumes_forward() {
+        let buf = sine_buffer(440.0, 44100.0, 4410);
+        let mut p = VarispeedProcessor::new();
+        p.set_source(buf, 1000.0);
+        p.set_jogging(true);
+        p.set_jog_rate(-1.0);
+        let _ = p.next_frame();  // reverse one frame
+        let scratch_pos = p.position_frames();
+
+        p.set_jogging(false);  // release
+        let _ = p.next_frame();
+        let resume_pos = p.position_frames();
+        assert!(
+            resume_pos > scratch_pos,
+            "release should resume forward playback: {scratch_pos} -> {resume_pos}"
+        );
     }
 }

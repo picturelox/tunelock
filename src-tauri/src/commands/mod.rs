@@ -2609,6 +2609,53 @@ pub async fn audio_engine_nudge(
     )
 }
 
+/// Engage or release scratch/jog mode for a player.
+#[command]
+pub async fn audio_engine_jog_touch(
+    state: State<'_, AppState>,
+    player: u8,
+    engaged: bool,
+) -> Result<AudioCommandSubmission, String> {
+    let player = checked_player(player)?;
+    let engine_slot = state.audio_engine.lock().await;
+    let engine = engine_slot.as_ref().ok_or("Audio engine not initialized")?;
+    let frame = engine.current_frame();
+    submit_audio_command(
+        engine,
+        state.audio_engine_lifecycle.generation(),
+        crate::audio::EngineCommand::JogTouch {
+            player,
+            at_frame: frame,
+            engaged,
+        },
+    )
+}
+
+/// Set the signed scratch/jog read rate (negative = reverse, 0 = hold).
+#[command]
+pub async fn audio_engine_jog_rate(
+    state: State<'_, AppState>,
+    player: u8,
+    rate: f64,
+) -> Result<AudioCommandSubmission, String> {
+    let player = checked_player(player)?;
+    if !rate.is_finite() {
+        return Err("Jog rate must be finite".to_string());
+    }
+    let engine_slot = state.audio_engine.lock().await;
+    let engine = engine_slot.as_ref().ok_or("Audio engine not initialized")?;
+    let frame = engine.current_frame();
+    submit_audio_command(
+        engine,
+        state.audio_engine_lifecycle.generation(),
+        crate::audio::EngineCommand::JogRate {
+            player,
+            at_frame: frame,
+            rate,
+        },
+    )
+}
+
 #[command]
 pub async fn audio_engine_load_player(state: State<'_, AppState>, player: u8, file_path: String) -> Result<(), String> {
     let mut engine_slot = state.audio_engine.lock().await;

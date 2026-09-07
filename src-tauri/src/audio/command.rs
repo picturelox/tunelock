@@ -234,6 +234,19 @@ pub enum EngineCommand {
         at_frame: u64,
         beats: f64,
     },
+    /// Engage or release scratch/jog mode. While engaged, the player reads
+    /// at the signed jog rate instead of the tempo/pitch rate.
+    JogTouch {
+        player: PlayerId,
+        at_frame: u64,
+        engaged: bool,
+    },
+    /// Set the signed scratch/jog read rate (negative = reverse, 0 = hold).
+    JogRate {
+        player: PlayerId,
+        at_frame: u64,
+        rate: f64,
+    },
     /// Set crossfader position (0.0 = full A, 1.0 = full B). Ramped.
     SetCrossfade {
         at_frame: u64,

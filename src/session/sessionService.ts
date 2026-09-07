@@ -14,6 +14,8 @@ import {
   audioEngineSetHotCue,
   audioEngineJumpHotCue,
   audioEngineNudge,
+  audioEngineJogTouch,
+  audioEngineJogRate,
   audioEngineSetLoop,
   audioEngineSetLoudnessMatchGain,
   audioEngineSetMasterGain,
@@ -342,6 +344,24 @@ class SessionService {
     await this.initialize();
     const submission = await audioEngineNudge(PLAYER_BY_DECK[deckId], beats);
     await this.waitForApplication(deckId, 'seek', submission);
+  }
+
+  async jogTouch(deckId: DeckId, engaged: boolean): Promise<void> {
+    await this.initialize();
+    const submission = await audioEngineJogTouch(
+      PLAYER_BY_DECK[deckId],
+      engaged,
+    );
+    await this.waitForApplication(deckId, 'transport', submission);
+  }
+
+  async jogRate(deckId: DeckId, rate: number): Promise<void> {
+    await this.initialize();
+    const submission = await audioEngineJogRate(
+      PLAYER_BY_DECK[deckId],
+      rate,
+    );
+    await this.waitForApplication(deckId, 'transport', submission);
   }
 
   async beatSync(leader: DeckId, follower: DeckId): Promise<void> {

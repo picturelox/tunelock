@@ -2,7 +2,7 @@
 
 Updated: 2026-09-06
 
-Current milestone: TL-05 complete in the working tree; TL-06 is the next
+Current milestone: TL-06 complete in the working tree; TL-07 is the next
 dependency-ready package
 
 Integration baseline: `performance-build` at
@@ -74,9 +74,9 @@ channel pairs, but the performance desk has not yet exposed those controls.
 
 ## Next bounded ticket
 
-TL-06 (jog, nudge, scratch, and backspin transport) is now dependency-ready.
-TL-05 transport is complete in the working tree; TL-06 must not claim S3 jog
-timing or scratch/backspin until the controller and hardware gates run.
+TL-07 (shared action model and S3 adapter) is now dependency-ready. TL-06
+transport is complete in the working tree; TL-07 must not claim S3 jog timing
+or scratch/backspin until the controller and hardware gates run.
 
 ## TL-01 implementation result
 
@@ -215,3 +215,31 @@ Fresh verification after TL-05:
 | Focused transport regressions | Passed: hot-cue set/jump, signed nudge, fractional beat-phase alignment, and stale grid-revision rejection |
 | Two-deck 48 kHz/256 release harness | Passed: max 1,127 microseconds, average 262 microseconds, p99 1,108 microseconds; 5,333 microsecond budget |
 | Native listening, S3 jog timing, and macOS | Not run; retained for TL-06, TL-07, and TL-12 hardware/platform gates |
+
+## TL-06 implementation result
+
+- Added signed jog/scratch read-rate support to the time/pitch processor
+  abstraction: `set_jog_rate` (negative = reverse, 0 = hold) and `set_jogging`
+  (engage/release). The varispeed processor implements reverse and hold; bypass
+  and Signalsmith keep the default no-op.
+- Added `JogTouch` and `JogRate` engine commands, wired through the Player's
+  `engage_jog`/`set_jog_rate`/`release_jog` methods. Engaging scratch switches
+  to the varispeed processor and starts from a hold at zero; release resumes
+  normal tempo/pitch playback from the current position.
+- Added `audio_engine_jog_touch` and `audio_engine_jog_rate` IPC commands plus
+  session-service `jogTouch`/`jogRate` methods with generation-scoped
+  acknowledgements.
+- Pitch-lock interaction is varispeed (pitch follows rate) during scratch;
+  Master Tempo reverse is out of scope. Crossfader and Sync handoff reuse the
+  existing bus routing and BeatSync re-alignment.
+
+Fresh verification after TL-06:
+
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` | Passed |
+| `npm run build` | Passed; 1,609 modules transformed; 262.33 kB JavaScript and 33.25 kB CSS before gzip |
+| `cargo test` | Passed: 249 library tests + 8 binary tests; 0 failed; 7 ignored performance tests |
+| Focused transport regressions | Passed: varispeed jog reverse, hold-at-zero silence, release/resume, and engine-level jog reverse/hold/resume |
+| Two-deck 48 kHz/256 release harness | Passed: max 1,158 microseconds, average 268 microseconds, p99 1,122 microseconds; 5,333 microsecond budget |
+| Native listening, S3 jog timing, and macOS | Not run; retained for TL-07 and TL-12 hardware/platform gates |

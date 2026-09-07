@@ -489,6 +489,22 @@ impl CallbackState {
                     self.players[idx].nudge(beats);
                 }
             }
+            EngineCommand::JogTouch { player, engaged, .. } => {
+                let idx = player.as_index();
+                if idx < MAX_PLAYERS {
+                    if engaged {
+                        self.players[idx].engage_jog();
+                    } else {
+                        self.players[idx].release_jog();
+                    }
+                }
+            }
+            EngineCommand::JogRate { player, rate, .. } => {
+                let idx = player.as_index();
+                if idx < MAX_PLAYERS {
+                    self.players[idx].set_jog_rate(rate);
+                }
+            }
             EngineCommand::SetCrossfade { position, .. } => {
                 self.crossfade_target = position as f64;
             }
@@ -783,6 +799,8 @@ impl CommandFrame for EngineCommand {
             | EngineCommand::SetHotCue { at_frame, .. }
             | EngineCommand::JumpHotCue { at_frame, .. }
             | EngineCommand::Nudge { at_frame, .. }
+            | EngineCommand::JogTouch { at_frame, .. }
+            | EngineCommand::JogRate { at_frame, .. }
             | EngineCommand::SetCrossfade { at_frame, .. }
             | EngineCommand::SetBusGain { at_frame, .. }
             | EngineCommand::SetBusEq { at_frame, .. }
@@ -2332,6 +2350,67 @@ mod tests {
             state.players[0].source_bpm(),
             130.0,
             "stale grid revision must be rejected"
+        );
+    }
+
+    // ── TL-06: jog reverse, hold, and release/resume ──────────────────
+
+    #[test]
+    fn jog_reverse_hold_and_resume() {
+        let mut state = make_state();
+        state.command_queue.push(EngineCommand::SetMasterGain { at_frame: 0, gain: 1.0 });
+        state.command_queue.push(EngineCommand::SetBus {
+            player: PlayerId(0),
+            at_frame: 0,
+            bus: BusId::Master,
+        });
+        state.command_queue.push(EngineCommand::Launch {
+            player: PlayerId(0),
+            at_frame: 0,
+            source: SourceHandle(1),
+            buffer: constant_buffer(0.3, 44100 * 5),
+            start_beat: 0.0,
+            quantize: Quantize::Immediate,
+        });
+
+        let mut out = vec![0.0f32; 512];
+        for _ in 0..5 {
+            render(&mut state, &mut out);
+        }
+
+        // Engage jog: hold at zero, position must not advance.
+        state.command_queue.push(EngineCommand::JogTouch {
+            player: PlayerId(0),
+            at_frame: state.frame_counter.load(Ordering::Relaxed),
+            engaged: true,
+        });
+        render(&mut state, &mut out);
+        let held = state.players[0].get_position_sec();
+
+        // Reverse: position must decrease.
+        state.command_queue.push(EngineCommand::JogRate {
+            player: PlayerId(0),
+            at_frame: state.frame_counter.load(Ordering::Relaxed),
+            rate: -1.0,
+        });
+        render(&mut state, &mut out);
+        let reversed = state.players[0].get_position_sec();
+        assert!(
+            reversed < held,
+            "reverse jog should decrease position: {held} -> {reversed}"
+        );
+
+        // Release: resume forward playback from the scratch position.
+        state.command_queue.push(EngineCommand::JogTouch {
+            player: PlayerId(0),
+            at_frame: state.frame_counter.load(Ordering::Relaxed),
+            engaged: false,
+        });
+        render(&mut state, &mut out);
+        let resumed = state.players[0].get_position_sec();
+        assert!(
+            resumed > reversed,
+            "release should resume forward playback: {reversed} -> {resumed}"
         );
     }
 }

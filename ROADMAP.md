@@ -168,6 +168,12 @@ and clean resume, pitch-lock interaction, crossfader behavior, and Sync handoff.
 latency on the S3; master recording stays valid; advanced turntablism and motor
 emulation remain excluded.
 
+**Status:** Complete in the working tree. Signed jog rate (reverse/hold), touch
+engagement, and clean release/resume are implemented in the varispeed engine,
+wired through the session, and covered by deterministic tests. S3 jog/touch
+timing and scratch/backspin latency remain a TL-07 hardware gate; Master Tempo
+reverse and advanced turntablism are excluded.
+
 ### TL-07 - Shared action model and S3 adapter
 
 **Outcome:** Mouse, keyboard, generic MIDI, and the S3 drive the same semantic

@@ -331,6 +331,27 @@ impl Player {
         self.processor.mode()
     }
 
+    /// Engage scratch/jog mode. Scratch uses the varispeed processor
+    /// (signed-rate support) and starts from a hold at zero.
+    pub fn engage_jog(&mut self) {
+        self.set_processor_mode(ProcessorMode::Varispeed);
+        self.processor.set_jogging(true);
+        self.processor.set_jog_rate(0.0);
+        self.playing = true;
+    }
+
+    /// Set the signed scratch/jog read rate (negative = reverse, 0 = hold).
+    pub fn set_jog_rate(&mut self, rate: f64) {
+        self.processor.set_jog_rate(rate);
+    }
+
+    /// Release scratch/jog mode and resume normal tempo/pitch playback from
+    /// the current position.
+    pub fn release_jog(&mut self) {
+        self.processor.set_jogging(false);
+        self.playing = true;
+    }
+
     pub fn play(&mut self) {
         self.playing = true;
     }
