@@ -87,14 +87,14 @@ control surface as a vendor-defined HID interface, not standard MIDI.
 - VID `0x17CC`, PID `0x1900`, interface 3, usage page `0xff01`, serial
   `DE62E256`; product "Traktor Kontrol S3", manufacturer "Native Instruments".
 - Interfaces: MI_00 audio (MEDIA class), MI_03 vendor-defined HID, MI_04 DFU.
-- Input reports are 63 bytes at ~140 Hz while the jog moves and on state
-  changes. Byte 0 is the report ID (`0x01` short/buttons+jog, `0x02`
-  long/faders); bytes 1..21 carry buttons/jog/touch; bytes 22..62 carry
-  20 x 16-bit big-endian fader/knob values in the 12-bit range (center detent
-  `0x07ff` = 2047).
-- Jog wheel is a 4-byte value: byte 15 (Deck A) / byte 19 (Deck B) is a 1-byte
-  distance-tick counter, followed by a 3-byte timecode. The signed per-report
-  tick delta is computed by 8-bit wrapping subtraction.
+- Input reports are 63 bytes. Byte 0 is the report ID: `0x01` carries
+  buttons/jog and `0x02` carries continuous controls. Their histories are
+  decoded independently so interleaved report types cannot create false edges.
+- Jog values are four-byte little-endian fields at raw offset `0x0E` (Deck A)
+  and `0x12` (Deck B): one distance-tick byte plus a 24-bit, 400 kHz timecode.
+  TuneLock uses both wrapping deltas and the documented 768-ticks-per-rotation
+  / 33 1/3 RPM relationship for scratch velocity; untouched turns become
+  distance-based nudges. Native timing still needs controlled validation.
 - Button map (byte index, bit mask), confirmed against the Mixxx S3 mapping:
   - Deck A: Play `(3, 0x01)`, Cue `(2, 0x80)`, Sync `(2, 0x08)`,
     Hot cue 1 `(3, 0x02)`, Hot cue 2 `(3, 0x04)`.
@@ -102,8 +102,16 @@ control surface as a vendor-defined HID interface, not standard MIDI.
   - Platter touch A: `(10, 0x10)`.
 - A `s3-probe` binary (`cargo run --bin s3-probe`) and a `controller` module
   (`src-tauri/src/controller/mod.rs`) decode these into a semantic `S3Action`
-  vocabulary (Play/Cue/Sync/HotCue/Touch/Jog/Fader) with 8 passing regression
-  tests.
+  vocabulary (Play/Cue/Sync/HotCue/Touch/Jog/Control) with 11 passing focused
+  regression tests. All eight hot-cue pads and platter touch are mapped on
+  both physical decks.
+- Long-report controls use named 16-bit little-endian offsets from the Mixxx
+  mapping: Deck A/B tempo, volume, gain, and three-band EQ, plus crossfader,
+  headphone mix, and headphone gain. They are decoded but intentionally not
+  applied until TL-08 defines and measures control ranges and gain staging.
+- The reader start is idempotent, keeps separate short/long predecessors, and
+  retries after startup absence or disconnect. Native unplug/replug behavior
+  still needs a controlled hardware run.
 - LED output (reverse-engineered from the Mixxx S3 mapping, not a USB trace):
   - Output report `0x80` carries button/state LEDs; `0x81` carries VU meters.
   - Each LED is one byte. Palette LEDs encode `color + brightness` where color
@@ -113,10 +121,9 @@ control surface as a vendor-defined HID interface, not standard MIDI.
     Sync A `0x0C`, Sync B `0x25`. Deck base color is CARROT `0x08`; dim `1`,
     bright `3`.
   - `s3_set_leds` mirrors Play/Cue/Sync backlight from session transport state.
-- Remaining: the fader index -> control mapping (which of the 20 values is
-  volume/EQ/gain) and the jog tick-to-rate calibration still need a controlled
-  capture; the LED report length (83 bytes) should be verified against the
-  device's HID descriptor.
+- Remaining: controlled jog/touch latency and unplug/replug runs, TL-08 control
+  range/soft-takeover decisions, and verification of the 83-byte LED report
+  length against the device's HID descriptor.
 
 ## TL-01 implementation result
 

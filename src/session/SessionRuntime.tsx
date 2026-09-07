@@ -13,11 +13,16 @@ export default function SessionRuntime() {
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
     let cleanup: (() => void) | undefined;
     void startS3Controller().then((unsubscribe) => {
-      cleanup = unsubscribe;
+      if (cancelled) unsubscribe();
+      else cleanup = unsubscribe;
     });
-    return () => cleanup?.();
+    return () => {
+      cancelled = true;
+      cleanup?.();
+    };
   }, []);
 
   useEffect(() => {
@@ -44,4 +49,3 @@ export default function SessionRuntime() {
 
   return null;
 }
-

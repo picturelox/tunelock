@@ -21,10 +21,14 @@ const S3_DECK_TO_DECK_ID: Record<S3Deck, DeckId> = {
   b: 'B',
 };
 
-// Provisional jog sensitivity. The S3 reports an 8-bit distance-tick delta per
-// ~140 Hz report; this constant maps that delta to a signed playback rate
-// (1.0 = normal forward speed). Needs calibration against the physical wheel.
-const JOG_TICKS_PER_REPORT_AT_1X = 25;
+// The S3 jog timecode advances at 400 kHz. At 33 1/3 RPM, one 768-tick
+// rotation takes 1.8 seconds, so this is the device tick/time ratio at 1x.
+const JOG_RATIO_AT_1X = 768 / 720_000;
+const JOG_IDLE_MS = 40;
+const JOG_STALE_MS = 20_000;
+const touched: Record<S3Deck, boolean> = { a: false, b: false };
+const lastJogAt: Record<S3Deck, number> = { a: 0, b: 0 };
+const jogIdleTimers: Partial<Record<S3Deck, ReturnType<typeof setTimeout>>> = {};
 
 function otherDeck(deck: DeckId): DeckId {
   return deck === 'A' ? 'B' : 'A';
@@ -68,20 +72,51 @@ export function dispatchS3Action(action: S3Action): void {
 
     case 'touch': {
       const deck = S3_DECK_TO_DECK_ID[action.deck];
+      touched[action.deck] = action.pressed;
+      if (!action.pressed) {
+        const timer = jogIdleTimers[action.deck];
+        if (timer !== undefined) clearTimeout(timer);
+        delete jogIdleTimers[action.deck];
+      }
       void sessionService.jogTouch(deck, action.pressed).catch(console.error);
       break;
     }
 
     case 'jog': {
       const deck = S3_DECK_TO_DECK_ID[action.deck];
-      const rate = action.delta / JOG_TICKS_PER_REPORT_AT_1X;
-      void sessionService.jogRate(deck, rate).catch(console.error);
+      const now = Date.now();
+      const stale = now - lastJogAt[action.deck] > JOG_STALE_MS;
+      lastJogAt[action.deck] = now;
+
+      if (touched[action.deck]) {
+        if (!stale) {
+          const rate = (action.tickDelta / action.timeDelta) / JOG_RATIO_AT_1X;
+          void sessionService.jogRate(deck, rate).catch(console.error);
+        }
+        const previousTimer = jogIdleTimers[action.deck];
+        if (previousTimer !== undefined) clearTimeout(previousTimer);
+        jogIdleTimers[action.deck] = setTimeout(() => {
+          void sessionService.jogRate(deck, 0).catch(console.error);
+          delete jogIdleTimers[action.deck];
+        }, JOG_IDLE_MS);
+      } else {
+        // Untouched wheels nudge by physical platter distance. One rotation is
+        // 1.8 seconds of track at nominal speed; convert that distance to beats.
+        const reportedBpm = useSessionStore.getState().meters
+          ?.players[S3_DECK_TO_DECK_ID[action.deck] === 'A' ? 0 : 1]
+          ?.sourceBpm;
+        const sourceBpm = reportedBpm && reportedBpm > 0 ? reportedBpm : 120;
+        const beats = action.tickDelta * (1.8 * sourceBpm / 60) / 768;
+        void sessionService.nudge(deck, beats).catch(console.error);
+      }
       break;
     }
 
-    case 'fader': {
-      // Fader index -> control mapping is not yet reverse-engineered; the
-      // semantic action is emitted but intentionally not applied yet.
+    case 'control': {
+      // The adapter now emits named controls. Mixer/EQ/gain routing stays
+      // intentionally deferred to TL-08, where ranges and gain staging are
+      // specified and measured. Tempo is likewise not applied until its
+      // supported hardware range and soft-takeover behavior are contracted.
       break;
     }
   }
@@ -141,6 +176,9 @@ export async function startS3Controller(): Promise<() => void> {
 
   try {
     await s3Start();
+    // Also push once after an idempotent start. This covers a listener remount
+    // after the long-lived Rust reader has already emitted its connected event.
+    syncS3Leds();
   } catch (error) {
     console.warn('[s3] failed to start reader:', error);
   }
@@ -149,5 +187,16 @@ export async function startS3Controller(): Promise<() => void> {
     unlistenAction();
     unlistenStatus();
     unsubscribeStore();
+    for (const s3Deck of ['a', 'b'] as const) {
+      const timer = jogIdleTimers[s3Deck];
+      if (timer !== undefined) clearTimeout(timer);
+      delete jogIdleTimers[s3Deck];
+      lastJogAt[s3Deck] = 0;
+      if (touched[s3Deck]) {
+        touched[s3Deck] = false;
+        void sessionService.jogTouch(S3_DECK_TO_DECK_ID[s3Deck], false)
+          .catch(console.error);
+      }
+    }
   };
 }

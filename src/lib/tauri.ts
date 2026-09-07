@@ -791,6 +791,16 @@ export async function listeningLabGetResults(): Promise<ListeningLabResult[]> {
 // keep the two vocabularies in sync (one hardware vocabulary, no third copy).
 
 export type S3Deck = 'a' | 'b';
+export type S3Control =
+  | 'tempo'
+  | 'volume'
+  | 'gain'
+  | 'eqHigh'
+  | 'eqMid'
+  | 'eqLow'
+  | 'crossfader'
+  | 'headphoneMix'
+  | 'headphoneGain';
 
 export type S3Action =
   | { type: 'play'; deck: S3Deck; pressed: boolean }
@@ -798,8 +808,8 @@ export type S3Action =
   | { type: 'sync'; deck: S3Deck; pressed: boolean }
   | { type: 'hotCue'; deck: S3Deck; slot: number; pressed: boolean }
   | { type: 'touch'; deck: S3Deck; pressed: boolean }
-  | { type: 'jog'; deck: S3Deck; delta: number }
-  | { type: 'fader'; index: number; value: number };
+  | { type: 'jog'; deck: S3Deck; tickDelta: number; timeDelta: number }
+  | { type: 'control'; deck: S3Deck | null; control: S3Control; value: number };
 
 export interface S3Status {
   connected: boolean;

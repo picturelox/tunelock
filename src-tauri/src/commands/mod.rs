@@ -3653,57 +3653,78 @@ pub async fn listening_lab_get_results(
 #[command]
 pub fn s3_start(window: Window) -> Result<(), String> {
     if !crate::controller::claim_s3_reader() {
-        return Err("S3 reader is already running".to_string());
+        // Idempotent for React Strict Mode and app-root remounts. Event
+        // listeners are frontend-owned, so the existing reader can continue.
+        return Ok(());
     }
 
     std::thread::spawn(move || {
-        let device = match crate::controller::S3Device::open() {
-            Ok(device) => device,
-            Err(error) => {
-                let _ = window.emit(
-                    "s3-status",
-                    &crate::controller::S3Status {
-                        connected: false,
-                        error: Some(error),
-                    },
-                );
-                crate::controller::release_s3_reader();
-                return;
-            }
-        };
-
-        let _ = window.emit(
-            "s3-status",
-            &crate::controller::S3Status {
-                connected: true,
-                error: None,
-            },
-        );
-
-        let mut previous: Option<crate::controller::S3Report> = None;
-        loop {
-            match device.read_timeout(Duration::from_millis(100)) {
-                Ok(Some(bytes)) => {
-                    let Some(report) = crate::controller::parse_report(&bytes) else {
-                        continue;
-                    };
-                    if let Some(prev) = previous {
-                        for action in crate::controller::decode_actions(&prev, &report) {
-                            let _ = window.emit("s3-action", &action);
-                        }
-                    }
-                    previous = Some(report);
-                }
-                Ok(None) => {}
+        'reconnect: loop {
+            let device = match crate::controller::S3Device::open() {
+                Ok(device) => device,
                 Err(error) => {
-                    let _ = window.emit(
+                    if window.emit(
                         "s3-status",
                         &crate::controller::S3Status {
                             connected: false,
                             error: Some(error),
                         },
-                    );
-                    break;
+                    ).is_err() {
+                        break 'reconnect;
+                    }
+                    std::thread::sleep(Duration::from_secs(1));
+                    continue;
+                }
+            };
+
+            if window.emit(
+                "s3-status",
+                &crate::controller::S3Status {
+                    connected: true,
+                    error: None,
+                },
+            ).is_err() {
+                break 'reconnect;
+            }
+
+            // Report 0x01 and 0x02 are independent state streams and may be
+            // interleaved. Keep one predecessor for each report ID.
+            let mut previous_short: Option<crate::controller::S3Report> = None;
+            let mut previous_long: Option<crate::controller::S3Report> = None;
+            loop {
+                match device.read_timeout(Duration::from_millis(100)) {
+                    Ok(Some(bytes)) => {
+                        let Some(report) = crate::controller::parse_report(&bytes) else {
+                            continue;
+                        };
+                        let previous = match report.report_id {
+                            0x01 => &mut previous_short,
+                            0x02 => &mut previous_long,
+                            _ => continue,
+                        };
+                        if let Some(prior) = *previous {
+                            for action in crate::controller::decode_actions(&prior, &report) {
+                                if window.emit("s3-action", &action).is_err() {
+                                    break 'reconnect;
+                                }
+                            }
+                        }
+                        *previous = Some(report);
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        if window.emit(
+                            "s3-status",
+                            &crate::controller::S3Status {
+                                connected: false,
+                                error: Some(error),
+                            },
+                        ).is_err() {
+                            break 'reconnect;
+                        }
+                        std::thread::sleep(Duration::from_secs(1));
+                        continue 'reconnect;
+                    }
                 }
             }
         }

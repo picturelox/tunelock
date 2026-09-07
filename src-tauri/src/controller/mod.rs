@@ -8,16 +8,16 @@
 //! - Input reports are 63 bytes, sent continuously at ~140 Hz while the jog
 //!   is moving and on state changes.
 //!
-//! Report layout (63 bytes, 0-indexed):
-//! - byte 0: report ID (`0x01` continuous/jog, `0x02` button/state).
-//! - bytes 1..21: buttons + jog + touch (bitmask area; exact button map is
-//!   still being reverse-engineered).
-//! - bytes 22..62: faders/knobs, 20 x 16-bit **big-endian** values in the
-//!   12-bit range 0..4095 (center detent `0x07ff` = 2047).
+//! Report layout (63 bytes, 0-indexed, including report ID):
+//! - byte 0: report ID (`0x01` buttons/jog, `0x02` faders/knobs).
+//! - report `0x01`: buttons at fixed byte/bit offsets and four-byte,
+//!   little-endian jog values at `0x0e` (A) / `0x12` (B).
+//! - report `0x02`: 16-bit little-endian controls at fixed odd offsets. The
+//!   values use the 12-bit range 0..4095 (center detent 2047).
 //!
-//! The jog wheel is a 4-byte value: byte 15 (Deck A) / byte 19 (Deck B) is a
-//! 1-byte distance-tick counter, followed by a 3-byte timecode. The signed
-//! per-report tick delta is computed by wrapping subtraction.
+//! The jog wheel's low byte is a distance-tick counter and its upper three
+//! bytes are a 400 kHz timecode. The signed tick delta is computed by wrapping
+//! subtraction and paired with the wrapping 24-bit time delta.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -28,6 +28,8 @@ use serde::{Deserialize, Serialize};
 pub const NI_VID: u16 = 0x17CC;
 pub const S3_PID: u16 = 0x1900;
 pub const REPORT_LEN: usize = 63;
+const SHORT_REPORT_ID: u8 = 0x01;
+const LONG_REPORT_ID: u8 = 0x02;
 
 /// A deck on the S3 (A = left, B = right).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -45,13 +47,54 @@ pub enum Deck {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum S3Action {
-    Play { deck: Deck, pressed: bool },
-    Cue { deck: Deck, pressed: bool },
-    Sync { deck: Deck, pressed: bool },
-    HotCue { deck: Deck, slot: u8, pressed: bool },
-    Touch { deck: Deck, pressed: bool },
-    Jog { deck: Deck, delta: i8 },
-    Fader { index: u8, value: u16 },
+    Play {
+        deck: Deck,
+        pressed: bool,
+    },
+    Cue {
+        deck: Deck,
+        pressed: bool,
+    },
+    Sync {
+        deck: Deck,
+        pressed: bool,
+    },
+    HotCue {
+        deck: Deck,
+        slot: u8,
+        pressed: bool,
+    },
+    Touch {
+        deck: Deck,
+        pressed: bool,
+    },
+    Jog {
+        deck: Deck,
+        #[serde(rename = "tickDelta")]
+        tick_delta: i8,
+        #[serde(rename = "timeDelta")]
+        time_delta: u32,
+    },
+    Control {
+        deck: Option<Deck>,
+        control: S3Control,
+        value: u16,
+    },
+}
+
+/// Named continuous controls decoded from report `0x02`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum S3Control {
+    Tempo,
+    Volume,
+    Gain,
+    EqHigh,
+    EqMid,
+    EqLow,
+    Crossfader,
+    HeadphoneMix,
+    HeadphoneGain,
 }
 
 /// Connection status emitted by the S3 reader thread.
@@ -154,30 +197,75 @@ pub fn write_leds(state: &S3LedState) -> Result<(), String> {
     device.write(&build_led_report(state))
 }
 
-// Button bit positions (byte index, bit mask) reverse-engineered from a
-// controlled one-button-at-a-time capture on 2026-09-07.
+// Raw button offsets include the report ID at byte 0, matching Mixxx's S3
+// mapping and the buffers returned by hidapi.
 const PLAY_A: (usize, u8) = (3, 0x01);
 const CUE_A: (usize, u8) = (2, 0x80);
 const SYNC_A: (usize, u8) = (2, 0x08);
-const HOTCUE_A: [(usize, u8); 2] = [(3, 0x02), (3, 0x04)];
+const HOTCUE_A: [(usize, u8); 8] = [
+    (3, 0x02),
+    (3, 0x04),
+    (3, 0x08),
+    (3, 0x10),
+    (3, 0x20),
+    (3, 0x40),
+    (3, 0x80),
+    (4, 0x01),
+];
 const PLAY_B: (usize, u8) = (6, 0x02);
 const CUE_B: (usize, u8) = (6, 0x01);
 const SYNC_B: (usize, u8) = (5, 0x10);
+const HOTCUE_B: [(usize, u8); 8] = [
+    (6, 0x04),
+    (6, 0x08),
+    (6, 0x10),
+    (6, 0x20),
+    (6, 0x40),
+    (6, 0x80),
+    (7, 0x01),
+    (7, 0x02),
+];
 const TOUCH_A: (usize, u8) = (10, 0x10);
+const TOUCH_B: (usize, u8) = (10, 0x20);
+const JOG_A_OFFSET: usize = 0x0E;
+const JOG_B_OFFSET: usize = 0x12;
+
+// (raw byte offset, deck, semantic control). Multibyte S3 input fields are
+// little-endian, as defined by the Mixxx common HID packet parser.
+const CONTROLS: &[(usize, Option<Deck>, S3Control)] = &[
+    (0x01, Some(Deck::A), S3Control::Tempo),
+    (0x0D, Some(Deck::B), S3Control::Tempo),
+    (0x05, Some(Deck::A), S3Control::Volume),
+    (0x07, Some(Deck::B), S3Control::Volume),
+    (0x11, Some(Deck::A), S3Control::Gain),
+    (0x13, Some(Deck::B), S3Control::Gain),
+    (0x25, Some(Deck::A), S3Control::EqHigh),
+    (0x27, Some(Deck::A), S3Control::EqMid),
+    (0x29, Some(Deck::A), S3Control::EqLow),
+    (0x2B, Some(Deck::B), S3Control::EqHigh),
+    (0x2D, Some(Deck::B), S3Control::EqMid),
+    (0x2F, Some(Deck::B), S3Control::EqLow),
+    (0x0B, None, S3Control::Crossfader),
+    (0x1D, None, S3Control::HeadphoneMix),
+    (0x1B, None, S3Control::HeadphoneGain),
+];
 
 /// A parsed S3 input report.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct S3Report {
     /// Report ID (`0x01` or `0x02`).
     pub report_id: u8,
-    /// Deck A jog distance-tick counter (byte 15).
-    pub jog_a: u8,
-    /// Deck B jog distance-tick counter (byte 19).
-    pub jog_b: u8,
-    /// Fader/knob values (bytes 22..62, 20 x 16-bit big-endian).
-    pub faders: [u16; 20],
-    /// Raw button/touch area (bytes 1..21) for protocol mapping.
-    pub buttons: [u8; 21],
+    /// Complete report bytes, including the report ID at offset 0.
+    pub data: [u8; REPORT_LEN],
+}
+
+impl Default for S3Report {
+    fn default() -> Self {
+        Self {
+            report_id: 0,
+            data: [0; REPORT_LEN],
+        }
+    }
 }
 
 /// Parse a 63-byte S3 input report. Returns `None` if the buffer is short.
@@ -186,21 +274,12 @@ pub fn parse_report(data: &[u8]) -> Option<S3Report> {
         return None;
     }
 
-    let mut faders = [0u16; 20];
-    for (i, slot) in faders.iter_mut().enumerate() {
-        let idx = 22 + i * 2;
-        *slot = u16::from_be_bytes([data[idx], data[idx + 1]]);
-    }
-
-    let mut buttons = [0u8; 21];
-    buttons.copy_from_slice(&data[1..22]);
+    let mut report = [0u8; REPORT_LEN];
+    report.copy_from_slice(&data[..REPORT_LEN]);
 
     Some(S3Report {
         report_id: data[0],
-        jog_a: data[15],
-        jog_b: data[19],
-        faders,
-        buttons,
+        data: report,
     })
 }
 
@@ -211,12 +290,62 @@ pub fn jog_delta(previous: u8, current: u8) -> i8 {
     current.wrapping_sub(previous) as i8
 }
 
+/// Wrapping delta for the S3's 24-bit, 400 kHz jog timecode.
+#[inline]
+pub fn jog_time_delta(previous: u32, current: u32) -> u32 {
+    current.wrapping_sub(previous) & 0x00FF_FFFF
+}
+
+fn button(report: &S3Report, position: (usize, u8)) -> bool {
+    report.data[position.0] & position.1 != 0
+}
+
+fn read_u16_le(report: &S3Report, offset: usize) -> u16 {
+    u16::from_le_bytes([report.data[offset], report.data[offset + 1]])
+}
+
+fn read_jog(report: &S3Report, offset: usize) -> (u8, u32) {
+    let tick = report.data[offset];
+    let time = u32::from_le_bytes([
+        report.data[offset + 1],
+        report.data[offset + 2],
+        report.data[offset + 3],
+        0,
+    ]);
+    (tick, time)
+}
+
 /// Decode the semantic actions that changed between two consecutive reports.
 ///
 /// Button presses are edge-triggered (0 -> 1 = pressed, 1 -> 0 = released);
-/// jog and fader changes are level-diffed.
+/// jog and continuous-control changes are level-diffed.
 pub fn decode_actions(prev: &S3Report, curr: &S3Report) -> Vec<S3Action> {
     let mut actions = Vec::new();
+
+    // Short and long reports are independent state streams. Comparing across
+    // report IDs creates false button and continuous-control changes.
+    if prev.report_id != curr.report_id {
+        return actions;
+    }
+
+    if curr.report_id == LONG_REPORT_ID {
+        for &(offset, deck, control) in CONTROLS {
+            let previous = read_u16_le(prev, offset);
+            let current = read_u16_le(curr, offset);
+            if previous != current {
+                actions.push(S3Action::Control {
+                    deck,
+                    control,
+                    value: current,
+                });
+            }
+        }
+        return actions;
+    }
+
+    if curr.report_id != SHORT_REPORT_ID {
+        return actions;
+    }
 
     // Button edge detection.
     let buttons: &[((usize, u8), Deck, S3ActionKind)] = &[
@@ -228,58 +357,49 @@ pub fn decode_actions(prev: &S3Report, curr: &S3Report) -> Vec<S3Action> {
         (SYNC_B, Deck::B, S3ActionKind::Sync),
     ];
     for &((idx, mask), deck, kind) in buttons {
-        let was = prev.buttons[idx] & mask != 0;
-        let now = curr.buttons[idx] & mask != 0;
+        let was = button(prev, (idx, mask));
+        let now = button(curr, (idx, mask));
         if was != now {
             actions.push(kind.action(deck, now));
         }
     }
 
-    // Hot cues (Deck A slots 1..2).
-    for (slot, &(idx, mask)) in HOTCUE_A.iter().enumerate() {
-        let was = prev.buttons[idx] & mask != 0;
-        let now = curr.buttons[idx] & mask != 0;
-        if was != now {
-            actions.push(S3Action::HotCue {
-                deck: Deck::A,
-                slot: slot as u8 + 1,
-                pressed: now,
-            });
+    // Hot cues (eight pads per physical deck).
+    for (deck, pads) in [(Deck::A, &HOTCUE_A), (Deck::B, &HOTCUE_B)] {
+        for (slot, &position) in pads.iter().enumerate() {
+            let was = button(prev, position);
+            let now = button(curr, position);
+            if was != now {
+                actions.push(S3Action::HotCue {
+                    deck,
+                    slot: slot as u8 + 1,
+                    pressed: now,
+                });
+            }
         }
     }
 
-    // Touch (Deck A platter).
-    let was_touch = prev.buttons[TOUCH_A.0] & TOUCH_A.1 != 0;
-    let now_touch = curr.buttons[TOUCH_A.0] & TOUCH_A.1 != 0;
-    if was_touch != now_touch {
-        actions.push(S3Action::Touch {
-            deck: Deck::A,
-            pressed: now_touch,
-        });
+    // Platter touch.
+    for (deck, position) in [(Deck::A, TOUCH_A), (Deck::B, TOUCH_B)] {
+        let was = button(prev, position);
+        let now = button(curr, position);
+        if was != now {
+            actions.push(S3Action::Touch { deck, pressed: now });
+        }
     }
 
-    // Jog deltas.
-    let da = jog_delta(prev.jog_a, curr.jog_a);
-    if da != 0 {
-        actions.push(S3Action::Jog {
-            deck: Deck::A,
-            delta: da,
-        });
-    }
-    let db = jog_delta(prev.jog_b, curr.jog_b);
-    if db != 0 {
-        actions.push(S3Action::Jog {
-            deck: Deck::B,
-            delta: db,
-        });
-    }
-
-    // Fader/knob changes.
-    for (i, (&p, &c)) in prev.faders.iter().zip(curr.faders.iter()).enumerate() {
-        if p != c {
-            actions.push(S3Action::Fader {
-                index: i as u8,
-                value: c,
+    // Jog distance plus device time, used together to derive platter velocity.
+    for (deck, offset) in [(Deck::A, JOG_A_OFFSET), (Deck::B, JOG_B_OFFSET)] {
+        let (previous_tick, previous_time) = read_jog(prev, offset);
+        let (current_tick, current_time) = read_jog(curr, offset);
+        let tick_delta = jog_delta(previous_tick, current_tick);
+        if tick_delta != 0 {
+            actions.push(S3Action::Jog {
+                deck,
+                tick_delta,
+                // Very small deltas yield unstable velocity. Mixxx documents
+                // 500 device ticks as a safe lower bound for this hardware.
+                time_delta: jog_time_delta(previous_time, current_time).max(500),
             });
         }
     }
@@ -349,27 +469,19 @@ mod tests {
 
     // Captured from the S3 while Deck A jog was moving (2026-09-07).
     const JOG_REPORT: [u8; 63] = [
-        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00,
-        0x01, 0xc0, 0x1b, 0xf7, 0x00, 0x00, 0x00, 0x00, 0x07, 0xe5, 0x03, 0xeb, 0x07, 0xc1,
-        0x0a, 0xff, 0x07, 0xff, 0x07, 0xff, 0x07, 0xff, 0x07, 0xea, 0x09, 0x3b, 0x07, 0xff,
-        0x07, 0xff, 0x07, 0xff, 0x07, 0xff, 0x07, 0xff, 0x07, 0xff, 0x07, 0xff, 0x07, 0xff,
-        0x07, 0xff, 0x07, 0x6c, 0x04, 0xfd, 0x06,
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x00, 0x00, 0x00, 0x01,
+        0xc0, 0x1b, 0xf7, 0x00, 0x00, 0x00, 0x00, 0x07, 0xe5, 0x03, 0xeb, 0x07, 0xc1, 0x0a, 0xff,
+        0x07, 0xff, 0x07, 0xff, 0x07, 0xff, 0x07, 0xea, 0x09, 0x3b, 0x07, 0xff, 0x07, 0xff, 0x07,
+        0xff, 0x07, 0xff, 0x07, 0xff, 0x07, 0xff, 0x07, 0xff, 0x07, 0xff, 0x07, 0xff, 0x07, 0x6c,
+        0x04, 0xfd, 0x06,
     ];
 
     #[test]
-    fn parses_report_id_and_faders_big_endian() {
+    fn parses_report_id_and_raw_offsets() {
         let r = parse_report(&JOG_REPORT).expect("63-byte report must parse");
         assert_eq!(r.report_id, 0x01);
-        // Faders are 16-bit big-endian, 12-bit range.
-        assert_eq!(r.faders[0], 0x07e5);
-        assert_eq!(r.faders[1], 0x03eb);
-        assert_eq!(r.faders[2], 0x07c1);
-        assert_eq!(r.faders[3], 0x0aff);
-        assert_eq!(r.faders[4], 0x07ff); // center detent
-        assert_eq!(r.faders[5], 0x07ff);
-        assert_eq!(r.faders[6], 0x07ff);
-        assert_eq!(r.faders[7], 0x07ea);
-        assert_eq!(r.faders[8], 0x093b);
+        assert_eq!(r.data[PLAY_A.0], JOG_REPORT[PLAY_A.0]);
+        assert_eq!(read_jog(&r, JOG_A_OFFSET), (0x01, 0xF71BC0));
     }
 
     #[test]
@@ -385,11 +497,12 @@ mod tests {
         assert_eq!(jog_delta(255, 0), 1);
         // 0 -> 255 is -1 reverse.
         assert_eq!(jog_delta(0, 255), -1);
+        assert_eq!(jog_time_delta(0xFF_FF00, 0x00_0100), 0x200);
     }
 
     fn report_with_button(byte: usize, mask: u8) -> S3Report {
         let mut r = parse_report(&JOG_REPORT).unwrap();
-        r.buttons[byte] |= mask;
+        r.data[byte] |= mask;
         r
     }
 
@@ -398,18 +511,26 @@ mod tests {
         let baseline = parse_report(&JOG_REPORT).unwrap();
 
         let play = report_with_button(PLAY_A.0, PLAY_A.1);
-        assert!(decode_actions(&baseline, &play)
-            .contains(&S3Action::Play { deck: Deck::A, pressed: true }));
-        assert!(decode_actions(&play, &baseline)
-            .contains(&S3Action::Play { deck: Deck::A, pressed: false }));
+        assert!(decode_actions(&baseline, &play).contains(&S3Action::Play {
+            deck: Deck::A,
+            pressed: true
+        }));
+        assert!(decode_actions(&play, &baseline).contains(&S3Action::Play {
+            deck: Deck::A,
+            pressed: false
+        }));
 
         let cue = report_with_button(CUE_A.0, CUE_A.1);
-        assert!(decode_actions(&baseline, &cue)
-            .contains(&S3Action::Cue { deck: Deck::A, pressed: true }));
+        assert!(decode_actions(&baseline, &cue).contains(&S3Action::Cue {
+            deck: Deck::A,
+            pressed: true
+        }));
 
         let sync = report_with_button(SYNC_A.0, SYNC_A.1);
-        assert!(decode_actions(&baseline, &sync)
-            .contains(&S3Action::Sync { deck: Deck::A, pressed: true }));
+        assert!(decode_actions(&baseline, &sync).contains(&S3Action::Sync {
+            deck: Deck::A,
+            pressed: true
+        }));
     }
 
     #[test]
@@ -417,16 +538,22 @@ mod tests {
         let baseline = parse_report(&JOG_REPORT).unwrap();
 
         let play = report_with_button(PLAY_B.0, PLAY_B.1);
-        assert!(decode_actions(&baseline, &play)
-            .contains(&S3Action::Play { deck: Deck::B, pressed: true }));
+        assert!(decode_actions(&baseline, &play).contains(&S3Action::Play {
+            deck: Deck::B,
+            pressed: true
+        }));
 
         let cue = report_with_button(CUE_B.0, CUE_B.1);
-        assert!(decode_actions(&baseline, &cue)
-            .contains(&S3Action::Cue { deck: Deck::B, pressed: true }));
+        assert!(decode_actions(&baseline, &cue).contains(&S3Action::Cue {
+            deck: Deck::B,
+            pressed: true
+        }));
 
         let sync = report_with_button(SYNC_B.0, SYNC_B.1);
-        assert!(decode_actions(&baseline, &sync)
-            .contains(&S3Action::Sync { deck: Deck::B, pressed: true }));
+        assert!(decode_actions(&baseline, &sync).contains(&S3Action::Sync {
+            deck: Deck::B,
+            pressed: true
+        }));
     }
 
     #[test]
@@ -434,28 +561,108 @@ mod tests {
         let baseline = parse_report(&JOG_REPORT).unwrap();
 
         let hot1 = report_with_button(HOTCUE_A[0].0, HOTCUE_A[0].1);
-        assert!(decode_actions(&baseline, &hot1)
-            .contains(&S3Action::HotCue { deck: Deck::A, slot: 1, pressed: true }));
+        assert!(
+            decode_actions(&baseline, &hot1).contains(&S3Action::HotCue {
+                deck: Deck::A,
+                slot: 1,
+                pressed: true
+            })
+        );
 
-        let hot2 = report_with_button(HOTCUE_A[1].0, HOTCUE_A[1].1);
-        assert!(decode_actions(&baseline, &hot2)
-            .contains(&S3Action::HotCue { deck: Deck::A, slot: 2, pressed: true }));
+        let hot8_b = report_with_button(HOTCUE_B[7].0, HOTCUE_B[7].1);
+        assert!(
+            decode_actions(&baseline, &hot8_b).contains(&S3Action::HotCue {
+                deck: Deck::B,
+                slot: 8,
+                pressed: true
+            })
+        );
 
         let touch = report_with_button(TOUCH_A.0, TOUCH_A.1);
-        assert!(decode_actions(&baseline, &touch)
-            .contains(&S3Action::Touch { deck: Deck::A, pressed: true }));
+        assert!(
+            decode_actions(&baseline, &touch).contains(&S3Action::Touch {
+                deck: Deck::A,
+                pressed: true
+            })
+        );
+
+        let touch_b = report_with_button(TOUCH_B.0, TOUCH_B.1);
+        assert!(
+            decode_actions(&baseline, &touch_b).contains(&S3Action::Touch {
+                deck: Deck::B,
+                pressed: true
+            })
+        );
     }
 
     #[test]
-    fn decodes_jog_and_fader_deltas() {
+    fn decodes_jog_distance_and_device_time() {
         let baseline = parse_report(&JOG_REPORT).unwrap();
         let mut moved = baseline;
-        moved.jog_a = baseline.jog_a.wrapping_add(30);
-        moved.faders[0] = 0x0800;
+        let (tick, time) = read_jog(&baseline, JOG_A_OFFSET);
+        moved.data[JOG_A_OFFSET] = tick.wrapping_add(30);
+        let next_time = time + 1_000;
+        moved.data[JOG_A_OFFSET + 1..JOG_A_OFFSET + 4]
+            .copy_from_slice(&next_time.to_le_bytes()[..3]);
 
         let actions = decode_actions(&baseline, &moved);
-        assert!(actions.contains(&S3Action::Jog { deck: Deck::A, delta: 30 }));
-        assert!(actions.contains(&S3Action::Fader { index: 0, value: 0x0800 }));
+        assert!(actions.contains(&S3Action::Jog {
+            deck: Deck::A,
+            tick_delta: 30,
+            time_delta: 1_000,
+        }));
+    }
+
+    #[test]
+    fn decodes_named_long_report_controls_as_little_endian() {
+        let mut before = S3Report {
+            report_id: LONG_REPORT_ID,
+            data: [0; REPORT_LEN],
+        };
+        before.data[0] = LONG_REPORT_ID;
+        let mut after = before;
+        after.data[0x05..0x07].copy_from_slice(&2047u16.to_le_bytes());
+        after.data[0x2D..0x2F].copy_from_slice(&4095u16.to_le_bytes());
+
+        let actions = decode_actions(&before, &after);
+        assert!(actions.contains(&S3Action::Control {
+            deck: Some(Deck::A),
+            control: S3Control::Volume,
+            value: 2047,
+        }));
+        assert!(actions.contains(&S3Action::Control {
+            deck: Some(Deck::B),
+            control: S3Control::EqMid,
+            value: 4095,
+        }));
+    }
+
+    #[test]
+    fn does_not_compare_interleaved_report_types() {
+        let short = parse_report(&JOG_REPORT).unwrap();
+        let mut long = short;
+        long.report_id = LONG_REPORT_ID;
+        long.data[0] = LONG_REPORT_ID;
+        assert!(decode_actions(&short, &long).is_empty());
+    }
+
+    #[test]
+    fn serializes_jog_contract_for_typescript() {
+        let json = serde_json::to_value(S3Action::Jog {
+            deck: Deck::B,
+            tick_delta: -7,
+            time_delta: 2_500,
+        })
+        .unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({
+                "type": "jog",
+                "deck": "b",
+                "tickDelta": -7,
+                "timeDelta": 2_500,
+            })
+        );
     }
 
     #[test]
