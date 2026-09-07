@@ -467,6 +467,7 @@ export interface AudioCommandSubmission {
 
 export interface AudioEngineInitResult {
   sampleRate: number;
+  outputChannels: number;
   engineGeneration: number;
   created: boolean;
 }
@@ -665,6 +666,27 @@ export async function audioEngineSetMasterGain(gain: number): Promise<void> {
 
 export async function audioEngineSetBusGain(bus: 'a' | 'b' | 'master', gain: number): Promise<void> {
   return invoke('audio_engine_set_bus_gain', { bus, gain });
+}
+
+export async function audioEngineSetCueEnabled(player: number, enabled: boolean): Promise<AudioCommandSubmission> {
+  return invoke('audio_engine_set_cue_enabled', { player, enabled });
+}
+
+export async function audioEngineSetCueGain(gain: number): Promise<AudioCommandSubmission> {
+  return invoke('audio_engine_set_cue_gain', { gain });
+}
+
+export async function audioEngineSetCueMasterBlend(blend: number): Promise<AudioCommandSubmission> {
+  return invoke('audio_engine_set_cue_master_blend', { blend });
+}
+
+export async function audioEngineSetOutputRouting(
+  masterLeft: number,
+  masterRight: number,
+  cueLeft: number,
+  cueRight: number,
+): Promise<AudioCommandSubmission> {
+  return invoke('audio_engine_set_output_routing', { masterLeft, masterRight, cueLeft, cueRight });
 }
 
 export async function audioEngineGetMeters(): Promise<AudioMeterReadout> {

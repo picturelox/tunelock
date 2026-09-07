@@ -24,7 +24,8 @@ export type DeckCommandKind =
   | 'loop'
   | 'tempo'
   | 'pitch'
-  | 'gain';
+  | 'gain'
+  | 'cue';
 
 export interface PendingDeckCommand {
   id: CommandId;
@@ -64,6 +65,7 @@ export interface DeckSessionState {
   tempoRatio: number;
   pitchSemitones: number;
   loopLengthBeats: number | null;
+  cueEnabled: boolean;
   error: string | null;
   pendingCommands: Partial<Record<DeckCommandKind, PendingDeckCommand>>;
   lastAppliedCommandId: CommandId | null;
@@ -73,6 +75,8 @@ export interface EngineSessionState {
   status: EngineStatus;
   generation: EngineGeneration;
   sampleRate: number | null;
+  headphoneLevel: number;
+  cueMasterBlend: number;
   error: string | null;
 }
 

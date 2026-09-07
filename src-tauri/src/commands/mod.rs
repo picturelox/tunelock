@@ -1366,6 +1366,7 @@ mod tests {
     fn audio_engine_init_result_wire_names_generation() {
         let wire = AudioEngineInitResult {
             sample_rate: 48_000,
+            output_channels: 4,
             engine_generation: 7,
             created: false,
         };
@@ -1373,6 +1374,7 @@ mod tests {
             serde_json::to_value(wire).unwrap(),
             serde_json::json!({
                 "sampleRate": 48_000,
+                "outputChannels": 4,
                 "engineGeneration": 7,
                 "created": false
             })
@@ -1968,6 +1970,7 @@ pub async fn get_stem_manifest(
 #[serde(rename_all = "camelCase")]
 pub struct AudioEngineInitResult {
     pub sample_rate: u32,
+    pub output_channels: u16,
     pub engine_generation: u64,
     pub created: bool,
 }
@@ -2056,6 +2059,7 @@ pub async fn audio_engine_init(
             eprintln!("[AudioInit] engine already exists, returning sr={}", engine.sample_rate());
             return Ok(AudioEngineInitResult {
                 sample_rate: engine.sample_rate(),
+                output_channels: engine.output_channels(),
                 engine_generation: state.audio_engine_lifecycle.generation(),
                 created: false,
             });
@@ -2069,6 +2073,7 @@ pub async fn audio_engine_init(
     })?;
     eprintln!("[AudioInit] AudioEngine constructed, sr={}", engine.sample_rate());
     let sr = engine.sample_rate();
+    let output_channels = engine.output_channels();
 
     eprintln!("[AudioInit] starting CPAL stream");
     engine.start().map_err(|e| {
@@ -2091,6 +2096,7 @@ pub async fn audio_engine_init(
     );
     Ok(AudioEngineInitResult {
         sample_rate: sr,
+        output_channels,
         engine_generation: generation,
         created: true,
     })
@@ -2945,6 +2951,100 @@ pub async fn audio_engine_set_bus_gain(state: State<'_, AppState>, bus: String, 
         });
     }
     Ok(())
+}
+
+/// Set per-deck private-cue selection (PFL). A cue-selected deck is summed
+/// into the cue bus independent of its channel fader and crossfader.
+#[command]
+pub async fn audio_engine_set_cue_enabled(
+    state: State<'_, AppState>,
+    player: u8,
+    enabled: bool,
+) -> Result<AudioCommandSubmission, String> {
+    let player = checked_player(player)?;
+    let engine_slot = state.audio_engine.lock().await;
+    let engine = engine_slot.as_ref().ok_or("Audio engine not initialized")?;
+    let frame = engine.current_frame();
+    submit_audio_command(
+        engine,
+        state.audio_engine_lifecycle.generation(),
+        crate::audio::EngineCommand::SetCueEnabled {
+            player,
+            at_frame: frame,
+            enabled,
+        },
+    )
+}
+
+/// Set the headphone/cue output level (linear, 0.0 = silent).
+#[command]
+pub async fn audio_engine_set_cue_gain(
+    state: State<'_, AppState>,
+    gain: f32,
+) -> Result<AudioCommandSubmission, String> {
+    if !gain.is_finite() || gain < 0.0 {
+        return Err("Cue gain must be finite and non-negative".to_string());
+    }
+    let engine_slot = state.audio_engine.lock().await;
+    let engine = engine_slot.as_ref().ok_or("Audio engine not initialized")?;
+    let frame = engine.current_frame();
+    submit_audio_command(
+        engine,
+        state.audio_engine_lifecycle.generation(),
+        crate::audio::EngineCommand::SetCueGain { at_frame: frame, gain },
+    )
+}
+
+/// Set the cue/master blend for the headphone output (0.0 = cue only,
+/// 1.0 = master only).
+#[command]
+pub async fn audio_engine_set_cue_master_blend(
+    state: State<'_, AppState>,
+    blend: f32,
+) -> Result<AudioCommandSubmission, String> {
+    if !blend.is_finite() {
+        return Err("Cue/master blend must be finite".to_string());
+    }
+    let engine_slot = state.audio_engine.lock().await;
+    let engine = engine_slot.as_ref().ok_or("Audio engine not initialized")?;
+    let frame = engine.current_frame();
+    submit_audio_command(
+        engine,
+        state.audio_engine_lifecycle.generation(),
+        crate::audio::EngineCommand::SetCueMasterBlend { at_frame: frame, blend },
+    )
+}
+
+/// Set the explicit master and cue output channel pairs (0-based).
+/// Defaults: master (0,1), cue (2,3).
+#[command]
+pub async fn audio_engine_set_output_routing(
+    state: State<'_, AppState>,
+    master_left: u8,
+    master_right: u8,
+    cue_left: u8,
+    cue_right: u8,
+) -> Result<AudioCommandSubmission, String> {
+    if master_left == master_right {
+        return Err("Master output pair must use two distinct channels".to_string());
+    }
+    if cue_left == cue_right {
+        return Err("Cue output pair must use two distinct channels".to_string());
+    }
+    let engine_slot = state.audio_engine.lock().await;
+    let engine = engine_slot.as_ref().ok_or("Audio engine not initialized")?;
+    let frame = engine.current_frame();
+    submit_audio_command(
+        engine,
+        state.audio_engine_lifecycle.generation(),
+        crate::audio::EngineCommand::SetOutputRouting {
+            at_frame: frame,
+            master_left,
+            master_right,
+            cue_left,
+            cue_right,
+        },
+    )
 }
 
 fn parse_filter_bus(bus: &str) -> crate::audio::BusId {

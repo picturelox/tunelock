@@ -261,6 +261,35 @@ pub enum EngineCommand {
         at_frame: u64,
         gain: f32,
     },
+    /// Set per-deck private-cue selection (PFL). A cue-selected player's
+    /// post-trim/deck-EQ signal is summed into the cue bus, independent of
+    /// its channel fader and crossfader assignment.
+    SetCueEnabled {
+        player: PlayerId,
+        at_frame: u64,
+        enabled: bool,
+    },
+    /// Set the headphone/cue output level (linear, 0.0 = silent).
+    SetCueGain {
+        at_frame: u64,
+        gain: f32,
+    },
+    /// Set the cue/master blend for the headphone output.
+    /// 0.0 = cue only, 1.0 = master only.
+    SetCueMasterBlend {
+        at_frame: u64,
+        blend: f32,
+    },
+    /// Set the explicit master and cue output channel pairs (0-based).
+    /// Defaults: master (0,1), cue (2,3). Used to map the S3 hypothesis
+    /// (master 1-2, headphones 3-4) or other multichannel layouts.
+    SetOutputRouting {
+        at_frame: u64,
+        master_left: u8,
+        master_right: u8,
+        cue_left: u8,
+        cue_right: u8,
+    },
     /// Shutdown the engine.
     Shutdown,
     /// Set the processor type for a player. Used by the Listening Lab to

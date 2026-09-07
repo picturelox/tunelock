@@ -102,6 +102,26 @@ full acknowledgement queue increments bounded pressure telemetry without
 blocking or allocating in the callback. Key/BPM accuracy was not rerun because
 no analysis path changed.
 
+### TL-04 master/private-cue routing recheck (2026-09-06)
+
+Working tree based on the TL-00 through TL-03 checkpoint; TL-04 adds a cue
+(PFL) tap, per-deck cue selection, headphone level, cue/master blend, explicit
+master/cue output pairs, mono downmix, and whole-frame I16 conversion. It does
+not change analysis algorithms, but the per-frame output path now computes a
+cue sum and routes two stereo pairs, so the callback harness was rerun.
+
+`cargo test --release audio::perf_harness::tests::perf_2_decks_48k_256_budget_5333us -- --ignored --nocapture`:
+2 decks @ 48k/256: max=1262 microseconds, avg=271 microseconds, p99=1187
+microseconds, budget=5333 microseconds -- **PASS**.
+
+Focused deterministic tests prove cue never reaches the master pair on a
+four-channel device, stereo-only devices fold cue into master, 6-channel
+devices zero unused channels, mono devices downmix explicitly, whole device
+frames are preserved across 1/2/4/6/8-channel counts, cue gain scales the
+headphone output, only cue-selected decks feed the cue bus, and explicit
+routing moves the cue pair. Key/BPM accuracy was not rerun because no analysis
+path changed.
+
 ## Method
 
 - **MIK corpus:** Personal library export (20,221 rows, 18,909 ready).

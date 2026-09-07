@@ -2,8 +2,8 @@
 
 Updated: 2026-09-06
 
-Current milestone: TL-03 complete on `codex/tunelock-blueprint-foundation`;
-TL-04 and TL-05 are the next dependency-ready packages
+Current milestone: TL-04 complete in the working tree; TL-05 is the next
+dependency-ready package
 
 Integration baseline: `performance-build` at
 `e07d936b6a9bcd560edb4928b83dd242157818ce`
@@ -67,16 +67,16 @@ device selection, and metering.
 
 This does not yet establish release behavior. The current Workspace combines
 session, analysis, engine, and presentation state; A/B are asymmetric; several
-handlers optimistically update local state; multichannel output carries only
-the stereo master; transition plans are storage-only; and key release features
-are missing or unverified as detailed in `CAPABILITIES.md`.
+handlers optimistically update local state; transition plans are storage-only;
+and key release features are missing or unverified as detailed in
+`CAPABILITIES.md`. The engine now routes master and private cue to explicit
+channel pairs, but the performance desk has not yet exposed those controls.
 
 ## Next bounded ticket
 
-TL-04 (master/private-cue routing) and TL-05 (A/B transport, cues, loops, and
-beat Sync) are now dependency-ready. Keep their changes independently
-reviewable: routing must not silently redefine transport, and transport must not
-claim private cue until the multichannel routing gate passes.
+TL-05 (A/B transport, cues, loops, and beat Sync) is now dependency-ready.
+TL-04 routing is complete in the working tree; TL-05 must not claim private cue
+until the multichannel routing gate passes on real hardware.
 
 ## TL-01 implementation result
 
@@ -160,3 +160,33 @@ Fresh verification after TL-03:
 | Focused acknowledgement regressions | Passed: exact callback-frame receipt, queue-full submission, bounded receipt overflow, wire serialization, and allocation-audited callback publication |
 | Two-deck 48 kHz/256 release harness | Passed: max 1,227 microseconds, average 256 microseconds, p99 1,167 microseconds; 5,333 microsecond budget |
 | Native interaction, device failure, S3, and macOS | Not run; retained for TL-04, TL-07, and TL-12 hardware/platform gates |
+
+## TL-04 implementation result
+
+- Added a cue (PFL) tap taken from each player's post-trim/deck-EQ output,
+  before the channel fader and crossfader, so a cued deck is audible even when
+  its channel is crossfaded out.
+- Added per-deck cue selection, a cue sum, headphone level, and cue/master
+  blend, all as frame-addressed engine commands with generation-scoped
+  acknowledgements.
+- Added explicit master and cue output channel pairs (defaults master 0/1,
+  cue 2/3) with a `SetOutputRouting` command for other multichannel layouts.
+- Routed master and cue to their pairs in the callback; unused device channels
+  are zeroed. On stereo-only devices the cue monitor folds into the master pair,
+  and mono devices downmix explicitly.
+- Fixed the I16 conversion path to chunk at whole-frame boundaries so a scratch
+  slice never splits an interleaved device frame mid-frame.
+- Wired the session service and store with per-deck `cueEnabled`, engine-level
+  `headphoneLevel` and `cueMasterBlend`, and re-applies them after device
+  replacement.
+
+Fresh verification after TL-04:
+
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` | Passed |
+| `npm run build` | Passed; 1,609 modules transformed; 261.27 kB JavaScript and 33.25 kB CSS before gzip |
+| `cargo test` | Passed: 241 library tests + 8 binary tests; 0 failed; 7 ignored performance tests |
+| Focused routing regressions | Passed: cue never reaches master on 4ch, stereo fallback folds cue, 6ch zeroes unused channels, mono downmix, whole-frame counts across 1/2/4/6/8ch, cue gain, per-deck cue selection, and explicit cue-pair rerouting |
+| Two-deck 48 kHz/256 release harness | Passed: max 1,262 microseconds, average 271 microseconds, p99 1,187 microseconds; 5,333 microsecond budget |
+| Native listening, S3 four-channel device, and macOS | Not run; retained for TL-07 and TL-12 hardware/platform gates |

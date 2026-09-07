@@ -129,6 +129,14 @@ separate from software master/recording gain.
 mono handling is explicit; frame conversion preserves whole device frames; cue
 never reaches master. Device switching/reconnect behavior is documented.
 
+**Status:** Complete in the working tree. The engine taps a cue (PFL) sum from
+cue-selected players, applies headphone level and cue/master blend, and routes
+master and cue to explicit channel pairs (defaults master 0/1, cue 2/3).
+Stereo-only devices fold cue into master; mono devices downmix explicitly; the
+I16 path chunks at whole-frame boundaries. Focused 1/2/4/6/8-channel tests and
+the release callback harness pass. Native S3 four-channel and macOS evidence
+remain part of TL-07 and TL-12.
+
 ### TL-05 - A/B transport, cues, loops, and beat Sync
 
 **Outcome:** Two equivalent decks support dependable manual and synchronized

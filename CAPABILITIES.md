@@ -29,8 +29,8 @@ native or hardware evidence.
 | Delay and reverb | Missing | No production delay or reverb DSP/control path was found | TL-08 |
 | Loudness matching and metering | Reachable | Reversible match gain, integrated loudness comparison, sample peak, and continuous oversampled true-peak metering exist | TL-08 |
 | Output protection | Missing | A hard clamp exists and clipping is measured; UI states that no safety limiter is active | TL-08 |
-| Multichannel output | Partial | Native multichannel devices can be selected, but only master channels 1-2 receive audio and higher channels are zeroed | TL-04 |
-| Private headphone cue | Missing | No independent cue bus/output/tap or cue/master monitoring controls were found | TL-04 |
+| Multichannel output | Engine only | The engine routes master and cue to explicit channel pairs (defaults master 0/1, cue 2/3), zeroes unused channels, and is tested for 1/2/4/6/8 channels; the performance desk has not yet exposed routing controls | TL-12 |
+| Private headphone cue | Engine only | A cue (PFL) tap, per-deck cue selection, cue sum, headphone level, and cue/master blend exist in the engine and session service; no performance-desk cue workflow is wired yet | TL-12 |
 | Traktor Kontrol S3 | Unverified | No MIDI/HID adapter, mapping, event trace, feedback, or TuneLock master/cue proof exists | TL-07 |
 | Mouse and keyboard action parity | Missing | Mouse controls call IPC directly; no shared semantic action model or complete keyboard map exists | TL-07 |
 | Master recording | Missing | No callback-to-writer handoff, file writer, recorder state, or recording finalization workflow was found | TL-09 |

@@ -28,6 +28,9 @@ interface SessionActions {
     control: 'tempoRatio' | 'pitchSemitones' | 'loopLengthBeats',
     value: number | null,
   ) => void;
+  setDeckCueEnabled: (deckId: DeckId, enabled: boolean) => void;
+  setHeadphoneLevel: (level: number) => void;
+  setCueMasterBlend: (blend: number) => void;
   setDeckError: (deckId: DeckId, message: string | null) => void;
   setDeckCommandPending: (deckId: DeckId, kind: DeckCommandKind, commandId: number) => void;
   acknowledgeDeckCommand: (deckId: DeckId, kind: DeckCommandKind, commandId: number) => void;
@@ -49,6 +52,7 @@ function emptyDeck(id: DeckId): DeckSessionState {
     tempoRatio: 1,
     pitchSemitones: 0,
     loopLengthBeats: null,
+    cueEnabled: false,
     error: null,
     pendingCommands: {},
     lastAppliedCommandId: null,
@@ -64,6 +68,8 @@ export const useSessionStore = create<SessionStore>((set) => ({
     status: 'idle',
     generation: asEngineGeneration(0),
     sampleRate: null,
+    headphoneLevel: 1,
+    cueMasterBlend: 0,
     error: null,
   },
   decks: initialDecks,
@@ -74,7 +80,7 @@ export const useSessionStore = create<SessionStore>((set) => ({
   })),
 
   setEngineReady: (sampleRate, generation) => set((state) => ({
-    engine: { status: 'ready', sampleRate, generation, error: null },
+    engine: { ...state.engine, status: 'ready', sampleRate, generation, error: null },
     // A replaced engine owns no sources from the prior registry. Preserve the
     // user's selected sources but state that playback must be loaded again.
     decks: generation === state.engine.generation
@@ -168,6 +174,21 @@ export const useSessionStore = create<SessionStore>((set) => ({
       ...state.decks,
       [deckId]: { ...state.decks[deckId], [control]: value },
     },
+  })),
+
+  setDeckCueEnabled: (deckId, enabled) => set((state) => ({
+    decks: {
+      ...state.decks,
+      [deckId]: { ...state.decks[deckId], cueEnabled: enabled },
+    },
+  })),
+
+  setHeadphoneLevel: (level) => set((state) => ({
+    engine: { ...state.engine, headphoneLevel: level },
+  })),
+
+  setCueMasterBlend: (blend) => set((state) => ({
+    engine: { ...state.engine, cueMasterBlend: blend },
   })),
 
   setDeckError: (deckId, error) => set((state) => ({

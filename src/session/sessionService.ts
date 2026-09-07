@@ -8,6 +8,9 @@ import {
   audioEnginePlay,
   audioEngineSeek,
   audioEngineSetBus,
+  audioEngineSetCueEnabled,
+  audioEngineSetCueGain,
+  audioEngineSetCueMasterBlend,
   audioEngineSetLoop,
   audioEngineSetLoudnessMatchGain,
   audioEngineSetMasterGain,
@@ -19,6 +22,7 @@ import {
 } from '../lib/tauri';
 import { useSessionStore } from './sessionStore';
 import {
+  DECK_IDS,
   PLAYER_BY_DECK,
   asEngineGeneration,
   type DeckId,
@@ -131,6 +135,14 @@ class SessionService {
             audioEngineSetBus(PLAYER_BY_DECK.C, 'master'),
             audioEngineSetBus(PLAYER_BY_DECK.D, 'master'),
           ]);
+          const { headphoneLevel, cueMasterBlend } = useSessionStore.getState().engine;
+          await audioEngineSetCueGain(headphoneLevel);
+          await audioEngineSetCueMasterBlend(cueMasterBlend);
+          for (const deckId of DECK_IDS) {
+            if (useSessionStore.getState().decks[deckId].cueEnabled) {
+              await audioEngineSetCueEnabled(PLAYER_BY_DECK[deckId], true);
+            }
+          }
           this.configuredGeneration = result.engineGeneration;
         }
         useSessionStore.getState().setEngineReady(
@@ -261,6 +273,47 @@ class SessionService {
       gain,
     );
     await this.waitForApplication(deckId, 'gain', submission);
+  }
+
+  async setCueEnabled(deckId: DeckId, enabled: boolean): Promise<void> {
+    const previous = useSessionStore.getState().decks[deckId].cueEnabled;
+    useSessionStore.getState().setDeckCueEnabled(deckId, enabled);
+    try {
+      await this.initialize();
+      const submission = await audioEngineSetCueEnabled(
+        PLAYER_BY_DECK[deckId],
+        enabled,
+      );
+      await this.waitForApplication(deckId, 'cue', submission);
+    } catch (error) {
+      useSessionStore.getState().setDeckCueEnabled(deckId, previous);
+      useSessionStore.getState().setDeckError(deckId, errorMessage(error));
+      throw error;
+    }
+  }
+
+  async setHeadphoneLevel(level: number): Promise<void> {
+    const previous = useSessionStore.getState().engine.headphoneLevel;
+    useSessionStore.getState().setHeadphoneLevel(level);
+    try {
+      await this.initialize();
+      await audioEngineSetCueGain(level);
+    } catch (error) {
+      useSessionStore.getState().setHeadphoneLevel(previous);
+      throw error;
+    }
+  }
+
+  async setCueMasterBlend(blend: number): Promise<void> {
+    const previous = useSessionStore.getState().engine.cueMasterBlend;
+    useSessionStore.getState().setCueMasterBlend(blend);
+    try {
+      await this.initialize();
+      await audioEngineSetCueMasterBlend(blend);
+    } catch (error) {
+      useSessionStore.getState().setCueMasterBlend(previous);
+      throw error;
+    }
   }
 
   async beatSync(leader: DeckId, follower: DeckId): Promise<void> {

@@ -48,6 +48,7 @@ pub struct AudioEngine {
     next_command_id: AtomicU64,
     meter_snapshot: Arc<MeterSnapshot>,
     sample_rate: u32,
+    output_channels: u16,
     stream: Option<SendStream>,
     /// Source registry — engine thread owns Arc<DecodedBuffer> keyed by
     /// SourceHandle. Launch commands carry an Arc clone; the callback never
@@ -124,6 +125,13 @@ pub struct CallbackState {
     pending: Vec<PendingCommand>,
     // Solo state
     any_soloed: bool,
+    // Master/private-cue routing (TL-04)
+    master_pair: (usize, usize),
+    cue_pair: (usize, usize),
+    cue_selected: [bool; MAX_PLAYERS],
+    cue_gain: f64,
+    cue_master_blend: f64,
+    cue_available: bool,
 }
 
 struct PendingCommand {
@@ -249,6 +257,12 @@ impl CallbackState {
             meter_update_interval,
             pending: Vec::with_capacity(64),
             any_soloed: false,
+            master_pair: (0, 1),
+            cue_pair: (2, 3),
+            cue_selected: [false; MAX_PLAYERS],
+            cue_gain: 1.0,
+            cue_master_blend: 0.0,
+            cue_available: false,
         }
     }
 
@@ -511,6 +525,32 @@ impl CallbackState {
             EngineCommand::SetMasterGain { gain, .. } => {
                 self.master_gain = gain as f64;
             }
+            EngineCommand::SetCueEnabled { player, enabled, .. } => {
+                let idx = player.as_index();
+                if idx < MAX_PLAYERS {
+                    self.cue_selected[idx] = enabled;
+                }
+            }
+            EngineCommand::SetCueGain { gain, .. } => {
+                if gain.is_finite() && gain >= 0.0 {
+                    self.cue_gain = gain as f64;
+                }
+            }
+            EngineCommand::SetCueMasterBlend { blend, .. } => {
+                if blend.is_finite() {
+                    self.cue_master_blend = blend.clamp(0.0, 1.0) as f64;
+                }
+            }
+            EngineCommand::SetOutputRouting {
+                master_left,
+                master_right,
+                cue_left,
+                cue_right,
+                ..
+            } => {
+                self.master_pair = (master_left as usize, master_right as usize);
+                self.cue_pair = (cue_left as usize, cue_right as usize);
+            }
             EngineCommand::Shutdown => {
                 for p in &mut self.players {
                     p.stop();
@@ -730,7 +770,11 @@ impl CommandFrame for EngineCommand {
             | EngineCommand::SetFilterCutoff { at_frame, .. }
             | EngineCommand::SetFilterResonance { at_frame, .. }
             | EngineCommand::SetFilterDrive { at_frame, .. }
-            | EngineCommand::SetMasterGain { at_frame, .. } => *at_frame,
+            | EngineCommand::SetMasterGain { at_frame, .. }
+            | EngineCommand::SetCueEnabled { at_frame, .. }
+            | EngineCommand::SetCueGain { at_frame, .. }
+            | EngineCommand::SetCueMasterBlend { at_frame, .. }
+            | EngineCommand::SetOutputRouting { at_frame, .. } => *at_frame,
             | EngineCommand::SetProcessorType { at_frame, .. }
             | EngineCommand::SetListeningCondition { at_frame, .. }
             | EngineCommand::BeatSync { at_frame, .. }
@@ -814,7 +858,11 @@ impl AudioEngine {
                             SCRATCH_F32.with(|scratch| {
                                 let mut scratch = scratch.borrow_mut();
                                 let total = buffer.len();
-                                let chunk_size = scratch.len().min(total);
+                                // Chunk at whole-frame boundaries so a slice never
+                                // splits an interleaved device frame mid-frame.
+                                let channels = output_channels.max(1);
+                                let frames_per_chunk = (scratch.len() / channels).max(1);
+                                let chunk_size = frames_per_chunk * channels;
                                 let mut offset = 0;
                                 while offset < total {
                                     let n = chunk_size.min(total - offset);
@@ -843,6 +891,7 @@ impl AudioEngine {
             next_command_id: AtomicU64::new(1),
             meter_snapshot,
             sample_rate,
+            output_channels: output_channels as u16,
             stream: Some(SendStream(stream)),
             sources: HashMap::new(),
             next_source_handle: 1,
@@ -913,6 +962,11 @@ impl AudioEngine {
     /// Get the output sample rate.
     pub fn sample_rate(&self) -> u32 {
         self.sample_rate
+    }
+
+    /// Get the actual output channel count of the selected device.
+    pub fn output_channels(&self) -> u16 {
+        self.output_channels
     }
 
     /// Get the command queue for direct access.
@@ -1036,13 +1090,23 @@ impl AudioEngine {
 /// takes effect at that exact frame.
 ///
 /// The engine's internal signal path is always stereo (2 channels).
-/// `output_channels` is the actual device channel count (may be 2, 8, etc.).
-/// Stereo is written to channels 0 and 1; remaining channels are zeroed.
+/// `output_channels` is the actual device channel count (may be 1, 2, 4, 6,
+/// 8, etc.). Master is written to the configured master pair and the
+/// headphone/cue monitor to the configured cue pair; unused channels are
+/// zeroed. On stereo-only devices the cue monitor folds into the master pair.
 pub fn audio_callback_f32(state: &mut CallbackState, output: &mut [f32], output_channels: usize) {
-    let channels = output_channels.max(2);
+    // The engine mixes in stereo internally; the device channel count is the
+    // actual frame width. Mono (1ch) is handled explicitly by downmixing.
+    let channels = output_channels.max(1);
     let frames = output.len() / channels;
     let block_start = state.frame_counter.load(Ordering::Relaxed);
     let block_end = block_start + frames as u64;
+
+    // Record whether the cue pair fits on this device so render_slice can
+    // route master/cue pairs (or fold cue into master on stereo-only devices).
+    state.cue_available = state.cue_pair.0 < channels
+        && state.cue_pair.1 < channels
+        && state.cue_pair != state.master_pair;
 
     // Drain the command queue into the sorted pending list.
     while let Some(queued) = state.command_queue.pop_queued() {
@@ -1098,12 +1162,19 @@ fn render_slice(state: &mut CallbackState, output: &mut [f32], channels: usize) 
         // Ramp crossfader
         state.ramp_crossfade();
 
-        // Process all players and route to buses (or direct-to-master)
+        // Process all players and route to buses (or direct-to-master),
+        // while tapping the cue (PFL) sum for cue-selected players.
         let mut direct_l = 0.0f64;
         let mut direct_r = 0.0f64;
+        let mut cue_l = 0.0f64;
+        let mut cue_r = 0.0f64;
         for p in &mut state.players {
             let (l, r) = p.process_sample(state.any_soloed);
             if l != 0.0 || r != 0.0 {
+                if state.cue_selected[p.id.as_index()] {
+                    cue_l += l;
+                    cue_r += r;
+                }
                 match p.bus {
                     BusId::A => state.buses[0].accumulate(l, r),
                     BusId::B => state.buses[1].accumulate(l, r),
@@ -1144,16 +1215,91 @@ fn render_slice(state: &mut CallbackState, output: &mut [f32], channels: usize) 
         // reset needed; finalize_block() reports and resets at ~30 Hz.
         state.master_meter.process(mix_l, mix_r);
 
-        // Write output — hard-clamped at the output stage only (transparent
-        // below 0 dBFS; the DAC would clip anyway).
-        // The engine mixes in stereo; channels 0 and 1 carry the signal.
-        // Extra channels (2..N) are zeroed for multi-channel devices.
-        frame[0] = mix_l.clamp(-1.0, 1.0) as f32;
-        if channels >= 2 {
-            frame[1] = mix_r.clamp(-1.0, 1.0) as f32;
+        // Headphone/cue monitor: blend cue (PFL) with master, then apply the
+        // headphone level. The cue-only fold is used on stereo-only devices.
+        let blend = state.cue_master_blend;
+        let cue_gain = state.cue_gain;
+        let monitor_l = (cue_l * (1.0 - blend) + mix_l * blend) * cue_gain;
+        let monitor_r = (cue_r * (1.0 - blend) + mix_r * blend) * cue_gain;
+        let cue_fold_l = cue_l * cue_gain;
+        let cue_fold_r = cue_r * cue_gain;
+
+        write_output_frame(
+            frame,
+            channels,
+            state.master_pair,
+            state.cue_pair,
+            state.cue_available,
+            mix_l,
+            mix_r,
+            monitor_l,
+            monitor_r,
+            cue_fold_l,
+            cue_fold_r,
+        );
+    }
+}
+
+/// Write one output frame to the device buffer, routing master and cue to
+/// their explicit channel pairs. Unused channels are zeroed. Mono devices
+/// downmix master plus folded cue to a single channel. This never allocates.
+#[inline]
+fn write_output_frame(
+    frame: &mut [f32],
+    channels: usize,
+    master_pair: (usize, usize),
+    cue_pair: (usize, usize),
+    cue_available: bool,
+    master_l: f64,
+    master_r: f64,
+    monitor_l: f64,
+    monitor_r: f64,
+    cue_fold_l: f64,
+    cue_fold_r: f64,
+) {
+    for sample in frame.iter_mut() {
+        *sample = 0.0;
+    }
+
+    let ml = master_l.clamp(-1.0, 1.0) as f32;
+    let mr = master_r.clamp(-1.0, 1.0) as f32;
+
+    if channels == 1 {
+        // Mono: explicit downmix of master plus folded cue/monitor.
+        let fl = cue_fold_l.clamp(-1.0, 1.0);
+        let fr = cue_fold_r.clamp(-1.0, 1.0);
+        let mono = ((ml as f64 + mr as f64) * 0.5 + (fl + fr) * 0.5).clamp(-1.0, 1.0) as f32;
+        frame[0] = mono;
+        return;
+    }
+
+    if cue_available {
+        let hl = monitor_l.clamp(-1.0, 1.0) as f32;
+        let hr = monitor_r.clamp(-1.0, 1.0) as f32;
+        if master_pair.0 < channels {
+            frame[master_pair.0] = ml;
         }
-        for ch in 2..channels {
-            frame[ch] = 0.0;
+        if master_pair.1 < channels {
+            frame[master_pair.1] = mr;
+        }
+        if cue_pair.0 < channels {
+            frame[cue_pair.0] = hl;
+        }
+        if cue_pair.1 < channels {
+            frame[cue_pair.1] = hr;
+        }
+    } else {
+        // Stereo-only fallback: fold the cue-only signal into the master pair
+        // so monitoring remains audible without a private cue output.
+        let fl = cue_fold_l.clamp(-1.0, 1.0) as f32;
+        let fr = cue_fold_r.clamp(-1.0, 1.0) as f32;
+        let fold_l = (ml + fl).clamp(-1.0, 1.0);
+        let fold_r = (mr + fr).clamp(-1.0, 1.0);
+        if master_pair.0 < channels {
+            frame[master_pair.0] = fold_l;
+        }
+        if master_pair.1 < channels {
+            frame[master_pair.1] = fold_r;
         }
     }
 }
@@ -1281,6 +1427,7 @@ mod tests {
             next_command_id: AtomicU64::new(1),
             meter_snapshot: Arc::new(MeterSnapshot::new()),
             sample_rate: SR as u32,
+            output_channels: 2,
             stream: None,
             sources: HashMap::new(),
             next_source_handle: 1,
@@ -1701,5 +1848,281 @@ mod tests {
             retired_count >= 1,
             "old source buffer must be deferred to retirement queue (got {retired_count})"
         );
+    }
+
+    // ── TL-04: master/private-cue routing ─────────────────────────────
+
+    #[test]
+    fn cue_never_reaches_master_on_four_channel_device() {
+        let mut state = make_state();
+        state.command_queue.push(EngineCommand::SetMasterGain { at_frame: 0, gain: 1.0 });
+        // Crossfade fully B: player 0 (Bus A) is silent in the master mix.
+        state.command_queue.push(EngineCommand::SetCrossfade { at_frame: 0, position: 1.0 });
+        state.command_queue.push(EngineCommand::Launch {
+            player: PlayerId(0),
+            at_frame: 0,
+            source: SourceHandle(1),
+            buffer: constant_buffer(0.5, 44100),
+            start_beat: 0.0,
+            quantize: Quantize::Immediate,
+        });
+        state.command_queue.push(EngineCommand::SetCueEnabled {
+            player: PlayerId(0),
+            at_frame: 0,
+            enabled: true,
+        });
+
+        let mut out = vec![0.0f32; 256 * 4];
+        for _ in 0..10 {
+            audio_callback_f32(&mut state, &mut out, 4);
+        }
+
+        let tail = &out[out.len() - 256 * 4..];
+        for frame in tail.chunks(4) {
+            assert!(
+                frame[0].abs() < 1e-6 && frame[1].abs() < 1e-6,
+                "master pair must stay silent when the deck is crossfaded out"
+            );
+        }
+        let cue_nonzero = tail
+            .chunks(4)
+            .filter(|f| f[2].abs() > 1e-6 || f[3].abs() > 1e-6)
+            .count();
+        assert!(cue_nonzero > 200, "cue pair must carry the cued deck");
+    }
+
+    #[test]
+    fn stereo_fallback_folds_cue_into_master() {
+        let mut state = make_state();
+        state.command_queue.push(EngineCommand::SetMasterGain { at_frame: 0, gain: 1.0 });
+        state.command_queue.push(EngineCommand::SetCrossfade { at_frame: 0, position: 1.0 });
+        state.command_queue.push(EngineCommand::Launch {
+            player: PlayerId(0),
+            at_frame: 0,
+            source: SourceHandle(1),
+            buffer: constant_buffer(0.5, 44100),
+            start_beat: 0.0,
+            quantize: Quantize::Immediate,
+        });
+        state.command_queue.push(EngineCommand::SetCueEnabled {
+            player: PlayerId(0),
+            at_frame: 0,
+            enabled: true,
+        });
+
+        let mut out = vec![0.0f32; 256 * 2];
+        for _ in 0..10 {
+            audio_callback_f32(&mut state, &mut out, 2);
+        }
+
+        let tail = &out[out.len() - 256 * 2..];
+        let nonzero = tail.iter().filter(|&&s| s.abs() > 1e-6).count();
+        assert!(
+            nonzero > 200,
+            "stereo-only fallback must fold cue into the master pair"
+        );
+    }
+
+    #[test]
+    fn six_channel_device_zeroes_unused_channels() {
+        let mut state = make_state();
+        state.command_queue.push(EngineCommand::SetMasterGain { at_frame: 0, gain: 1.0 });
+        state.command_queue.push(EngineCommand::SetBus {
+            player: PlayerId(0),
+            at_frame: 0,
+            bus: BusId::Master,
+        });
+        state.command_queue.push(EngineCommand::Launch {
+            player: PlayerId(0),
+            at_frame: 0,
+            source: SourceHandle(1),
+            buffer: constant_buffer(0.3, 44100),
+            start_beat: 0.0,
+            quantize: Quantize::Immediate,
+        });
+
+        let mut out = vec![0.0f32; 256 * 6];
+        for _ in 0..5 {
+            audio_callback_f32(&mut state, &mut out, 6);
+        }
+
+        let tail = &out[out.len() - 256 * 6..];
+        for frame in tail.chunks(6) {
+            assert!(
+                frame[0].abs() > 1e-6 || frame[1].abs() > 1e-6,
+                "master pair should carry signal"
+            );
+            assert!(frame[4].abs() < 1e-6 && frame[5].abs() < 1e-6, "channels 4,5 must be zeroed");
+        }
+    }
+
+    #[test]
+    fn mono_device_downmixes_explicitly() {
+        let mut state = make_state();
+        state.command_queue.push(EngineCommand::SetMasterGain { at_frame: 0, gain: 1.0 });
+        state.command_queue.push(EngineCommand::SetBus {
+            player: PlayerId(0),
+            at_frame: 0,
+            bus: BusId::Master,
+        });
+        state.command_queue.push(EngineCommand::Launch {
+            player: PlayerId(0),
+            at_frame: 0,
+            source: SourceHandle(1),
+            buffer: constant_buffer(0.4, 44100),
+            start_beat: 0.0,
+            quantize: Quantize::Immediate,
+        });
+
+        let mut out = vec![0.0f32; 256];
+        for _ in 0..5 {
+            audio_callback_f32(&mut state, &mut out, 1);
+        }
+
+        let tail = &out[out.len() - 256..];
+        let nonzero = tail.iter().filter(|&&s| s.abs() > 1e-6).count();
+        assert!(nonzero > 200, "mono device must downmix master to one channel");
+    }
+
+    #[test]
+    fn frame_counter_advances_by_whole_frames_across_channel_counts() {
+        for channels in [1usize, 2, 4, 6, 8] {
+            let mut state = make_state();
+            let frames = 64usize;
+            let mut out = vec![0.0f32; frames * channels];
+            audio_callback_f32(&mut state, &mut out, channels);
+            assert_eq!(
+                state.frame_counter.load(Ordering::Relaxed),
+                frames as u64,
+                "channels={channels} must advance exactly {frames} frames"
+            );
+        }
+    }
+
+    #[test]
+    fn cue_gain_scales_headphone_output() {
+        let mut state = make_state();
+        state.command_queue.push(EngineCommand::SetMasterGain { at_frame: 0, gain: 1.0 });
+        state.command_queue.push(EngineCommand::SetCrossfade { at_frame: 0, position: 1.0 });
+        state.command_queue.push(EngineCommand::Launch {
+            player: PlayerId(0),
+            at_frame: 0,
+            source: SourceHandle(1),
+            buffer: constant_buffer(0.5, 44100),
+            start_beat: 0.0,
+            quantize: Quantize::Immediate,
+        });
+        state.command_queue.push(EngineCommand::SetCueEnabled {
+            player: PlayerId(0),
+            at_frame: 0,
+            enabled: true,
+        });
+        state.command_queue.push(EngineCommand::SetCueGain { at_frame: 0, gain: 0.5 });
+
+        let mut out = vec![0.0f32; 256 * 4];
+        for _ in 0..10 {
+            audio_callback_f32(&mut state, &mut out, 4);
+        }
+
+        let tail = &out[out.len() - 256 * 4..];
+        let cue_level = tail.chunks(4).map(|f| f[2].abs()).sum::<f32>() / 256.0;
+        assert!(
+            (cue_level - 0.25).abs() < 0.05,
+            "cue gain 0.5 should halve the cue to ~0.25, got {cue_level}"
+        );
+    }
+
+    #[test]
+    fn only_cue_selected_decks_feed_cue_bus() {
+        let mut state = make_state();
+        state.command_queue.push(EngineCommand::SetMasterGain { at_frame: 0, gain: 1.0 });
+        state.command_queue.push(EngineCommand::SetCrossfade { at_frame: 0, position: 1.0 });
+        state.command_queue.push(EngineCommand::SetBus {
+            player: PlayerId(0),
+            at_frame: 0,
+            bus: BusId::A,
+        });
+        state.command_queue.push(EngineCommand::SetBus {
+            player: PlayerId(1),
+            at_frame: 0,
+            bus: BusId::A,
+        });
+        state.command_queue.push(EngineCommand::Launch {
+            player: PlayerId(0),
+            at_frame: 0,
+            source: SourceHandle(1),
+            buffer: constant_buffer(0.5, 44100),
+            start_beat: 0.0,
+            quantize: Quantize::Immediate,
+        });
+        state.command_queue.push(EngineCommand::Launch {
+            player: PlayerId(1),
+            at_frame: 0,
+            source: SourceHandle(2),
+            buffer: constant_buffer(0.3, 44100),
+            start_beat: 0.0,
+            quantize: Quantize::Immediate,
+        });
+        // Only player 1 is cue-selected.
+        state.command_queue.push(EngineCommand::SetCueEnabled {
+            player: PlayerId(1),
+            at_frame: 0,
+            enabled: true,
+        });
+
+        let mut out = vec![0.0f32; 256 * 4];
+        for _ in 0..10 {
+            audio_callback_f32(&mut state, &mut out, 4);
+        }
+
+        let tail = &out[out.len() - 256 * 4..];
+        let cue_level = tail.chunks(4).map(|f| f[2].abs()).sum::<f32>() / 256.0;
+        assert!(
+            (cue_level - 0.3).abs() < 0.05,
+            "cue must carry only the selected deck (~0.3), got {cue_level}"
+        );
+    }
+
+    #[test]
+    fn explicit_output_routing_moves_cue_pair() {
+        let mut state = make_state();
+        state.command_queue.push(EngineCommand::SetMasterGain { at_frame: 0, gain: 1.0 });
+        state.command_queue.push(EngineCommand::SetCrossfade { at_frame: 0, position: 1.0 });
+        state.command_queue.push(EngineCommand::Launch {
+            player: PlayerId(0),
+            at_frame: 0,
+            source: SourceHandle(1),
+            buffer: constant_buffer(0.5, 44100),
+            start_beat: 0.0,
+            quantize: Quantize::Immediate,
+        });
+        state.command_queue.push(EngineCommand::SetCueEnabled {
+            player: PlayerId(0),
+            at_frame: 0,
+            enabled: true,
+        });
+        // Route cue to channels 4,5 on a 6-channel device.
+        state.command_queue.push(EngineCommand::SetOutputRouting {
+            at_frame: 0,
+            master_left: 0,
+            master_right: 1,
+            cue_left: 4,
+            cue_right: 5,
+        });
+
+        let mut out = vec![0.0f32; 256 * 6];
+        for _ in 0..10 {
+            audio_callback_f32(&mut state, &mut out, 6);
+        }
+
+        let tail = &out[out.len() - 256 * 6..];
+        let cue_level = tail.chunks(6).map(|f| f[4].abs()).sum::<f32>() / 256.0;
+        assert!(cue_level > 0.3, "cue must appear on the routed pair (4,5), got {cue_level}");
+        for frame in tail.chunks(6) {
+            assert!(
+                frame[2].abs() < 1e-6 && frame[3].abs() < 1e-6,
+                "default cue pair (2,3) must stay silent after rerouting"
+            );
+        }
     }
 }
