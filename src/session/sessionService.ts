@@ -15,12 +15,14 @@ import {
   audioEngineSetTempo,
   audioEngineStop,
   audioEngineSyncLaunch,
+  type AudioCommandSubmission,
 } from '../lib/tauri';
 import { useSessionStore } from './sessionStore';
 import {
   PLAYER_BY_DECK,
   asEngineGeneration,
   type DeckId,
+  type DeckCommandKind,
   type TransportState,
 } from './types';
 
@@ -31,6 +33,83 @@ function errorMessage(error: unknown): string {
 class SessionService {
   private initialization: Promise<void> | null = null;
   private configuredGeneration = 0;
+  private pendingAcknowledgements = new Map<string, {
+    deckId: DeckId;
+    kind: DeckCommandKind;
+    commandId: number;
+    resolve: () => void;
+    reject: (error: Error) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
+  private observedAcknowledgements = new Set<string>();
+  private acknowledgementsDropped = 0;
+
+  private acknowledgementKey(engineGeneration: number, commandId: number): string {
+    return `${engineGeneration}:${commandId}`;
+  }
+
+  private waitForApplication(
+    deckId: DeckId,
+    kind: DeckCommandKind,
+    submission: AudioCommandSubmission,
+  ): Promise<void> {
+    const key = this.acknowledgementKey(
+      submission.engineGeneration,
+      submission.commandId,
+    );
+    useSessionStore.getState().setDeckCommandPending(
+      deckId,
+      kind,
+      submission.commandId,
+    );
+    if (this.observedAcknowledgements.delete(key)) {
+      useSessionStore.getState().acknowledgeDeckCommand(
+        deckId,
+        kind,
+        submission.commandId,
+      );
+      return Promise.resolve();
+    }
+
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingAcknowledgements.delete(key);
+        const error = new Error(
+          `Audio command ${submission.commandId} was not acknowledged within 2 seconds.`,
+        );
+        useSessionStore.getState().failDeckCommand(
+          deckId,
+          kind,
+          submission.commandId,
+          error.message,
+        );
+        reject(error);
+      }, 2_000);
+      this.pendingAcknowledgements.set(key, {
+        deckId,
+        kind,
+        commandId: submission.commandId,
+        resolve,
+        reject,
+        timer,
+      });
+    });
+  }
+
+  private rejectPendingAcknowledgements(message: string): void {
+    for (const pending of this.pendingAcknowledgements.values()) {
+      clearTimeout(pending.timer);
+      useSessionStore.getState().failDeckCommand(
+        pending.deckId,
+        pending.kind,
+        pending.commandId,
+        message,
+      );
+      pending.reject(new Error(message));
+    }
+    this.pendingAcknowledgements.clear();
+    this.observedAcknowledgements.clear();
+  }
 
   async initialize(): Promise<void> {
     const current = useSessionStore.getState().engine;
@@ -86,6 +165,14 @@ class SessionService {
         }
         return;
       }
+      if (result.commandId === null) {
+        throw new Error('The audio engine accepted a load without a command identity.');
+      }
+      await this.waitForApplication(deckId, 'load', {
+        commandId: result.commandId,
+        engineGeneration: result.engineGeneration,
+        queuedFrame: 0,
+      });
       useSessionStore.getState().completeDeckLoad(deckId, generation);
     } catch (error) {
       useSessionStore.getState().failDeckLoad(deckId, generation, errorMessage(error));
@@ -95,14 +182,21 @@ class SessionService {
 
   async setTransport(deckId: DeckId, transport: TransportState): Promise<void> {
     const store = useSessionStore.getState();
+    const previousTransport = store.decks[deckId].acknowledgedTransport;
     store.setDesiredTransport(deckId, transport);
     try {
       await this.initialize();
       const player = PLAYER_BY_DECK[deckId];
-      if (transport === 'playing') await audioEnginePlay(player);
-      else if (transport === 'paused') await audioEnginePause(player);
-      else if (transport === 'stopped') await audioEngineStop(player);
+      let submission: AudioCommandSubmission;
+      if (transport === 'playing') submission = await audioEnginePlay(player);
+      else if (transport === 'paused') submission = await audioEnginePause(player);
+      else if (transport === 'stopped') submission = await audioEngineStop(player);
+      else return;
+      await this.waitForApplication(deckId, 'transport', submission);
     } catch (error) {
+      if (!useSessionStore.getState().decks[deckId].pendingCommands.transport) {
+        useSessionStore.getState().setDesiredTransport(deckId, previousTransport);
+      }
       useSessionStore.getState().setDeckError(deckId, errorMessage(error));
       throw error;
     }
@@ -110,34 +204,63 @@ class SessionService {
 
   async seek(deckId: DeckId, sourceBeat: number): Promise<void> {
     await this.initialize();
-    await audioEngineSeek(PLAYER_BY_DECK[deckId], sourceBeat);
+    const submission = await audioEngineSeek(PLAYER_BY_DECK[deckId], sourceBeat);
+    await this.waitForApplication(deckId, 'seek', submission);
   }
 
   async setTempo(deckId: DeckId, ratio: number): Promise<void> {
+    const previous = useSessionStore.getState().decks[deckId].tempoRatio;
     useSessionStore.getState().setDeckControl(deckId, 'tempoRatio', ratio);
-    await this.initialize();
-    await audioEngineSetTempo(PLAYER_BY_DECK[deckId], ratio);
+    try {
+      await this.initialize();
+      const submission = await audioEngineSetTempo(PLAYER_BY_DECK[deckId], ratio);
+      await this.waitForApplication(deckId, 'tempo', submission);
+    } catch (error) {
+      useSessionStore.getState().setDeckControl(deckId, 'tempoRatio', previous);
+      useSessionStore.getState().setDeckError(deckId, errorMessage(error));
+      throw error;
+    }
   }
 
   async setPitch(deckId: DeckId, semitones: number): Promise<void> {
+    const previous = useSessionStore.getState().decks[deckId].pitchSemitones;
     useSessionStore.getState().setDeckControl(deckId, 'pitchSemitones', semitones);
-    await this.initialize();
-    await audioEngineSetPitch(PLAYER_BY_DECK[deckId], semitones);
+    try {
+      await this.initialize();
+      const submission = await audioEngineSetPitch(PLAYER_BY_DECK[deckId], semitones);
+      await this.waitForApplication(deckId, 'pitch', submission);
+    } catch (error) {
+      useSessionStore.getState().setDeckControl(deckId, 'pitchSemitones', previous);
+      useSessionStore.getState().setDeckError(deckId, errorMessage(error));
+      throw error;
+    }
   }
 
   async setLoop(deckId: DeckId, lengthBeats: number | null): Promise<void> {
+    const previous = useSessionStore.getState().decks[deckId].loopLengthBeats;
     useSessionStore.getState().setDeckControl(deckId, 'loopLengthBeats', lengthBeats);
-    await this.initialize();
-    await audioEngineSetLoop(
-      PLAYER_BY_DECK[deckId],
-      lengthBeats === null ? null : 0,
-      lengthBeats,
-    );
+    try {
+      await this.initialize();
+      const submission = await audioEngineSetLoop(
+        PLAYER_BY_DECK[deckId],
+        lengthBeats === null ? null : 0,
+        lengthBeats,
+      );
+      await this.waitForApplication(deckId, 'loop', submission);
+    } catch (error) {
+      useSessionStore.getState().setDeckControl(deckId, 'loopLengthBeats', previous);
+      useSessionStore.getState().setDeckError(deckId, errorMessage(error));
+      throw error;
+    }
   }
 
   async setLoudnessMatchGain(deckId: DeckId, gain: number): Promise<void> {
     await this.initialize();
-    await audioEngineSetLoudnessMatchGain(PLAYER_BY_DECK[deckId], gain);
+    const submission = await audioEngineSetLoudnessMatchGain(
+      PLAYER_BY_DECK[deckId],
+      gain,
+    );
+    await this.waitForApplication(deckId, 'gain', submission);
   }
 
   async beatSync(leader: DeckId, follower: DeckId): Promise<void> {
@@ -161,6 +284,9 @@ class SessionService {
     const meters = await audioEngineGetMeters();
     const state = useSessionStore.getState();
     if (state.engine.generation !== meters.engineGeneration) {
+      this.rejectPendingAcknowledgements(
+        'Audio engine changed before the command was applied.',
+      );
       state.setEngineReady(
         state.engine.sampleRate ?? 0,
         asEngineGeneration(meters.engineGeneration),
@@ -170,6 +296,37 @@ class SessionService {
       await this.initialize();
     }
     useSessionStore.getState().reconcileMeters(meters);
+
+    if (meters.acknowledgementsDropped > this.acknowledgementsDropped) {
+      this.rejectPendingAcknowledgements(
+        'Audio acknowledgement capacity was exceeded; state was reconciled from telemetry.',
+      );
+    }
+    this.acknowledgementsDropped = meters.acknowledgementsDropped;
+
+    for (const acknowledgement of meters.acknowledgements) {
+      const key = this.acknowledgementKey(
+        meters.engineGeneration,
+        acknowledgement.commandId,
+      );
+      const pending = this.pendingAcknowledgements.get(key);
+      if (!pending) {
+        this.observedAcknowledgements.add(key);
+        if (this.observedAcknowledgements.size > 512) {
+          const oldest = this.observedAcknowledgements.values().next().value;
+          if (oldest !== undefined) this.observedAcknowledgements.delete(oldest);
+        }
+        continue;
+      }
+      clearTimeout(pending.timer);
+      this.pendingAcknowledgements.delete(key);
+      useSessionStore.getState().acknowledgeDeckCommand(
+        pending.deckId,
+        pending.kind,
+        pending.commandId,
+      );
+      pending.resolve();
+    }
   }
 }
 

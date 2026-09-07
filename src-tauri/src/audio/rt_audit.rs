@@ -18,7 +18,7 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use crate::audio::command::{
-        DecodedBuffer, EngineCommand, LoadGeneration, Quantize, SourceHandle,
+        CommandId, DecodedBuffer, EngineCommand, LoadGeneration, Quantize, SourceHandle,
     };
     use crate::audio::engine::{audio_callback_f32, CallbackState};
     use crate::audio::meter::MeterSnapshot;
@@ -443,7 +443,7 @@ mod tests {
             at_frame: 0,
             bus: BusId::Master,
         });
-        state.command_queue.push(EngineCommand::LoadPaused {
+        state.command_queue.push_tracked(CommandId(1), EngineCommand::LoadPaused {
             player: PlayerId(0),
             at_frame: 0,
             source: SourceHandle(1),

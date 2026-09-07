@@ -2,10 +2,13 @@
 
 Updated: 2026-09-06
 
-Current milestone: TL-02 complete in the working tree; TL-03 is next
+Current milestone: TL-03 complete on `codex/tunelock-blueprint-foundation`;
+TL-04 and TL-05 are the next dependency-ready packages
 
 Integration baseline: `performance-build` at
 `e07d936b6a9bcd560edb4928b83dd242157818ce`
+
+Foundation checkpoint: `1fc95ba` contains TL-00 through TL-02.
 
 ## Product destination
 
@@ -70,10 +73,10 @@ are missing or unverified as detailed in `CAPABILITIES.md`.
 
 ## Next bounded ticket
 
-Start TL-03: add bounded command identities/results and compact engine
-acknowledgements so the interface can distinguish requested, queued, applied,
-and failed state. Force queue-full and engine/device failures in focused tests.
-Do not combine this with transport feature expansion or visual redesign.
+TL-04 (master/private-cue routing) and TL-05 (A/B transport, cues, loops, and
+beat Sync) are now dependency-ready. Keep their changes independently
+reviewable: routing must not silently redefine transport, and transport must not
+claim private cue until the multichannel routing gate passes.
 
 ## TL-01 implementation result
 
@@ -129,3 +132,31 @@ Fresh verification after TL-02:
 | Two-deck 48 kHz/256 release harness | Passed: max 1,216 µs, average 268 µs, p99 1,197 µs; 5,333 µs budget |
 | Native interaction/listening | Not run; retained for integrated hardware/UI validation |
 | Long-session process memory | Not yet measured interactively; deterministic registry ownership is bounded and the release soak remains a TL-12 gate |
+
+## TL-03 implementation result
+
+- Added monotonic command IDs scoped by engine generation. A successful
+  submission now means queued intent; completion requires a callback receipt.
+- Added a bounded lock-free acknowledgement queue. The callback records each
+  tracked command's exact application frame and increments explicit pressure
+  telemetry when receipts cannot be retained, without allocating or blocking.
+- Active load, transport, seek, loop, tempo, pitch, and loudness-gain actions
+  now expose fixed per-deck pending state, wait up to two seconds for a receipt,
+  and surface or roll back failed intent.
+- Reconciliation preserves pending desired values until application rather than
+  falsely treating optimistic local state as engine acknowledgement.
+- The performance desk displays pending commands and cumulative command/receipt
+  pressure, and serializes active per-deck control bursts.
+- Master-gain and bus setup now return explicit missing-engine, invalid-input,
+  and queue-full failures. Sync-specific receipts remain part of TL-05.
+
+Fresh verification after TL-03:
+
+| Check | Result |
+|---|---|
+| `npx tsc --noEmit` | Passed |
+| `npm run build` | Passed; 1,609 modules transformed; 259.90 kB JavaScript and 33.25 kB CSS before gzip |
+| `cargo test` | Passed: 233 library tests + 8 binary tests; 0 failed; 7 ignored performance tests |
+| Focused acknowledgement regressions | Passed: exact callback-frame receipt, queue-full submission, bounded receipt overflow, wire serialization, and allocation-audited callback publication |
+| Two-deck 48 kHz/256 release harness | Passed: max 1,227 microseconds, average 256 microseconds, p99 1,167 microseconds; 5,333 microsecond budget |
+| Native interaction, device failure, S3, and macOS | Not run; retained for TL-04, TL-07, and TL-12 hardware/platform gates |

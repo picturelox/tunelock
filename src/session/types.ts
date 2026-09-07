@@ -8,12 +8,29 @@ declare const loadGenerationBrand: unique symbol;
 declare const engineGenerationBrand: unique symbol;
 declare const analysisRevisionBrand: unique symbol;
 declare const gridRevisionBrand: unique symbol;
+declare const commandIdBrand: unique symbol;
 
 export type SourceId = string & { readonly [sourceIdBrand]: true };
 export type LoadGeneration = number & { readonly [loadGenerationBrand]: true };
 export type EngineGeneration = number & { readonly [engineGenerationBrand]: true };
 export type AnalysisRevision = number & { readonly [analysisRevisionBrand]: true };
 export type GridRevision = number & { readonly [gridRevisionBrand]: true };
+export type CommandId = number & { readonly [commandIdBrand]: true };
+
+export type DeckCommandKind =
+  | 'load'
+  | 'transport'
+  | 'seek'
+  | 'loop'
+  | 'tempo'
+  | 'pitch'
+  | 'gain';
+
+export interface PendingDeckCommand {
+  id: CommandId;
+  kind: DeckCommandKind;
+  requestedAtMs: number;
+}
 
 export const DECK_IDS: readonly DeckId[] = ['A', 'B', 'C', 'D'];
 
@@ -48,6 +65,8 @@ export interface DeckSessionState {
   pitchSemitones: number;
   loopLengthBeats: number | null;
   error: string | null;
+  pendingCommands: Partial<Record<DeckCommandKind, PendingDeckCommand>>;
+  lastAppliedCommandId: CommandId | null;
 }
 
 export interface EngineSessionState {
@@ -71,6 +90,10 @@ export function asLoadGeneration(value: number): LoadGeneration {
   return value as LoadGeneration;
 }
 
+export function asCommandId(value: number): CommandId {
+  return value as CommandId;
+}
+
 export function makeSourceId(
   deckId: DeckId,
   generation: LoadGeneration,
@@ -78,4 +101,3 @@ export function makeSourceId(
 ): SourceId {
   return `${deckId}:${generation}:${filePath}` as SourceId;
 }
-

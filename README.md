@@ -11,10 +11,12 @@ reliability; stems follow after four-deck full-track reliability.
 
 The repository already contains a substantial Rust/CPAL audio foundation,
 classical and neural-analysis research, library persistence, and an integrated
-analysis/playback workspace. It is not yet the first usable release: private cue
-routing, S3 control, scratching/backspins, delay/reverb, output protection,
-recording, executable transition replay, a shared session model, and macOS
-validation remain open.
+analysis/playback workspace. The current desk uses a persistent app-root session,
+generation-safe source loading, and bounded callback acknowledgements for its
+active controls. It is not yet the first usable release: complete A/B transport,
+private cue routing, S3 control, scratching/backspins, delay/reverb, output
+protection, recording, executable transition replay, and macOS validation remain
+open.
 
 Start here:
 
@@ -35,7 +37,8 @@ history. They do not override the documents above where scope conflicts.
 - SQLite persistence with WAL mode
 - immediate deterministic key/BPM analysis plus optional asynchronous
   intelligence work
-- a bounded real-time command path and allocation/deallocation audit coverage
+- bounded real-time command and acknowledgement paths with
+  allocation/deallocation audit coverage
 
 ## Development
 

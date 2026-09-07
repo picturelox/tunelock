@@ -57,6 +57,22 @@ pub struct SourceHandle(pub u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LoadGeneration(pub u64);
 
+/// Monotonic identity for a command accepted by one engine generation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CommandId(pub u64);
+
+/// Confirmation emitted after the realtime callback applies a tracked command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CommandAcknowledgement {
+    pub command_id: CommandId,
+    pub applied_frame: u64,
+}
+
+pub(crate) struct QueuedCommand {
+    pub command_id: Option<CommandId>,
+    pub command: EngineCommand,
+}
+
 /// Quantization point for launching a player.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Quantize {
@@ -357,7 +373,7 @@ pub struct BeatGridCompact {
 /// A bounded lock-free command queue.
 /// Uses crossbeam's ArrayQueue which is lock-free (CAS-based).
 pub struct CommandQueue {
-    queue: crossbeam_queue::ArrayQueue<EngineCommand>,
+    queue: crossbeam_queue::ArrayQueue<QueuedCommand>,
     dropped_count: AtomicU64,
 }
 
@@ -372,7 +388,21 @@ impl CommandQueue {
     /// Push a command. Called from the UI thread.
     /// Returns false if the queue was full (command dropped).
     pub fn push(&self, cmd: EngineCommand) -> bool {
-        match self.queue.push(cmd) {
+        self.push_queued(QueuedCommand {
+            command_id: None,
+            command: cmd,
+        })
+    }
+
+    pub fn push_tracked(&self, command_id: CommandId, command: EngineCommand) -> bool {
+        self.push_queued(QueuedCommand {
+            command_id: Some(command_id),
+            command,
+        })
+    }
+
+    fn push_queued(&self, queued: QueuedCommand) -> bool {
+        match self.queue.push(queued) {
             Ok(()) => true,
             Err(_) => {
                 self.dropped_count.fetch_add(1, Ordering::Relaxed);
@@ -383,6 +413,10 @@ impl CommandQueue {
 
     /// Pop a command. Called from the audio callback.
     pub fn pop(&self) -> Option<EngineCommand> {
+        self.queue.pop().map(|queued| queued.command)
+    }
+
+    pub(crate) fn pop_queued(&self) -> Option<QueuedCommand> {
         self.queue.pop()
     }
 
@@ -421,5 +455,14 @@ mod tests {
         assert!(q.push(EngineCommand::Shutdown));
         assert!(!q.push(EngineCommand::Shutdown)); // full
         assert_eq!(q.dropped_count(), 1);
+    }
+
+    #[test]
+    fn tracked_queue_entry_preserves_command_identity() {
+        let q = CommandQueue::new(1);
+        assert!(q.push_tracked(CommandId(9), EngineCommand::Shutdown));
+        let queued = q.pop_queued().unwrap();
+        assert_eq!(queued.command_id, Some(CommandId(9)));
+        assert!(matches!(queued.command, EngineCommand::Shutdown));
     }
 }

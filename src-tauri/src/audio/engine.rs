@@ -33,8 +33,8 @@ use cpal::{SampleFormat, StreamConfig};
 
 use super::bus::Bus;
 use super::command::{
-    BusId, CommandQueue, DecodedBuffer, EngineCommand, EqBand, MAX_PLAYERS, PlayerId,
-    LoadGeneration, Quantize, SourceHandle,
+    BusId, CommandAcknowledgement, CommandId, CommandQueue, DecodedBuffer, EngineCommand,
+    EqBand, LoadGeneration, QueuedCommand, MAX_PLAYERS, PlayerId, Quantize, SourceHandle,
 };
 use super::meter::MeterSnapshot;
 use super::player::Player;
@@ -44,6 +44,8 @@ use super::player::Player;
 pub struct AudioEngine {
     frame_counter: Arc<AtomicU64>,
     command_queue: Arc<CommandQueue>,
+    acknowledgements: Arc<crossbeam_queue::ArrayQueue<CommandAcknowledgement>>,
+    next_command_id: AtomicU64,
     meter_snapshot: Arc<MeterSnapshot>,
     sample_rate: u32,
     stream: Option<SendStream>,
@@ -81,6 +83,7 @@ pub struct CallbackState {
     pub command_queue: Arc<CommandQueue>,
     #[cfg(not(test))]
     command_queue: Arc<CommandQueue>,
+    acknowledgements: Arc<crossbeam_queue::ArrayQueue<CommandAcknowledgement>>,
     meter_snapshot: Arc<MeterSnapshot>,
     #[cfg(test)]
     pub players: [Player; MAX_PLAYERS],
@@ -124,7 +127,7 @@ pub struct CallbackState {
 }
 
 struct PendingCommand {
-    cmd: EngineCommand,
+    queued: QueuedCommand,
     at_frame: u64,
 }
 
@@ -137,12 +140,34 @@ impl CallbackState {
         deferred_overflow: Arc<crossbeam_queue::ArrayQueue<Arc<DecodedBuffer>>>,
         sample_rate: f64,
     ) -> Self {
+        let acknowledgements = Arc::new(crossbeam_queue::ArrayQueue::new(512));
+        Self::new_with_acknowledgements(
+            frame_counter,
+            command_queue,
+            meter_snapshot,
+            retired_sources,
+            deferred_overflow,
+            acknowledgements,
+            sample_rate,
+        )
+    }
+
+    fn new_with_acknowledgements(
+        frame_counter: Arc<AtomicU64>,
+        command_queue: Arc<CommandQueue>,
+        meter_snapshot: Arc<MeterSnapshot>,
+        retired_sources: Arc<crossbeam_queue::ArrayQueue<Arc<DecodedBuffer>>>,
+        deferred_overflow: Arc<crossbeam_queue::ArrayQueue<Arc<DecodedBuffer>>>,
+        acknowledgements: Arc<crossbeam_queue::ArrayQueue<CommandAcknowledgement>>,
+        sample_rate: f64,
+    ) -> Self {
         Self::new_impl(
             frame_counter,
             command_queue,
             meter_snapshot,
             retired_sources,
             deferred_overflow,
+            acknowledgements,
             sample_rate,
             false, // use default (Signalsmith) processor
         )
@@ -165,6 +190,7 @@ impl CallbackState {
             meter_snapshot,
             retired_sources,
             Arc::new(crossbeam_queue::ArrayQueue::new(16)),
+            Arc::new(crossbeam_queue::ArrayQueue::new(512)),
             sample_rate,
             true, // use varispeed (zero latency) processor
         )
@@ -176,6 +202,7 @@ impl CallbackState {
         meter_snapshot: Arc<MeterSnapshot>,
         retired_sources: Arc<crossbeam_queue::ArrayQueue<Arc<DecodedBuffer>>>,
         deferred_overflow: Arc<crossbeam_queue::ArrayQueue<Arc<DecodedBuffer>>>,
+        acknowledgements: Arc<crossbeam_queue::ArrayQueue<CommandAcknowledgement>>,
         sample_rate: f64,
         use_varispeed: bool,
     ) -> Self {
@@ -200,6 +227,7 @@ impl CallbackState {
         Self {
             frame_counter,
             command_queue,
+            acknowledgements,
             meter_snapshot,
             players,
             buses: [
@@ -229,7 +257,7 @@ impl CallbackState {
     /// of allocating (real-time safety).
     fn insert_pending(&mut self, pc: PendingCommand) {
         if self.pending.len() >= self.pending.capacity() {
-            self.apply_command(pc.cmd, pc.at_frame);
+            self.apply_queued_command(pc.queued, pc.at_frame);
             return;
         }
         let pos = self.pending.partition_point(|p| p.at_frame <= pc.at_frame);
@@ -244,7 +272,26 @@ impl CallbackState {
                 break;
             }
             let pc = self.pending.remove(0);
-            self.apply_command(pc.cmd, frame);
+            self.apply_queued_command(pc.queued, frame);
+        }
+    }
+
+    fn apply_queued_command(&mut self, queued: QueuedCommand, current_frame: u64) {
+        let command_id = queued.command_id;
+        self.apply_command(queued.command, current_frame);
+        if let Some(command_id) = command_id {
+            if self
+                .acknowledgements
+                .push(CommandAcknowledgement {
+                    command_id,
+                    applied_frame: current_frame,
+                })
+                .is_err()
+            {
+                self.meter_snapshot
+                    .acknowledgements_dropped
+                    .fetch_add(1, Ordering::Relaxed);
+            }
         }
     }
 
@@ -728,13 +775,15 @@ impl AudioEngine {
         // plus headroom for rapid relaunching.
         let retired_sources = Arc::new(crossbeam_queue::ArrayQueue::new(128));
         let deferred_overflow = Arc::new(crossbeam_queue::ArrayQueue::new(16));
+        let acknowledgements = Arc::new(crossbeam_queue::ArrayQueue::new(512));
 
-        let callback_state = CallbackState::new(
+        let callback_state = CallbackState::new_with_acknowledgements(
             frame_counter.clone(),
             command_queue.clone(),
             meter_snapshot.clone(),
             retired_sources.clone(),
             deferred_overflow.clone(),
+            acknowledgements.clone(),
             sample_rate as f64,
         );
 
@@ -790,6 +839,8 @@ impl AudioEngine {
         Ok(Self {
             frame_counter,
             command_queue,
+            acknowledgements,
+            next_command_id: AtomicU64::new(1),
             meter_snapshot,
             sample_rate,
             stream: Some(SendStream(stream)),
@@ -812,6 +863,25 @@ impl AudioEngine {
     /// Send a command to the engine.
     pub fn send_command(&self, cmd: EngineCommand) -> bool {
         self.command_queue.push(cmd)
+    }
+
+    /// Submit a command that must be acknowledged after callback application.
+    pub fn submit_command(&self, command: EngineCommand) -> Result<CommandId, String> {
+        let command_id = CommandId(self.next_command_id.fetch_add(1, Ordering::Relaxed));
+        if self.command_queue.push_tracked(command_id, command) {
+            Ok(command_id)
+        } else {
+            Err("Audio command queue is full".to_string())
+        }
+    }
+
+    /// Drain callback acknowledgements on a non-realtime thread.
+    pub fn drain_command_acknowledgements(&self) -> Vec<CommandAcknowledgement> {
+        let mut drained = Vec::with_capacity(self.acknowledgements.len());
+        while let Some(acknowledgement) = self.acknowledgements.pop() {
+            drained.push(acknowledgement);
+        }
+        drained
     }
 
     /// Drain the deferred-destruction queues. Call this periodically from a
@@ -913,7 +983,7 @@ impl AudioEngine {
         source: SourceHandle,
         start_beat: f64,
         load_generation: LoadGeneration,
-    ) -> Result<(), String> {
+    ) -> Result<CommandId, String> {
         if player.as_index() >= MAX_PLAYERS {
             return Err(format!("Player {} is out of range", player.0));
         }
@@ -923,17 +993,16 @@ impl AudioEngine {
             .ok_or("Source not found in registry")?
             .clone();
         let at_frame = self.current_frame();
-        if !self.command_queue.push(EngineCommand::LoadPaused {
+        let command_id = self.submit_command(EngineCommand::LoadPaused {
             player,
             at_frame,
             source,
             buffer,
             start_beat,
             load_generation,
-        }) {
-            return Err("Audio command queue is full".to_string());
-        }
+        })?;
         self.adopt_player_source(player, source)
+            .map(|_| command_id)
     }
 
     fn adopt_player_source(
@@ -976,9 +1045,9 @@ pub fn audio_callback_f32(state: &mut CallbackState, output: &mut [f32], output_
     let block_end = block_start + frames as u64;
 
     // Drain the command queue into the sorted pending list.
-    while let Some(cmd) = state.command_queue.pop() {
-        let at_frame = cmd.at_frame();
-        state.insert_pending(PendingCommand { cmd, at_frame });
+    while let Some(queued) = state.command_queue.pop_queued() {
+        let at_frame = queued.command.at_frame();
+        state.insert_pending(PendingCommand { queued, at_frame });
     }
 
     // Reset block meters
@@ -1204,6 +1273,23 @@ mod tests {
         assert!(non_zero > 400, "launched player must produce audio (got {non_zero} non-zero samples)");
     }
 
+    fn make_engine_without_stream(command_capacity: usize) -> AudioEngine {
+        AudioEngine {
+            frame_counter: Arc::new(AtomicU64::new(0)),
+            command_queue: Arc::new(CommandQueue::new(command_capacity)),
+            acknowledgements: Arc::new(crossbeam_queue::ArrayQueue::new(8)),
+            next_command_id: AtomicU64::new(1),
+            meter_snapshot: Arc::new(MeterSnapshot::new()),
+            sample_rate: SR as u32,
+            stream: None,
+            sources: HashMap::new(),
+            next_source_handle: 1,
+            player_sources: [None; MAX_PLAYERS],
+            retired_sources: Arc::new(crossbeam_queue::ArrayQueue::new(8)),
+            deferred_overflow: Arc::new(crossbeam_queue::ArrayQueue::new(8)),
+        }
+    }
+
     #[test]
     fn load_paused_is_silent_until_resume() {
         let mut state = make_state();
@@ -1235,6 +1321,61 @@ mod tests {
         });
         render(&mut state, &mut out);
         assert!(out.iter().any(|&sample| sample.abs() > 1e-6));
+    }
+
+    #[test]
+    fn tracked_command_is_acknowledged_only_after_callback_application() {
+        let mut state = make_state();
+        assert!(state.command_queue.push_tracked(
+            CommandId(42),
+            EngineCommand::SetGain {
+                player: PlayerId(0),
+                at_frame: 0,
+                gain: 0.5,
+                ramp_frames: 1,
+            },
+        ));
+        assert!(state.acknowledgements.is_empty());
+
+        let mut out = [0.0f32; 2];
+        render(&mut state, &mut out);
+        assert_eq!(
+            state.acknowledgements.pop(),
+            Some(CommandAcknowledgement {
+                command_id: CommandId(42),
+                applied_frame: 0,
+            }),
+        );
+    }
+
+    #[test]
+    fn acknowledgement_overflow_is_counted_without_blocking_callback() {
+        let meter_snapshot = Arc::new(MeterSnapshot::new());
+        let acknowledgements = Arc::new(crossbeam_queue::ArrayQueue::new(1));
+        let mut state = CallbackState::new_impl(
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(CommandQueue::new(8)),
+            meter_snapshot.clone(),
+            Arc::new(crossbeam_queue::ArrayQueue::new(8)),
+            Arc::new(crossbeam_queue::ArrayQueue::new(8)),
+            acknowledgements.clone(),
+            SR,
+            true,
+        );
+        for command_id in [CommandId(1), CommandId(2)] {
+            assert!(state.command_queue.push_tracked(
+                command_id,
+                EngineCommand::Pause {
+                    player: PlayerId(0),
+                    at_frame: 0,
+                },
+            ));
+        }
+
+        let mut out = [0.0f32; 2];
+        render(&mut state, &mut out);
+        assert_eq!(acknowledgements.len(), 1);
+        assert_eq!(meter_snapshot.read_all().acknowledgements_dropped, 1);
     }
 
     #[test]
@@ -1290,19 +1431,7 @@ mod tests {
 
     #[test]
     fn repeated_player_loads_keep_one_registry_source() {
-        let command_queue = Arc::new(CommandQueue::new(8));
-        let mut engine = AudioEngine {
-            frame_counter: Arc::new(AtomicU64::new(0)),
-            command_queue: command_queue.clone(),
-            meter_snapshot: Arc::new(MeterSnapshot::new()),
-            sample_rate: SR as u32,
-            stream: None,
-            sources: HashMap::new(),
-            next_source_handle: 1,
-            player_sources: [None; MAX_PLAYERS],
-            retired_sources: Arc::new(crossbeam_queue::ArrayQueue::new(8)),
-            deferred_overflow: Arc::new(crossbeam_queue::ArrayQueue::new(8)),
-        };
+        let mut engine = make_engine_without_stream(8);
 
         for generation in 1..=100 {
             let buffer = Arc::try_unwrap(constant_buffer(0.1, 16)).unwrap();
@@ -1315,9 +1444,30 @@ mod tests {
                     LoadGeneration(generation),
                 )
                 .unwrap();
-            drop(command_queue.pop());
+            drop(engine.command_queue.pop());
             assert_eq!(engine.source_count_for_test(), 1);
         }
+    }
+
+    #[test]
+    fn tracked_submission_reports_queue_full() {
+        let engine = make_engine_without_stream(2);
+        for _ in 0..2 {
+            engine
+                .submit_command(EngineCommand::Pause {
+                    player: PlayerId(0),
+                    at_frame: 0,
+                })
+                .unwrap();
+        }
+        assert_eq!(
+            engine.submit_command(EngineCommand::Pause {
+                player: PlayerId(0),
+                at_frame: 0,
+            }),
+            Err("Audio command queue is full".to_string()),
+        );
+        assert_eq!(engine.command_queue.dropped_count(), 1);
     }
 
     #[test]
@@ -1490,7 +1640,13 @@ mod tests {
         let cap = state.pending.capacity();
         for i in 0..(cap + 10) {
             state.insert_pending(PendingCommand {
-                cmd: EngineCommand::SetMasterGain { at_frame: 10_000 + i as u64, gain: 0.5 },
+                queued: QueuedCommand {
+                    command_id: None,
+                    command: EngineCommand::SetMasterGain {
+                        at_frame: 10_000 + i as u64,
+                        gain: 0.5,
+                    },
+                },
                 at_frame: 10_000 + i as u64,
             });
         }

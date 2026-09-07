@@ -68,6 +68,7 @@ pub struct MeterSnapshot {
     // Diagnostics
     pub underruns: AtomicU64,
     pub commands_dropped: AtomicU64,
+    pub acknowledgements_dropped: AtomicU64,
 }
 
 impl MeterSnapshot {
@@ -100,6 +101,7 @@ impl MeterSnapshot {
             crossfade_position: AtomicU64::new((0.5f64).to_bits()),
             underruns: AtomicU64::new(0),
             commands_dropped: AtomicU64::new(0),
+            acknowledgements_dropped: AtomicU64::new(0),
         }
     }
 
@@ -237,6 +239,7 @@ pub struct MeterReadout {
     pub crossfade_position: f64,
     pub underruns: u64,
     pub commands_dropped: u64,
+    pub acknowledgements_dropped: u64,
 }
 
 impl Default for MeterReadout {
@@ -257,6 +260,7 @@ impl Default for MeterReadout {
             crossfade_position: 0.5,
             underruns: 0,
             commands_dropped: 0,
+            acknowledgements_dropped: 0,
         }
     }
 }
@@ -284,6 +288,9 @@ impl MeterSnapshot {
             crossfade_position: load_f64(&self.crossfade_position),
             underruns: self.underruns.load(Ordering::Relaxed),
             commands_dropped: self.commands_dropped.load(Ordering::Relaxed),
+            acknowledgements_dropped: self
+                .acknowledgements_dropped
+                .load(Ordering::Relaxed),
         }
     }
 }

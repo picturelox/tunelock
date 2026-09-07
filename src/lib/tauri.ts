@@ -450,6 +450,19 @@ export interface AudioMeterReadout {
   crossfadePosition: number;
   underruns: number;
   commandsDropped: number;
+  acknowledgementsDropped: number;
+  acknowledgements: AudioCommandAcknowledgement[];
+}
+
+export interface AudioCommandAcknowledgement {
+  commandId: number;
+  appliedFrame: number;
+}
+
+export interface AudioCommandSubmission {
+  commandId: number;
+  engineGeneration: number;
+  queuedFrame: number;
 }
 
 export interface AudioEngineInitResult {
@@ -462,19 +475,19 @@ export async function audioEngineInit(): Promise<AudioEngineInitResult> {
   return invoke('audio_engine_init');
 }
 
-export async function audioEnginePlay(player: number): Promise<void> {
+export async function audioEnginePlay(player: number): Promise<AudioCommandSubmission> {
   return invoke('audio_engine_play', { player });
 }
 
-export async function audioEnginePause(player: number): Promise<void> {
+export async function audioEnginePause(player: number): Promise<AudioCommandSubmission> {
   return invoke('audio_engine_pause', { player });
 }
 
-export async function audioEngineStop(player: number): Promise<void> {
+export async function audioEngineStop(player: number): Promise<AudioCommandSubmission> {
   return invoke('audio_engine_stop', { player });
 }
 
-export async function audioEngineSeek(player: number, sourceBeat: number): Promise<void> {
+export async function audioEngineSeek(player: number, sourceBeat: number): Promise<AudioCommandSubmission> {
   return invoke('audio_engine_seek', { player, sourceBeat });
 }
 
@@ -482,11 +495,11 @@ export async function audioEngineSetCrossfade(position: number): Promise<void> {
   return invoke('audio_engine_set_crossfade', { position });
 }
 
-export async function audioEngineSetTempo(player: number, rate: number): Promise<void> {
+export async function audioEngineSetTempo(player: number, rate: number): Promise<AudioCommandSubmission> {
   return invoke('audio_engine_set_tempo', { player, rate });
 }
 
-export async function audioEngineSetPitch(player: number, semitones: number): Promise<void> {
+export async function audioEngineSetPitch(player: number, semitones: number): Promise<AudioCommandSubmission> {
   return invoke('audio_engine_set_pitch', { player, semitones });
 }
 
@@ -513,6 +526,7 @@ export interface AudioPlayerLoadResult {
   engineGeneration: number;
   sourceHandle: number | null;
   installed: boolean;
+  commandId: number | null;
 }
 
 const fallbackLoadGenerations = new Array<number>(8).fill(0);
@@ -577,7 +591,7 @@ export interface LoudnessMatchResult {
   headroomStatus: string;
 }
 
-export async function audioEngineSetLoudnessMatchGain(player: number, gain: number): Promise<void> {
+export async function audioEngineSetLoudnessMatchGain(player: number, gain: number): Promise<AudioCommandSubmission> {
   return invoke('audio_engine_set_loudness_match_gain', { player, gain });
 }
 
@@ -609,7 +623,7 @@ export async function getLoudnessComparison(
   return invoke('get_loudness_comparison', { pathA, pathB });
 }
 
-export async function audioEngineSetPlayerGain(player: number, gain: number): Promise<void> {
+export async function audioEngineSetPlayerGain(player: number, gain: number): Promise<AudioCommandSubmission> {
   return invoke('audio_engine_set_player_gain', { player, gain });
 }
 
@@ -637,7 +651,7 @@ export async function audioEngineSetEqKill(player: number, band: 'low' | 'mid' |
   return invoke('audio_engine_set_eq_kill', { player, band, killed });
 }
 
-export async function audioEngineSetLoop(player: number, startBeat: number | null, lengthBeats: number | null): Promise<void> {
+export async function audioEngineSetLoop(player: number, startBeat: number | null, lengthBeats: number | null): Promise<AudioCommandSubmission> {
   return invoke('audio_engine_set_loop', { player, startBeat, lengthBeats });
 }
 

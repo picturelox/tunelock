@@ -106,6 +106,16 @@ as proof that audio state changed.
 load, stop, seek, loop, and gain controls cannot remain in a false success state;
 control bursts remain bounded.
 
+**Status:** Complete on `codex/tunelock-blueprint-foundation`. Commands used by
+the active deck load, transport, seek, loop, tempo, pitch, and loudness-gain
+paths receive engine-generation-scoped IDs. The callback publishes applied
+frame receipts through a bounded lock-free queue; the app-root session exposes
+pending intent, waits up to two seconds for application, rolls back failed
+intent, and reconciles engine/acknowledgement loss from telemetry. Queue-full
+submission and acknowledgement overflow are explicit and tested, and the desk
+shows pending and pressure/error states while serializing per-deck bursts.
+Sync-specific acknowledgement joins the fuller TL-05 transport contract.
+
 ### TL-04 - Master and private-cue routing
 
 **Outcome:** The S3 or another qualifying four-channel device plays master on one

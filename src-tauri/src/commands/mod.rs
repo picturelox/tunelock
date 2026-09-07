@@ -1387,6 +1387,7 @@ mod tests {
             engine_generation: 3,
             source_handle: Some(8),
             installed: true,
+            command_id: Some(12),
         };
         assert_eq!(
             serde_json::to_value(wire).unwrap(),
@@ -1395,7 +1396,25 @@ mod tests {
                 "loadGeneration": 19,
                 "engineGeneration": 3,
                 "sourceHandle": 8,
-                "installed": true
+                "installed": true,
+                "commandId": 12
+            })
+        );
+    }
+
+    #[test]
+    fn audio_command_submission_wire_is_generation_scoped() {
+        let wire = AudioCommandSubmission {
+            command_id: 12,
+            engine_generation: 3,
+            queued_frame: 48_000,
+        };
+        assert_eq!(
+            serde_json::to_value(wire).unwrap(),
+            serde_json::json!({
+                "commandId": 12,
+                "engineGeneration": 3,
+                "queuedFrame": 48_000
             })
         );
     }
@@ -1449,7 +1468,8 @@ mod tests {
             "busARms": 0.1, "busAPeak": 0.2, "busBRms": 0.3, "busBPeak": 0.4,
             "masterRms": 0.5, "masterPeak": 0.6, "masterSamplePeak": 0.7,
             "masterTruePeakDbtp": 1.25, "masterClip": true,
-            "crossfadePosition": 0.75, "underruns": 2, "commandsDropped": 3
+            "crossfadePosition": 0.75, "underruns": 2, "commandsDropped": 3,
+            "acknowledgementsDropped": 0, "acknowledgements": []
         }));
     }
 
@@ -1960,6 +1980,37 @@ pub struct AudioPlayerLoadResult {
     pub engine_generation: u64,
     pub source_handle: Option<u64>,
     pub installed: bool,
+    pub command_id: Option<u64>,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioCommandSubmission {
+    pub command_id: u64,
+    pub engine_generation: u64,
+    pub queued_frame: u64,
+}
+
+fn checked_player(player: u8) -> Result<crate::audio::PlayerId, String> {
+    if player as usize >= crate::audio::MAX_PLAYERS {
+        Err(format!("Player {} is out of range", player))
+    } else {
+        Ok(crate::audio::PlayerId(player))
+    }
+}
+
+fn submit_audio_command(
+    engine: &crate::audio::AudioEngine,
+    engine_generation: u64,
+    command: crate::audio::EngineCommand,
+) -> Result<AudioCommandSubmission, String> {
+    let queued_frame = engine.current_frame();
+    let command_id = engine.submit_command(command)?;
+    Ok(AudioCommandSubmission {
+        command_id: command_id.0,
+        engine_generation,
+        queued_frame,
+    })
 }
 
 fn ensure_audio_engine_drain_task(state: &State<'_, AppState>) {
@@ -2046,56 +2097,55 @@ pub async fn audio_engine_init(
 }
 
 #[command]
-pub async fn audio_engine_play(state: State<'_, AppState>, player: u8) -> Result<(), String> {
+pub async fn audio_engine_play(state: State<'_, AppState>, player: u8) -> Result<AudioCommandSubmission, String> {
+    let player = checked_player(player)?;
     let engine_slot = state.audio_engine.lock().await;
-    if let Some(engine) = engine_slot.as_ref() {
-        let frame = engine.current_frame();
-        engine.send_command(crate::audio::EngineCommand::Resume {
-            player: crate::audio::PlayerId(player),
-            at_frame: frame,
-        });
-    }
-    Ok(())
+    let engine = engine_slot.as_ref().ok_or("Audio engine not initialized")?;
+    let frame = engine.current_frame();
+    submit_audio_command(engine, state.audio_engine_lifecycle.generation(), crate::audio::EngineCommand::Resume {
+        player,
+        at_frame: frame,
+    })
 }
 
 #[command]
-pub async fn audio_engine_pause(state: State<'_, AppState>, player: u8) -> Result<(), String> {
+pub async fn audio_engine_pause(state: State<'_, AppState>, player: u8) -> Result<AudioCommandSubmission, String> {
+    let player = checked_player(player)?;
     let engine_slot = state.audio_engine.lock().await;
-    if let Some(engine) = engine_slot.as_ref() {
-        let frame = engine.current_frame();
-        engine.send_command(crate::audio::EngineCommand::Pause {
-            player: crate::audio::PlayerId(player),
-            at_frame: frame,
-        });
-    }
-    Ok(())
+    let engine = engine_slot.as_ref().ok_or("Audio engine not initialized")?;
+    let frame = engine.current_frame();
+    submit_audio_command(engine, state.audio_engine_lifecycle.generation(), crate::audio::EngineCommand::Pause {
+        player,
+        at_frame: frame,
+    })
 }
 
 #[command]
-pub async fn audio_engine_stop(state: State<'_, AppState>, player: u8) -> Result<(), String> {
+pub async fn audio_engine_stop(state: State<'_, AppState>, player: u8) -> Result<AudioCommandSubmission, String> {
+    let player = checked_player(player)?;
     let engine_slot = state.audio_engine.lock().await;
-    if let Some(engine) = engine_slot.as_ref() {
-        let frame = engine.current_frame();
-        engine.send_command(crate::audio::EngineCommand::Stop {
-            player: crate::audio::PlayerId(player),
-            at_frame: frame,
-        });
-    }
-    Ok(())
+    let engine = engine_slot.as_ref().ok_or("Audio engine not initialized")?;
+    let frame = engine.current_frame();
+    submit_audio_command(engine, state.audio_engine_lifecycle.generation(), crate::audio::EngineCommand::Stop {
+        player,
+        at_frame: frame,
+    })
 }
 
 #[command]
-pub async fn audio_engine_seek(state: State<'_, AppState>, player: u8, source_beat: f64) -> Result<(), String> {
-    let engine_slot = state.audio_engine.lock().await;
-    if let Some(engine) = engine_slot.as_ref() {
-        let frame = engine.current_frame();
-        engine.send_command(crate::audio::EngineCommand::Seek {
-            player: crate::audio::PlayerId(player),
-            at_frame: frame,
-            source_beat,
-        });
+pub async fn audio_engine_seek(state: State<'_, AppState>, player: u8, source_beat: f64) -> Result<AudioCommandSubmission, String> {
+    let player = checked_player(player)?;
+    if !source_beat.is_finite() {
+        return Err("Seek position must be finite".to_string());
     }
-    Ok(())
+    let engine_slot = state.audio_engine.lock().await;
+    let engine = engine_slot.as_ref().ok_or("Audio engine not initialized")?;
+    let frame = engine.current_frame();
+    submit_audio_command(engine, state.audio_engine_lifecycle.generation(), crate::audio::EngineCommand::Seek {
+        player,
+        at_frame: frame,
+        source_beat,
+    })
 }
 
 #[command]
@@ -2109,46 +2159,52 @@ pub async fn audio_engine_set_crossfade(state: State<'_, AppState>, position: f3
 }
 
 #[command]
-pub async fn audio_engine_set_tempo(state: State<'_, AppState>, player: u8, rate: f32) -> Result<(), String> {
-    let engine_slot = state.audio_engine.lock().await;
-    if let Some(engine) = engine_slot.as_ref() {
-        let frame = engine.current_frame();
-        engine.send_command(crate::audio::EngineCommand::SetTempo {
-            player: crate::audio::PlayerId(player),
-            at_frame: frame,
-            rate,
-        });
+pub async fn audio_engine_set_tempo(state: State<'_, AppState>, player: u8, rate: f32) -> Result<AudioCommandSubmission, String> {
+    let player = checked_player(player)?;
+    if !rate.is_finite() || rate <= 0.0 {
+        return Err("Tempo rate must be finite and positive".to_string());
     }
-    Ok(())
+    let engine_slot = state.audio_engine.lock().await;
+    let engine = engine_slot.as_ref().ok_or("Audio engine not initialized")?;
+    let frame = engine.current_frame();
+    submit_audio_command(engine, state.audio_engine_lifecycle.generation(), crate::audio::EngineCommand::SetTempo {
+        player,
+        at_frame: frame,
+        rate,
+    })
 }
 
 #[command]
-pub async fn audio_engine_set_pitch(state: State<'_, AppState>, player: u8, semitones: f32) -> Result<(), String> {
-    let engine_slot = state.audio_engine.lock().await;
-    if let Some(engine) = engine_slot.as_ref() {
-        let frame = engine.current_frame();
-        engine.send_command(crate::audio::EngineCommand::SetPitch {
-            player: crate::audio::PlayerId(player),
-            at_frame: frame,
-            semitones,
-        });
+pub async fn audio_engine_set_pitch(state: State<'_, AppState>, player: u8, semitones: f32) -> Result<AudioCommandSubmission, String> {
+    let player = checked_player(player)?;
+    if !semitones.is_finite() {
+        return Err("Pitch must be finite".to_string());
     }
-    Ok(())
+    let engine_slot = state.audio_engine.lock().await;
+    let engine = engine_slot.as_ref().ok_or("Audio engine not initialized")?;
+    let frame = engine.current_frame();
+    submit_audio_command(engine, state.audio_engine_lifecycle.generation(), crate::audio::EngineCommand::SetPitch {
+        player,
+        at_frame: frame,
+        semitones,
+    })
 }
 
 #[command]
-pub async fn audio_engine_set_player_gain(state: State<'_, AppState>, player: u8, gain: f32) -> Result<(), String> {
-    let engine_slot = state.audio_engine.lock().await;
-    if let Some(engine) = engine_slot.as_ref() {
-        let frame = engine.current_frame();
-        engine.send_command(crate::audio::EngineCommand::SetGain {
-            player: crate::audio::PlayerId(player),
-            at_frame: frame,
-            gain,
-            ramp_frames: 220, // ~5ms at 44.1kHz
-        });
+pub async fn audio_engine_set_player_gain(state: State<'_, AppState>, player: u8, gain: f32) -> Result<AudioCommandSubmission, String> {
+    let player = checked_player(player)?;
+    if !gain.is_finite() || gain < 0.0 {
+        return Err("Player gain must be finite and non-negative".to_string());
     }
-    Ok(())
+    let engine_slot = state.audio_engine.lock().await;
+    let engine = engine_slot.as_ref().ok_or("Audio engine not initialized")?;
+    let frame = engine.current_frame();
+    submit_audio_command(engine, state.audio_engine_lifecycle.generation(), crate::audio::EngineCommand::SetGain {
+        player,
+        at_frame: frame,
+        gain,
+        ramp_frames: 220, // ~5ms at 44.1kHz
+    })
 }
 
 /// PB-6.1: Set loudness match gain for a player. This is separate from
@@ -2160,15 +2216,17 @@ pub async fn audio_engine_set_loudness_match_gain(
     state: State<'_, AppState>,
     player: u8,
     gain: f64,
-) -> Result<(), String> {
-    let engine_slot = state.audio_engine.lock().await;
-    if let Some(engine) = engine_slot.as_ref() {
-        engine.send_command(crate::audio::EngineCommand::SetLoudnessMatchGain {
-            player: crate::audio::PlayerId(player),
-            gain,
-        });
+) -> Result<AudioCommandSubmission, String> {
+    let player = checked_player(player)?;
+    if !gain.is_finite() || gain <= 0.0 {
+        return Err("Loudness match gain must be finite and positive".to_string());
     }
-    Ok(())
+    let engine_slot = state.audio_engine.lock().await;
+    let engine = engine_slot.as_ref().ok_or("Audio engine not initialized")?;
+    submit_audio_command(engine, state.audio_engine_lifecycle.generation(), crate::audio::EngineCommand::SetLoudnessMatchGain {
+        player,
+        gain,
+    })
 }
 
 /// PB-6.1: Compute the loudness match gain to match player B to player A.
@@ -2383,19 +2441,22 @@ pub async fn audio_engine_set_solo(state: State<'_, AppState>, player: u8, soloe
 
 #[command]
 pub async fn audio_engine_set_bus(state: State<'_, AppState>, player: u8, bus: String) -> Result<(), String> {
+    let player = checked_player(player)?;
     let engine_slot = state.audio_engine.lock().await;
-    if let Some(engine) = engine_slot.as_ref() {
-        let bus_id = match bus.as_str() {
-            "a" | "A" => crate::audio::BusId::A,
-            "b" | "B" => crate::audio::BusId::B,
-            _ => crate::audio::BusId::Master,
-        };
-        let frame = engine.current_frame();
-        engine.send_command(crate::audio::EngineCommand::SetBus {
-            player: crate::audio::PlayerId(player),
-            at_frame: frame,
-            bus: bus_id,
-        });
+    let engine = engine_slot.as_ref().ok_or("Audio engine not initialized")?;
+    let bus_id = match bus.as_str() {
+        "a" | "A" => crate::audio::BusId::A,
+        "b" | "B" => crate::audio::BusId::B,
+        "master" | "Master" => crate::audio::BusId::Master,
+        _ => return Err(format!("Unknown audio bus: {}", bus)),
+    };
+    let frame = engine.current_frame();
+    if !engine.send_command(crate::audio::EngineCommand::SetBus {
+        player,
+        at_frame: frame,
+        bus: bus_id,
+    }) {
+        return Err("Audio command queue is full".to_string());
     }
     Ok(())
 }
@@ -2441,21 +2502,25 @@ pub async fn audio_engine_set_eq_kill(state: State<'_, AppState>, player: u8, ba
 }
 
 #[command]
-pub async fn audio_engine_set_loop(state: State<'_, AppState>, player: u8, start_beat: Option<f64>, length_beats: Option<f64>) -> Result<(), String> {
-    let engine_slot = state.audio_engine.lock().await;
-    if let Some(engine) = engine_slot.as_ref() {
-        let loop_region = match (start_beat, length_beats) {
-            (Some(start), Some(len)) => Some(crate::audio::LoopRegion { start_beat: start, length_beats: len }),
-            _ => None,
-        };
-        let frame = engine.current_frame();
-        engine.send_command(crate::audio::EngineCommand::SetLoop {
-            player: crate::audio::PlayerId(player),
-            at_frame: frame,
-            loop_region,
-        });
+pub async fn audio_engine_set_loop(state: State<'_, AppState>, player: u8, start_beat: Option<f64>, length_beats: Option<f64>) -> Result<AudioCommandSubmission, String> {
+    let player = checked_player(player)?;
+    if start_beat.is_some_and(|value| !value.is_finite())
+        || length_beats.is_some_and(|value| !value.is_finite() || value <= 0.0)
+    {
+        return Err("Loop positions must be finite and loop length must be positive".to_string());
     }
-    Ok(())
+    let engine_slot = state.audio_engine.lock().await;
+    let engine = engine_slot.as_ref().ok_or("Audio engine not initialized")?;
+    let loop_region = match (start_beat, length_beats) {
+        (Some(start), Some(len)) => Some(crate::audio::LoopRegion { start_beat: start, length_beats: len }),
+        _ => None,
+    };
+    let frame = engine.current_frame();
+    submit_audio_command(engine, state.audio_engine_lifecycle.generation(), crate::audio::EngineCommand::SetLoop {
+        player,
+        at_frame: frame,
+        loop_region,
+    })
 }
 
 #[command]
@@ -2486,10 +2551,14 @@ pub async fn audio_engine_load_player(state: State<'_, AppState>, player: u8, fi
 
 #[command]
 pub async fn audio_engine_set_master_gain(state: State<'_, AppState>, gain: f32) -> Result<(), String> {
+    if !gain.is_finite() || gain < 0.0 {
+        return Err("Master gain must be finite and non-negative".to_string());
+    }
     let engine_slot = state.audio_engine.lock().await;
-    if let Some(engine) = engine_slot.as_ref() {
-        let frame = engine.current_frame();
-        engine.send_command(crate::audio::EngineCommand::SetMasterGain { at_frame: frame, gain });
+    let engine = engine_slot.as_ref().ok_or("Audio engine not initialized")?;
+    let frame = engine.current_frame();
+    if !engine.send_command(crate::audio::EngineCommand::SetMasterGain { at_frame: frame, gain }) {
+        return Err("Audio command queue is full".to_string());
     }
     Ok(())
 }
@@ -2696,6 +2765,7 @@ pub async fn audio_engine_load_player_paused(
             engine_generation,
             source_handle: None,
             installed: false,
+            command_id: None,
         });
     }
 
@@ -2717,6 +2787,7 @@ pub async fn audio_engine_load_player_paused(
             engine_generation,
             source_handle: None,
             installed: false,
+            command_id: None,
         });
     }
     let mut buffer = decode_result?;
@@ -2745,20 +2816,24 @@ pub async fn audio_engine_load_player_paused(
             engine_generation,
             source_handle: None,
             installed: false,
+            command_id: None,
         });
     }
     let mut engine_slot = state.audio_engine.lock().await;
     let engine = engine_slot.as_mut().ok_or("Audio engine not initialized")?;
     let source = engine.register_source(buffer);
-    if let Err(error) = engine.load_player_paused(
+    let command_id = match engine.load_player_paused(
         player_id,
         source,
         0.0,
         load_generation,
     ) {
-        engine.unregister_source(source);
-        return Err(error);
-    }
+        Ok(command_id) => command_id,
+        Err(error) => {
+            engine.unregister_source(source);
+            return Err(error);
+        }
+    };
     drop(engine_slot);
     drop(_change_guard);
 
@@ -2825,6 +2900,7 @@ pub async fn audio_engine_load_player_paused(
         engine_generation,
         source_handle: Some(source.0),
         installed: true,
+        command_id: Some(command_id.0),
     })
 }
 
@@ -2965,6 +3041,15 @@ pub struct AudioMeterReadout {
     pub crossfade_position: f64,
     pub underruns: u64,
     pub commands_dropped: u64,
+    pub acknowledgements_dropped: u64,
+    pub acknowledgements: Vec<AudioCommandAcknowledgementEntry>,
+}
+
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioCommandAcknowledgementEntry {
+    pub command_id: u64,
+    pub applied_frame: u64,
 }
 
 #[derive(serde::Serialize, Default)]
@@ -2999,6 +3084,14 @@ pub async fn audio_engine_get_meters(state: State<'_, AppState>) -> Result<Audio
 
     let mut readout: AudioMeterReadout = engine.get_meters().into();
     readout.engine_generation = state.audio_engine_lifecycle.generation();
+    readout.acknowledgements = engine
+        .drain_command_acknowledgements()
+        .into_iter()
+        .map(|acknowledgement| AudioCommandAcknowledgementEntry {
+            command_id: acknowledgement.command_id.0,
+            applied_frame: acknowledgement.applied_frame,
+        })
+        .collect();
     Ok(readout)
 }
 
@@ -3036,6 +3129,8 @@ impl From<crate::audio::MeterReadout> for AudioMeterReadout {
             crossfade_position: m.crossfade_position,
             underruns: m.underruns,
             commands_dropped: m.commands_dropped,
+            acknowledgements_dropped: m.acknowledgements_dropped,
+            acknowledgements: Vec::new(),
         }
     }
 }

@@ -93,6 +93,10 @@ export default function Workspace({ libraryOpen, setLibraryOpen }: {
   const tempo = (deckA.tempoRatio - 1) * 100;
   const pitch = deckA.pitchSemitones;
   const loopBeats = deckA.loopLengthBeats;
+  const deckAPendingKinds = Object.keys(deckA.pendingCommands);
+  const deckBPendingKinds = Object.keys(deckB.pendingCommands);
+  const deckABusy = deckAPendingKinds.length > 0;
+  const deckBBusy = deckBPendingKinds.length > 0;
   const positionSec = meters?.players?.[deckA.playerId]?.positionSec ?? 0;
   const [loudnessComp, setLoudnessComp] = useState<LoudnessComparison | null>(null);
   const [matchLevelOn, setMatchLevelOn] = useState(false);
@@ -452,11 +456,18 @@ export default function Workspace({ libraryOpen, setLibraryOpen }: {
           <div className="mb-4 text-xs text-text-secondary flex flex-wrap gap-3">
             <span>Deck A: {deckA.source?.displayName ?? 'No file loaded'}</span>
             <span>Load: {deckA.loadStatus}</span>
+            <span>Command: {deckABusy ? `pending (${deckAPendingKinds.join(', ')})` : 'acknowledged'}</span>
             <span>Engine generation: {engine.generation}</span>
           </div>
           {deckA.error && (
             <div className="mb-4 p-3 bg-red-900/30 border border-red-700/50 rounded-lg text-sm text-red-300">
               Deck A: {deckA.error}
+            </div>
+          )}
+          {meters && (meters.commandsDropped > 0 || meters.acknowledgementsDropped > 0) && (
+            <div className="mb-4 p-3 bg-amber-900/30 border border-amber-700/50 rounded-lg text-sm text-amber-300">
+              Audio control pressure detected: {meters.commandsDropped} command(s) rejected,
+              {' '}{meters.acknowledgementsDropped} acknowledgement(s) lost. Current controls were reconciled from engine telemetry.
             </div>
           )}
 
@@ -502,24 +513,24 @@ export default function Workspace({ libraryOpen, setLibraryOpen }: {
               {/* Transport */}
               <div className="flex flex-wrap gap-2 mb-4">
                 {!isPlaying ? (
-                  <button disabled={deckA.loadStatus !== 'ready'} onClick={handlePlay} className="flex items-center gap-1.5 px-4 py-2 bg-cap-amber text-black rounded text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed">
+                  <button disabled={deckA.loadStatus !== 'ready' || deckABusy} onClick={handlePlay} className="flex items-center gap-1.5 px-4 py-2 bg-cap-amber text-black rounded text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed">
                     <Play className="w-4 h-4" /> Play
                   </button>
                 ) : (
-                  <button disabled={deckA.loadStatus !== 'ready'} onClick={handlePause} className="flex items-center gap-1.5 px-4 py-2 bg-plate-lighter rounded text-sm disabled:opacity-40 disabled:cursor-not-allowed">
+                  <button disabled={deckA.loadStatus !== 'ready' || deckABusy} onClick={handlePause} className="flex items-center gap-1.5 px-4 py-2 bg-plate-lighter rounded text-sm disabled:opacity-40 disabled:cursor-not-allowed">
                     <Pause className="w-4 h-4" /> Pause
                   </button>
                 )}
-                <button disabled={deckA.loadStatus !== 'ready'} onClick={handleStop} className="flex items-center gap-1.5 px-4 py-2 bg-plate-light rounded text-sm disabled:opacity-40 disabled:cursor-not-allowed">
+                <button disabled={deckA.loadStatus !== 'ready' || deckABusy} onClick={handleStop} className="flex items-center gap-1.5 px-4 py-2 bg-plate-light rounded text-sm disabled:opacity-40 disabled:cursor-not-allowed">
                   <Square className="w-4 h-4" /> Stop
                 </button>
-                <button disabled={deckA.loadStatus !== 'ready'} onClick={() => handleSeek(0)} className="flex items-center gap-1.5 px-4 py-2 bg-plate-light rounded text-sm disabled:opacity-40 disabled:cursor-not-allowed">
+                <button disabled={deckA.loadStatus !== 'ready' || deckABusy} onClick={() => handleSeek(0)} className="flex items-center gap-1.5 px-4 py-2 bg-plate-light rounded text-sm disabled:opacity-40 disabled:cursor-not-allowed">
                   <SkipBack className="w-4 h-4" /> Start
                 </button>
-                <button disabled={deckA.loadStatus !== 'ready'} onClick={() => handleSeek(32)} className="flex items-center gap-1.5 px-4 py-2 bg-plate-light rounded text-sm disabled:opacity-40 disabled:cursor-not-allowed">
+                <button disabled={deckA.loadStatus !== 'ready' || deckABusy} onClick={() => handleSeek(32)} className="flex items-center gap-1.5 px-4 py-2 bg-plate-light rounded text-sm disabled:opacity-40 disabled:cursor-not-allowed">
                   <FastForward className="w-4 h-4" /> +32 beats
                 </button>
-                <button disabled={deckA.loadStatus !== 'ready'} onClick={() => handleSeek(64)} className="flex items-center gap-1.5 px-4 py-2 bg-plate-light rounded text-sm disabled:opacity-40 disabled:cursor-not-allowed">
+                <button disabled={deckA.loadStatus !== 'ready' || deckABusy} onClick={() => handleSeek(64)} className="flex items-center gap-1.5 px-4 py-2 bg-plate-light rounded text-sm disabled:opacity-40 disabled:cursor-not-allowed">
                   <FastForward className="w-4 h-4" /> +64 beats
                 </button>
               </div>
@@ -530,11 +541,11 @@ export default function Workspace({ libraryOpen, setLibraryOpen }: {
                   LOOP ({meterNum}/4 time — bar = {meterNum} beats)
                 </label>
                 <div className="flex gap-2">
-                  <button disabled={deckA.loadStatus !== 'ready'} onClick={() => handleSetLoop(null)} className={`px-3 py-1 text-sm rounded disabled:opacity-40 disabled:cursor-not-allowed ${loopBeats === null ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>Off</button>
-                  <button disabled={deckA.loadStatus !== 'ready'} onClick={() => handleSetLoop(1)} className={`px-3 py-1 text-sm rounded disabled:opacity-40 disabled:cursor-not-allowed ${loopBeats === meterNum * 1 ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>1 bar</button>
-                  <button disabled={deckA.loadStatus !== 'ready'} onClick={() => handleSetLoop(2)} className={`px-3 py-1 text-sm rounded disabled:opacity-40 disabled:cursor-not-allowed ${loopBeats === meterNum * 2 ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>2 bars</button>
-                  <button disabled={deckA.loadStatus !== 'ready'} onClick={() => handleSetLoop(4)} className={`px-3 py-1 text-sm rounded disabled:opacity-40 disabled:cursor-not-allowed ${loopBeats === meterNum * 4 ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>4 bars</button>
-                  <button disabled={deckA.loadStatus !== 'ready'} onClick={() => handleSetLoop(8)} className={`px-3 py-1 text-sm rounded disabled:opacity-40 disabled:cursor-not-allowed ${loopBeats === meterNum * 8 ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>8 bars</button>
+                  <button disabled={deckA.loadStatus !== 'ready' || deckABusy} onClick={() => handleSetLoop(null)} className={`px-3 py-1 text-sm rounded disabled:opacity-40 disabled:cursor-not-allowed ${loopBeats === null ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>Off</button>
+                  <button disabled={deckA.loadStatus !== 'ready' || deckABusy} onClick={() => handleSetLoop(1)} className={`px-3 py-1 text-sm rounded disabled:opacity-40 disabled:cursor-not-allowed ${loopBeats === meterNum * 1 ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>1 bar</button>
+                  <button disabled={deckA.loadStatus !== 'ready' || deckABusy} onClick={() => handleSetLoop(2)} className={`px-3 py-1 text-sm rounded disabled:opacity-40 disabled:cursor-not-allowed ${loopBeats === meterNum * 2 ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>2 bars</button>
+                  <button disabled={deckA.loadStatus !== 'ready' || deckABusy} onClick={() => handleSetLoop(4)} className={`px-3 py-1 text-sm rounded disabled:opacity-40 disabled:cursor-not-allowed ${loopBeats === meterNum * 4 ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>4 bars</button>
+                  <button disabled={deckA.loadStatus !== 'ready' || deckABusy} onClick={() => handleSetLoop(8)} className={`px-3 py-1 text-sm rounded disabled:opacity-40 disabled:cursor-not-allowed ${loopBeats === meterNum * 8 ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>8 bars</button>
                 </div>
               </div>
 
@@ -544,7 +555,7 @@ export default function Workspace({ libraryOpen, setLibraryOpen }: {
                   <label className="text-xs text-text-secondary block mb-1">TEMPO</label>
                   <div className="flex gap-2">
                     {TEMPO_PRESETS.map(p => (
-                      <button key={p} disabled={deckA.loadStatus !== 'ready'} onClick={() => applyTempo(p)}
+                      <button key={p} disabled={deckA.loadStatus !== 'ready' || deckABusy} onClick={() => applyTempo(p)}
                         className={`px-3 py-1 text-sm rounded min-w-[3.5rem] disabled:opacity-40 disabled:cursor-not-allowed ${tempo === p ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>
                         {p > 0 ? `+${p}%` : `${p}%`}
                       </button>
@@ -555,7 +566,7 @@ export default function Workspace({ libraryOpen, setLibraryOpen }: {
                   <label className="text-xs text-text-secondary block mb-1">PITCH (semitones)</label>
                   <div className="flex gap-2">
                     {PITCH_PRESETS.map(p => (
-                      <button key={p} disabled={deckA.loadStatus !== 'ready'} onClick={() => applyPitch(p)}
+                      <button key={p} disabled={deckA.loadStatus !== 'ready' || deckABusy} onClick={() => applyPitch(p)}
                         className={`px-3 py-1 text-sm rounded min-w-[3rem] disabled:opacity-40 disabled:cursor-not-allowed ${pitch === p ? 'bg-cap-amber text-black' : 'bg-plate-light text-label-dim'}`}>
                         {p > 0 ? `+${p}` : `${p}`}
                       </button>
@@ -580,7 +591,7 @@ export default function Workspace({ libraryOpen, setLibraryOpen }: {
               <div className="mt-6 p-4 bg-plate-dark rounded-lg border border-plate-darker">
                 <h4 className="text-sm font-bold mb-3">Deck B — Load a second track for matching</h4>
                 <div className="flex items-center gap-3 mb-3">
-                  <button onClick={handleLoadDeckB} className="px-3 py-1.5 bg-plate-light rounded text-sm">
+                  <button disabled={deckB.loadStatus === 'loading' || deckBBusy} onClick={handleLoadDeckB} className="px-3 py-1.5 bg-plate-light rounded text-sm disabled:opacity-40 disabled:cursor-not-allowed">
                     Load Deck B
                   </button>
                   <span className="text-sm text-label-dim truncate">{trackNameB || 'No file loaded'}</span>
@@ -591,14 +602,19 @@ export default function Workspace({ libraryOpen, setLibraryOpen }: {
                     Deck B: {deckB.error}
                   </div>
                 )}
+                {deckBBusy && (
+                  <div className="mb-3 text-xs text-cap-amber">
+                    Deck B command pending: {deckBPendingKinds.join(', ')}
+                  </div>
+                )}
 
                 {trackNameB && (
                   <>
                     <div className="flex gap-2 flex-wrap mb-3">
-                      <button disabled={deckB.loadStatus !== 'ready'} onClick={() => void sessionService.setTransport('B', 'playing').catch(console.error)} className="flex items-center gap-1 px-3 py-1.5 bg-plate-light rounded text-sm disabled:opacity-40 disabled:cursor-not-allowed">
+                      <button disabled={deckB.loadStatus !== 'ready' || deckBBusy} onClick={() => void sessionService.setTransport('B', 'playing').catch(console.error)} className="flex items-center gap-1 px-3 py-1.5 bg-plate-light rounded text-sm disabled:opacity-40 disabled:cursor-not-allowed">
                         <Play className="w-3.5 h-3.5" /> Play B
                       </button>
-                      <button disabled={deckB.loadStatus !== 'ready'} onClick={() => void sessionService.setTransport('B', 'paused').catch(console.error)} className="flex items-center gap-1 px-3 py-1.5 bg-plate-light rounded text-sm disabled:opacity-40 disabled:cursor-not-allowed">
+                      <button disabled={deckB.loadStatus !== 'ready' || deckBBusy} onClick={() => void sessionService.setTransport('B', 'paused').catch(console.error)} className="flex items-center gap-1 px-3 py-1.5 bg-plate-light rounded text-sm disabled:opacity-40 disabled:cursor-not-allowed">
                         <Pause className="w-3.5 h-3.5" /> Pause B
                       </button>
                       <button disabled={deckA.loadStatus !== 'ready' || deckB.loadStatus !== 'ready'} onClick={() => void sessionService.syncLaunch('A', 'B').catch(console.error)} className="px-3 py-1.5 bg-plate-lighter rounded text-sm disabled:opacity-40 disabled:cursor-not-allowed" title="Start both at the same engine frame">
@@ -657,7 +673,7 @@ export default function Workspace({ libraryOpen, setLibraryOpen }: {
                         )}
                         <button
                           onClick={toggleMatchLevel}
-                          disabled={loudnessComp.matchGain === null || loudnessComp.headroomStatus === 'excessive'}
+                          disabled={deckBBusy || loudnessComp.matchGain === null || loudnessComp.headroomStatus === 'excessive'}
                           className={`px-4 py-2 rounded text-sm font-medium disabled:opacity-40 disabled:cursor-not-allowed ${
                             matchLevelOn ? 'bg-cap-amber text-black' : 'bg-plate-lighter text-label-cream'
                           }`}

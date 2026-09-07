@@ -85,6 +85,23 @@ successive accepted loads retain one source-registry entry for the player. This
 is not a native long-session process-memory measurement. Key/BPM accuracy was
 not rerun because no analysis path changed.
 
+### TL-03 acknowledgement-path recheck (2026-09-06)
+
+Working tree based on the TL-00 through TL-02 checkpoint `1fc95ba`; TL-03 adds
+bounded command identities and callback-side application receipts. It does not
+change analysis algorithms or per-sample DSP, but receipt publication runs on
+the realtime path, so the callback harness was rerun.
+
+`cargo test --release audio::perf_harness::tests::perf_2_decks_48k_256_budget_5333us -- --ignored --nocapture`:
+2 decks @ 48k/256: max=1227 microseconds, avg=256 microseconds, p99=1167
+microseconds, budget=5333 microseconds -- **PASS**.
+
+Focused tests prove that tracked commands publish their exact callback
+application frame, command-queue saturation returns an explicit failure, and a
+full acknowledgement queue increments bounded pressure telemetry without
+blocking or allocating in the callback. Key/BPM accuracy was not rerun because
+no analysis path changed.
+
 ## Method
 
 - **MIK corpus:** Personal library export (20,221 rows, 18,909 ready).

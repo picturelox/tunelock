@@ -4,9 +4,11 @@ import {
   DECK_IDS,
   PLAYER_BY_DECK,
   asEngineGeneration,
+  asCommandId,
   asLoadGeneration,
   makeSourceId,
   type DeckId,
+  type DeckCommandKind,
   type DeckSessionState,
   type EngineGeneration,
   type SessionSnapshot,
@@ -27,6 +29,9 @@ interface SessionActions {
     value: number | null,
   ) => void;
   setDeckError: (deckId: DeckId, message: string | null) => void;
+  setDeckCommandPending: (deckId: DeckId, kind: DeckCommandKind, commandId: number) => void;
+  acknowledgeDeckCommand: (deckId: DeckId, kind: DeckCommandKind, commandId: number) => void;
+  failDeckCommand: (deckId: DeckId, kind: DeckCommandKind, commandId: number, message: string) => void;
   reconcileMeters: (meters: AudioMeterReadout) => void;
 }
 
@@ -45,6 +50,8 @@ function emptyDeck(id: DeckId): DeckSessionState {
     pitchSemitones: 0,
     loopLengthBeats: null,
     error: null,
+    pendingCommands: {},
+    lastAppliedCommandId: null,
   };
 }
 
@@ -81,6 +88,7 @@ export const useSessionStore = create<SessionStore>((set) => ({
                 desiredTransport: 'stopped',
                 acknowledgedTransport: 'stopped',
                 error: 'Audio device changed; reload this deck.',
+                pendingCommands: {},
               }
             : deck];
         })) as Record<DeckId, DeckSessionState>,
@@ -113,6 +121,7 @@ export const useSessionStore = create<SessionStore>((set) => ({
             desiredTransport: 'paused',
             acknowledgedTransport: 'empty',
             error: null,
+            pendingCommands: {},
           },
         },
       };
@@ -168,6 +177,69 @@ export const useSessionStore = create<SessionStore>((set) => ({
     },
   })),
 
+  setDeckCommandPending: (deckId, kind, commandId) => set((state) => ({
+    decks: {
+      ...state.decks,
+      [deckId]: {
+        ...state.decks[deckId],
+        pendingCommands: {
+          ...state.decks[deckId].pendingCommands,
+          [kind]: {
+            id: asCommandId(commandId),
+            kind,
+            requestedAtMs: Date.now(),
+          },
+        },
+        error: null,
+      },
+    },
+  })),
+
+  acknowledgeDeckCommand: (deckId, kind, commandId) => set((state) => {
+    const deck = state.decks[deckId];
+    if (Number(deck.pendingCommands[kind]?.id) !== commandId) return state;
+    const pendingCommands = { ...deck.pendingCommands };
+    delete pendingCommands[kind];
+    return {
+      decks: {
+        ...state.decks,
+        [deckId]: {
+          ...deck,
+          pendingCommands,
+          lastAppliedCommandId: asCommandId(commandId),
+          loadStatus: kind === 'load' ? 'ready' : deck.loadStatus,
+          acknowledgedTransport: kind === 'transport'
+            ? deck.desiredTransport
+            : kind === 'load'
+              ? 'paused'
+              : deck.acknowledgedTransport,
+          error: null,
+        },
+      },
+    };
+  }),
+
+  failDeckCommand: (deckId, kind, commandId, message) => set((state) => {
+    const deck = state.decks[deckId];
+    if (Number(deck.pendingCommands[kind]?.id) !== commandId) return state;
+    const pendingCommands = { ...deck.pendingCommands };
+    delete pendingCommands[kind];
+    return {
+      decks: {
+        ...state.decks,
+        [deckId]: {
+          ...deck,
+          pendingCommands,
+          loadStatus: kind === 'load' ? 'error' : deck.loadStatus,
+          desiredTransport: kind === 'transport'
+            ? deck.acknowledgedTransport
+            : deck.desiredTransport,
+          error: message,
+        },
+      },
+    };
+  }),
+
   reconcileMeters: (meters) => set((state) => ({
     meters,
     engine: {
@@ -177,18 +249,25 @@ export const useSessionStore = create<SessionStore>((set) => ({
     decks: Object.fromEntries(DECK_IDS.map((id) => {
       const deck = state.decks[id];
       const telemetry = meters.players[deck.playerId];
-      const acknowledgedTransport: TransportState = !deck.source
-        ? 'empty'
-        : telemetry?.playing
-          ? 'playing'
-          : deck.desiredTransport === 'stopped'
-            ? 'stopped'
-            : 'paused';
+      const transportPending = deck.pendingCommands.load
+        || deck.pendingCommands.transport;
+      const acknowledgedTransport: TransportState = transportPending
+        ? deck.acknowledgedTransport
+        : !deck.source
+          ? 'empty'
+          : telemetry?.playing
+            ? 'playing'
+            : deck.desiredTransport === 'stopped'
+              ? 'stopped'
+              : 'paused';
       return [id, {
         ...deck,
         acknowledgedTransport,
-        tempoRatio: telemetry?.tempoRatio || deck.tempoRatio,
-        pitchSemitones: Number.isFinite(telemetry?.pitchSemitones)
+        tempoRatio: deck.pendingCommands.tempo
+          ? deck.tempoRatio
+          : telemetry?.tempoRatio || deck.tempoRatio,
+        pitchSemitones: !deck.pendingCommands.pitch
+          && Number.isFinite(telemetry?.pitchSemitones)
           ? telemetry.pitchSemitones
           : deck.pitchSemitones,
       }];

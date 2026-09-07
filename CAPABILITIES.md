@@ -13,13 +13,13 @@ native or hardware evidence.
 |---|---|---|---|
 | Active application surface | Reachable | `App.tsx` mounts the 749-line `Workspace`; legacy Console, Mix Canvas, and Listening Lab components are not navigable | TL-12 |
 | Immediate local analysis | Reachable | File analysis reports key, BPM, energy, waveform, alternatives, and meters | TL-10 |
-| Playback before analysis | Reachable | Deck A load and local analysis start independently; native source load returns before optional beat-grid analysis completes | TL-03 |
-| Authoritative session model | Partial | An app-root session owns branded Deck A-D/player/source/load/engine identities, desired state, telemetry acknowledgement, and errors across Workspace remounts; command application acknowledgement is later work | TL-03 |
-| Native playback engine | Partial | CPAL engine, one clock, eight player slots, bounded queue, background decode/resample, server load generations, and one application-owned retired-buffer drain exist | TL-03 |
+| Playback before analysis | Reachable | Deck A load and local analysis start independently; native source load returns before optional beat-grid analysis completes | TL-12 |
+| Authoritative session model | Partial | An app-root session owns branded Deck A-D/player/source/load/engine/command identities, desired state, bounded pending commands, telemetry acknowledgement, and errors across Workspace remounts; legacy direct-control paths remain outside it | TL-12 |
+| Native playback engine | Partial | CPAL engine, one clock, eight player slots, bounded command and acknowledgement queues, background decode/resample, server load generations, and one application-owned retired-buffer drain exist | TL-04/TL-05 |
 | Source lifecycle | Reachable | Each accepted player replacement evicts its prior registry source; stale decode/grid work is generation checked; a deterministic 100-load test holds the registry at one source for that player | TL-12 |
 | Atomic paused loading | Reachable | One `LoadPaused` callback command attaches the source and leaves transport paused; a regression test proves digital silence until explicit resume | TL-12 |
-| Engine initialization ownership | Reachable | Initialization and device replacement share one lifecycle gate; installed engines have monotonic generations; a concurrency test covers serialized changes | TL-03 |
-| Command acknowledgement | Partial | IPC success often means queued intent; some UI handlers optimistically change state or only log failure | TL-03 |
+| Engine initialization ownership | Reachable | Initialization and device replacement share one lifecycle gate; installed engines have monotonic generations; a concurrency test covers serialized changes | TL-12 |
+| Command acknowledgement | Partial | Active load, transport, seek, loop, tempo, pitch, and loudness-gain actions have generation-scoped callback receipts, bounded pressure telemetry, timeout/error handling, and rollback; Sync-specific and legacy direct-control paths remain | TL-05/TL-08 |
 | Two-deck transport | Partial | A/B load/play/pause and synchronized launch use the same session adapter, but the current presentation remains asymmetric | TL-05/TL-12 |
 | Cues and loops | Partial | Loop command and Deck A fixed-bar loop controls exist; a hot-cue data field exists but no production hot-cue workflow was found | TL-05 |
 | Tempo, pitch, and Sync | Partial | Varispeed/Signalsmith, BeatSync, and BarSync exist with synthetic tests; fractional phase, grid revisions, nonzero downbeat origins, and manual takeover are not release-proven | TL-05 |
@@ -63,3 +63,12 @@ harness passed at max 1,216 µs, average 268 µs, and p99 1,197 µs against a
 5,333 µs callback budget. This remains deterministic evidence, not listening,
 S3, macOS, or long-session process-memory evidence. `ACCURACY.md` remains the
 authoritative measurement record.
+
+TL-03 verification adds 233 passing library tests plus 8 binary tests, with 7
+release performance tests ignored by default. The focused 48 kHz/256 release
+harness passed at max 1,227 microseconds, average 256 microseconds, and p99
+1,167 microseconds against a 5,333 microsecond callback budget. Focused tests
+cover exact callback-frame receipts, command-queue rejection, bounded
+acknowledgement overflow, IPC serialization, and allocation-audited
+acknowledgement publication. Native listening, S3, macOS, and long-session
+hardware evidence remain open.
