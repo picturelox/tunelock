@@ -783,3 +783,50 @@ export async function listeningLabSaveResult(result: ListeningLabResult): Promis
 export async function listeningLabGetResults(): Promise<ListeningLabResult[]> {
   return invoke('listening_lab_get_results');
 }
+
+// === Traktor Kontrol S3 Hardware Adapter (TL-07) ===
+//
+// The Rust side reads the S3 vendor HID interface and emits semantic actions
+// as `s3-action` events. This mirrors the Rust `controller::S3Action` enum;
+// keep the two vocabularies in sync (one hardware vocabulary, no third copy).
+
+export type S3Deck = 'a' | 'b';
+
+export type S3Action =
+  | { type: 'play'; deck: S3Deck; pressed: boolean }
+  | { type: 'cue'; deck: S3Deck; pressed: boolean }
+  | { type: 'sync'; deck: S3Deck; pressed: boolean }
+  | { type: 'hotCue'; deck: S3Deck; slot: number; pressed: boolean }
+  | { type: 'touch'; deck: S3Deck; pressed: boolean }
+  | { type: 'jog'; deck: S3Deck; delta: number }
+  | { type: 'fader'; index: number; value: number };
+
+export interface S3Status {
+  connected: boolean;
+  error: string | null;
+}
+
+export interface S3LedState {
+  playA: boolean;
+  playB: boolean;
+  cueA: boolean;
+  cueB: boolean;
+  syncA: boolean;
+  syncB: boolean;
+}
+
+export async function s3Start(): Promise<void> {
+  return invoke('s3_start');
+}
+
+export async function s3SetLeds(state: S3LedState): Promise<void> {
+  return invoke('s3_set_leds', { state });
+}
+
+export function onS3Action(callback: (action: S3Action) => void): Promise<UnlistenFn> {
+  return listen('s3-action', (event) => callback(event.payload as S3Action));
+}
+
+export function onS3Status(callback: (status: S3Status) => void): Promise<UnlistenFn> {
+  return listen('s3-status', (event) => callback(event.payload as S3Status));
+}

@@ -47,6 +47,9 @@ tokio = { version = "1.35", features = ["rt-multi-thread", "macros", "sync", "ti
 # Audio metadata
 lofty = "0.19"
 
+# Controller hardware (Traktor Kontrol S3 uses vendor-defined HID, not MIDI)
+hidapi = "2"
+
 # Utilities
 anyhow = "1.0"
 thiserror = "1.0"
@@ -96,3 +99,7 @@ required-features = ["neural-key"]
 [[bin]]
 name = "gen-fixtures"
 path = "src/bin/gen_fixtures.rs"
+
+[[bin]]
+name = "s3-probe"
+path = "src/bin/s3_probe.rs"

@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use anyhow::Result;
 use tauri::{command, Emitter, Manager, State, Window};
 use walkdir::WalkDir;
@@ -3641,4 +3643,79 @@ pub async fn listening_lab_get_results(
     let db = state.db.lock().await;
     db.get_listening_lab_results()
         .map_err(|e| format!("Failed to query listening lab results: {}", e))
+}
+
+/// Start the Traktor Kontrol S3 reader thread (TL-07).
+///
+/// The thread opens the vendor HID interface, decodes input reports into the
+/// semantic `S3Action` vocabulary, and emits each action as a `s3-action`
+/// event. Connection state is emitted as `s3-status`.
+#[command]
+pub fn s3_start(window: Window) -> Result<(), String> {
+    if !crate::controller::claim_s3_reader() {
+        return Err("S3 reader is already running".to_string());
+    }
+
+    std::thread::spawn(move || {
+        let device = match crate::controller::S3Device::open() {
+            Ok(device) => device,
+            Err(error) => {
+                let _ = window.emit(
+                    "s3-status",
+                    &crate::controller::S3Status {
+                        connected: false,
+                        error: Some(error),
+                    },
+                );
+                crate::controller::release_s3_reader();
+                return;
+            }
+        };
+
+        let _ = window.emit(
+            "s3-status",
+            &crate::controller::S3Status {
+                connected: true,
+                error: None,
+            },
+        );
+
+        let mut previous: Option<crate::controller::S3Report> = None;
+        loop {
+            match device.read_timeout(Duration::from_millis(100)) {
+                Ok(Some(bytes)) => {
+                    let Some(report) = crate::controller::parse_report(&bytes) else {
+                        continue;
+                    };
+                    if let Some(prev) = previous {
+                        for action in crate::controller::decode_actions(&prev, &report) {
+                            let _ = window.emit("s3-action", &action);
+                        }
+                    }
+                    previous = Some(report);
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    let _ = window.emit(
+                        "s3-status",
+                        &crate::controller::S3Status {
+                            connected: false,
+                            error: Some(error),
+                        },
+                    );
+                    break;
+                }
+            }
+        }
+
+        crate::controller::release_s3_reader();
+    });
+
+    Ok(())
+}
+
+/// Mirror button backlight state onto the S3 (TL-07 LED feedback).
+#[command]
+pub fn s3_set_leds(state: crate::controller::S3LedState) -> Result<(), String> {
+    crate::controller::write_leds(&state)
 }

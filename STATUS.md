@@ -1,9 +1,9 @@
 # TuneLock status
 
-Updated: 2026-09-06
+Updated: 2026-09-07
 
-Current milestone: TL-06 complete in the working tree; TL-07 is the next
-dependency-ready package
+Current milestone: TL-06 complete; TL-07 is in progress with a first Windows
+S3 HID adapter checkpoint implemented and its remaining hardware gates open.
 
 Integration baseline: `performance-build` at
 `e07d936b6a9bcd560edb4928b83dd242157818ce`
@@ -74,9 +74,49 @@ channel pairs, but the performance desk has not yet exposed those controls.
 
 ## Next bounded ticket
 
-TL-07 (shared action model and S3 adapter) is now dependency-ready. TL-06
-transport is complete in the working tree; TL-07 must not claim S3 jog timing
-or scratch/backspin until the controller and hardware gates run.
+TL-07 (shared action model and S3 adapter) is in progress. The first Windows
+S3 HID input/LED path is implemented; TL-07 must not claim completion, S3 jog
+timing, or scratch/backspin until the remaining controller and hardware gates
+run.
+
+## TL-07 S3 discovery evidence (2026-09-07)
+
+The Traktor Kontrol S3 is connected and detected on Windows. It exposes its
+control surface as a vendor-defined HID interface, not standard MIDI.
+
+- VID `0x17CC`, PID `0x1900`, interface 3, usage page `0xff01`, serial
+  `DE62E256`; product "Traktor Kontrol S3", manufacturer "Native Instruments".
+- Interfaces: MI_00 audio (MEDIA class), MI_03 vendor-defined HID, MI_04 DFU.
+- Input reports are 63 bytes at ~140 Hz while the jog moves and on state
+  changes. Byte 0 is the report ID (`0x01` short/buttons+jog, `0x02`
+  long/faders); bytes 1..21 carry buttons/jog/touch; bytes 22..62 carry
+  20 x 16-bit big-endian fader/knob values in the 12-bit range (center detent
+  `0x07ff` = 2047).
+- Jog wheel is a 4-byte value: byte 15 (Deck A) / byte 19 (Deck B) is a 1-byte
+  distance-tick counter, followed by a 3-byte timecode. The signed per-report
+  tick delta is computed by 8-bit wrapping subtraction.
+- Button map (byte index, bit mask), confirmed against the Mixxx S3 mapping:
+  - Deck A: Play `(3, 0x01)`, Cue `(2, 0x80)`, Sync `(2, 0x08)`,
+    Hot cue 1 `(3, 0x02)`, Hot cue 2 `(3, 0x04)`.
+  - Deck B: Play `(6, 0x02)`, Cue `(6, 0x01)`, Sync `(5, 0x10)`.
+  - Platter touch A: `(10, 0x10)`.
+- A `s3-probe` binary (`cargo run --bin s3-probe`) and a `controller` module
+  (`src-tauri/src/controller/mod.rs`) decode these into a semantic `S3Action`
+  vocabulary (Play/Cue/Sync/HotCue/Touch/Jog/Fader) with 8 passing regression
+  tests.
+- LED output (reverse-engineered from the Mixxx S3 mapping, not a USB trace):
+  - Output report `0x80` carries button/state LEDs; `0x81` carries VU meters.
+  - Each LED is one byte. Palette LEDs encode `color + brightness` where color
+    is `0x00..0x44` in steps of `0x04` (18 colors) and brightness is `0..3`.
+    Single-color LEDs use `0x20` (off) / `0x77` (on).
+  - Byte offsets: Play A `0x11`, Play B `0x2A`, Cue A `0x10`, Cue B `0x29`,
+    Sync A `0x0C`, Sync B `0x25`. Deck base color is CARROT `0x08`; dim `1`,
+    bright `3`.
+  - `s3_set_leds` mirrors Play/Cue/Sync backlight from session transport state.
+- Remaining: the fader index -> control mapping (which of the 20 values is
+  volume/EQ/gain) and the jog tick-to-rate calibration still need a controlled
+  capture; the LED report length (83 bytes) should be verified against the
+  device's HID descriptor.
 
 ## TL-01 implementation result
 

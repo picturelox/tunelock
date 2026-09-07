@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { sessionService } from './sessionService';
 import { useSessionStore } from './sessionStore';
+import { startS3Controller } from './controllerActions';
 
 export default function SessionRuntime() {
   const engineStatus = useSessionStore((state) => state.engine.status);
@@ -9,6 +10,14 @@ export default function SessionRuntime() {
     void sessionService.initialize().catch(() => {
       // The store owns the visible initialization error and retry state.
     });
+  }, []);
+
+  useEffect(() => {
+    let cleanup: (() => void) | undefined;
+    void startS3Controller().then((unsubscribe) => {
+      cleanup = unsubscribe;
+    });
+    return () => cleanup?.();
   }, []);
 
   useEffect(() => {

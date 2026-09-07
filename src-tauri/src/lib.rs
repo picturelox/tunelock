@@ -10,6 +10,7 @@ pub mod assist;
 pub mod audio;
 pub mod commands;
 pub mod consensus;
+pub mod controller;
 pub mod db;
 pub mod export;
 pub mod harmony;
@@ -298,6 +299,9 @@ pub fn run() {
             commands::audio_engine_set_loudness_match_gain,
             commands::audio_engine_compute_loudness_match,
             commands::get_loudness_comparison,
+            // TL-07: Traktor Kontrol S3 hardware adapter
+            commands::s3_start,
+            commands::s3_set_leds,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
